@@ -1,21 +1,8 @@
 import Topbar from '@/components/Topbar';
-import { FileText, Eye, Clock, TrendingUp, ArrowUpRight, BarChart2, Search, Image, Mail, Megaphone, Users, Settings } from 'lucide-react';
+import { createClient } from '@/lib/supabase/server';
+import { FileText, Eye, Clock, TrendingUp, ArrowUpRight, BarChart2, Search, Image, Mail, Megaphone, Users } from 'lucide-react';
 import Link from 'next/link';
-
-const STATS = [
-  { label: 'Published Posts', value: '12', icon: FileText, delta: '+2 this week', color: 'var(--ne-blue)' },
-  { label: 'Draft Posts', value: '4', icon: Clock, delta: '3 pending review', color: 'var(--ne-warning)' },
-  { label: 'Total Pages', value: '7', icon: Eye, delta: 'All published', color: 'var(--ne-success)' },
-  { label: 'Last Updated', value: 'Today', icon: TrendingUp, delta: '2 hours ago', color: '#6366f1' },
-];
-
-const RECENT_POSTS = [
-  { title: 'Sifat Sombong Pemusnah Segalanya', status: 'published', date: '2 Jun 2026', views: 142 },
-  { title: 'DO NOT LOSE HOPE IN ALLAH SWT', status: 'published', date: '28 May 2026', views: 89 },
-  { title: 'Sampaikan Dengan Hikmah', status: 'draft', date: '21 May 2026', views: 0 },
-  { title: 'Configuring my Tahajjud', status: 'published', date: '7 May 2026', views: 204 },
-  { title: 'Ayat al-Quran Yang Buat Nabi Menangis', status: 'archived', date: '1 May 2026', views: 67 },
-];
+import type { Profile } from '@/lib/supabase/types';
 
 const COMING_SOON = [
   { icon: BarChart2, label: 'Analytics', desc: 'Page views, engagement, traffic sources' },
@@ -26,10 +13,65 @@ const COMING_SOON = [
   { icon: Users, label: 'Team Members', desc: 'Manage editors, roles and permissions' },
 ];
 
-export default function DashboardPage() {
+function fmtDate(iso: string | null) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleDateString('en-SG', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+function timeAgo(iso: string | null) {
+  if (!iso) return 'Never';
+  const diff = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'Just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  return `${days}d ago`;
+}
+
+export default async function DashboardPage() {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('*, clients(*)')
+    .eq('id', user!.id)
+    .single() as { data: Profile | null };
+
+  const isAdmin = profile?.role === 'ne_admin';
+  const clientId = profile?.client_id;
+  const clientName = profile?.clients?.name ?? 'Your Website';
+
+  // Fetch posts scoped to client (or all posts for admin)
+  let postsQuery = supabase.from('posts').select('id, title, slug, status, published_at, updated_at, created_at');
+  if (!isAdmin && clientId) postsQuery = postsQuery.eq('client_id', clientId);
+  const { data: allPosts = [] } = await postsQuery.order('updated_at', { ascending: false });
+
+  // Fetch pages
+  let pagesQuery = supabase.from('pages').select('id, status, updated_at');
+  if (!isAdmin && clientId) pagesQuery = pagesQuery.eq('client_id', clientId);
+  const { data: allPages = [] } = await pagesQuery;
+
+  const published = (allPosts ?? []).filter(p => p.status === 'published').length;
+  const drafts    = (allPosts ?? []).filter(p => p.status === 'draft').length;
+  const totalPages = (allPages ?? []).length;
+  const recentPosts = (allPosts ?? []).slice(0, 5);
+
+  // Last updated = most recent updated_at across posts
+  const lastUpdated = (allPosts ?? []).length > 0 ? (allPosts ?? [])[0].updated_at : null;
+
+  const STATS = [
+    { label: 'Published Posts', value: String(published), icon: FileText, delta: `${(allPosts ?? []).length} total`, color: 'var(--ne-blue)' },
+    { label: 'Draft Posts', value: String(drafts), icon: Clock, delta: drafts === 1 ? '1 pending review' : `${drafts} pending review`, color: 'var(--ne-warning)' },
+    { label: 'Total Pages', value: String(totalPages), icon: Eye, delta: totalPages === 0 ? 'None yet' : 'Across site', color: 'var(--ne-success)' },
+    { label: 'Last Updated', value: lastUpdated ? timeAgo(lastUpdated) : '—', icon: TrendingUp, delta: lastUpdated ? fmtDate(lastUpdated) : 'No activity yet', color: '#6366f1' },
+  ];
+
   return (
     <>
-      <Topbar title="Dashboard" subtitle="Al-Islah Mosque · Website Overview" />
+      <Topbar title="Dashboard" subtitle={`${clientName} · Website Overview`} />
       <div className="page-body">
 
         {/* Welcome banner */}
@@ -46,7 +88,7 @@ export default function DashboardPage() {
               NE Website Manager
             </div>
             <h2 style={{ fontSize: 22, fontWeight: 800, color: '#fff', margin: '0 0 8px' }}>
-              Good day, Al-Islah team 👋
+              Good day, {clientName} team 👋
             </h2>
             <p style={{ fontSize: 13.5, color: 'rgba(255,255,255,.75)', margin: 0, maxWidth: 420 }}>
               Manage your website content from here. New posts, pages, and more — all in one place.
@@ -102,16 +144,22 @@ export default function DashboardPage() {
                 </tr>
               </thead>
               <tbody>
-                {RECENT_POSTS.map((p) => (
-                  <tr key={p.title}>
+                {recentPosts.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} style={{ textAlign: 'center', color: 'var(--fg3)', padding: '28px 16px', fontSize: 13 }}>
+                      No posts yet. <Link href="/cms/posts/new" style={{ color: 'var(--ne-blue)', fontWeight: 600, textDecoration: 'none' }}>Create your first post →</Link>
+                    </td>
+                  </tr>
+                ) : recentPosts.map((p) => (
+                  <tr key={p.id}>
                     <td style={{ maxWidth: 260 }}>
-                      <Link href="/cms/posts" style={{ color: 'var(--fg1)', textDecoration: 'none', fontWeight: 500 }}>
+                      <Link href={`/cms/posts/${p.id}`} style={{ color: 'var(--fg1)', textDecoration: 'none', fontWeight: 500 }}>
                         {p.title}
                       </Link>
                     </td>
                     <td><span className={`status-pill ${p.status}`}>{p.status}</span></td>
-                    <td style={{ color: 'var(--fg3)', fontSize: 12 }}>{p.date}</td>
-                    <td style={{ color: 'var(--fg3)', fontSize: 12 }}>{p.views || '—'}</td>
+                    <td style={{ color: 'var(--fg3)', fontSize: 12 }}>{fmtDate(p.published_at ?? p.created_at)}</td>
+                    <td style={{ color: 'var(--fg3)', fontSize: 12 }}>—</td>
                   </tr>
                 ))}
               </tbody>
