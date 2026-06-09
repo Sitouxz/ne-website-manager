@@ -42,12 +42,9 @@ export default function LoginPage() {
       }}>
 
         {/* Logo */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 32 }}>
-          <img src="/logo-ne.svg" alt="Neu Entity" style={{ height: 48, width: 'auto' }} />
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--fg1)', lineHeight: 1.1 }}>Website Manager</div>
-            <div style={{ fontSize: 10.5, color: 'var(--fg3)' }}>by Neu Entity</div>
-          </div>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, marginBottom: 32 }}>
+          <img src="/logo-ne.svg" alt="Neu Entity" style={{ height: 64, width: 'auto' }} />
+          <div style={{ fontSize: 11, color: 'var(--fg3)', letterSpacing: '0.05em' }}>Website Manager</div>
         </div>
 
         <h1 style={{ fontSize: 20, fontWeight: 800, color: 'var(--fg1)', margin: '0 0 4px' }}>
