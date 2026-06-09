@@ -56,7 +56,7 @@ export default function PostsPage() {
       <div className="page-body">
 
         {/* Header */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20, gap: 12, flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             {STATUSES.map((s) => (
               <button key={s} onClick={() => setStatus(s)} style={{
@@ -96,6 +96,7 @@ export default function PostsPage() {
           </div>
 
           {/* Table */}
+          <div className="table-responsive">
           <table className="data-table">
             <thead>
               <tr>
@@ -169,6 +170,7 @@ export default function PostsPage() {
               ))}
             </tbody>
           </table>
+          </div>
 
           <div style={{ padding: '12px 20px', borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span style={{ fontSize: 12, color: 'var(--fg3)' }}>Showing {filtered.length} of {posts.length} posts</span>

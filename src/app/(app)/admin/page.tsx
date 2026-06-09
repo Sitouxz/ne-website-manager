@@ -109,6 +109,7 @@ export default function AdminPage() {
 
         {/* Clients table */}
         <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
+          <div className="table-responsive">
           <table className="data-table">
             <thead>
               <tr>
@@ -161,6 +162,7 @@ export default function AdminPage() {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       </div>
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>

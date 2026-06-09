@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation';
 import { createClient } from '@/lib/supabase/server';
-import Sidebar from '@/components/Sidebar';
+import AppShell from '@/components/AppShell';
 import type { Profile } from '@/lib/supabase/types';
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
@@ -19,9 +19,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const role       = profile?.role ?? 'editor';
 
   return (
-    <div style={{ display: 'flex' }}>
-      <Sidebar clientName={clientName} role={role} />
-      <div className="app-layout">{children}</div>
-    </div>
+    <AppShell clientName={clientName} role={role}>
+      {children}
+    </AppShell>
   );
 }

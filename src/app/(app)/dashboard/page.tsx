@@ -33,7 +33,7 @@ export default function DashboardPage() {
       <div className="page-body">
 
         {/* Welcome banner */}
-        <div style={{
+        <div className="welcome-banner" style={{
           background: 'linear-gradient(135deg, var(--ne-blue) 0%, #1E40AF 100%)',
           borderRadius: 'var(--r-lg)', padding: '28px 32px', marginBottom: 28,
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -52,7 +52,7 @@ export default function DashboardPage() {
               Manage your website content from here. New posts, pages, and more — all in one place.
             </p>
           </div>
-          <Link href="/cms/posts/new" style={{
+          <Link href="/cms/posts/new" className="welcome-banner-btn" style={{
             position: 'relative', zIndex: 1, whiteSpace: 'nowrap',
             background: '#fff', color: 'var(--ne-blue)', border: 'none',
             padding: '9px 20px', borderRadius: 'var(--r-sm)',
@@ -65,7 +65,7 @@ export default function DashboardPage() {
         </div>
 
         {/* Stats */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 28 }}>
+        <div className="grid-stats">
           {STATS.map((s) => {
             const Icon = s.icon;
             return (
@@ -84,13 +84,14 @@ export default function DashboardPage() {
           })}
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: 20, marginBottom: 28 }}>
+        <div className="grid-2col">
           {/* Recent posts */}
           <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
             <div style={{ padding: '18px 20px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--fg1)' }}>Recent Posts</div>
               <Link href="/cms/posts" style={{ fontSize: 12, color: 'var(--ne-blue)', fontWeight: 600, textDecoration: 'none' }}>View all →</Link>
             </div>
+            <div className="table-responsive">
             <table className="data-table">
               <thead>
                 <tr>
@@ -115,6 +116,7 @@ export default function DashboardPage() {
                 ))}
               </tbody>
             </table>
+            </div>
           </div>
 
           {/* Quick actions */}
@@ -157,7 +159,7 @@ export default function DashboardPage() {
           <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--fg3)', marginBottom: 16 }}>
             Coming Soon — More Features
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14 }}>
+          <div className="grid-3col">
             {COMING_SOON.map(({ icon: Icon, label, desc }) => (
               <div key={label} className="coming-soon-card">
                 <div style={{ position: 'relative', zIndex: 1 }}>

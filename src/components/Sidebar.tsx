@@ -56,9 +56,13 @@ const ADMIN_NAV: NavGroup = {
 export default function Sidebar({
   clientName = 'Website Manager',
   role = 'editor',
+  isOpen = false,
+  onClose,
 }: {
   clientName?: string;
   role?: Role;
+  isOpen?: boolean;
+  onClose?: () => void;
 }) {
   const path   = usePathname();
   const router = useRouter();
@@ -74,7 +78,7 @@ export default function Sidebar({
   const allNav = isAdmin ? [...NAV, ADMIN_NAV] : NAV;
 
   return (
-    <aside className="sidebar">
+    <aside className={`sidebar${isOpen ? ' sidebar-open' : ''}`}>
       {/* Logo */}
       <div className="sidebar-logo">
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -119,7 +123,7 @@ export default function Sidebar({
                   href={'soon' in item && item.soon ? '#' : item.href}
                   className={`sidebar-link${active ? ' active' : ''}`}
                   style={'soon' in item && item.soon ? { opacity: 0.5, cursor: 'default' } : {}}
-                  onClick={'soon' in item && item.soon ? (e) => e.preventDefault() : undefined}
+                  onClick={'soon' in item && item.soon ? (e) => e.preventDefault() : () => onClose?.()}
                 >
                   <Icon size={16} />
                   {item.label}
