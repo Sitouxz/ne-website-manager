@@ -8,6 +8,7 @@ export interface Client {
   slug: string;
   website_url: string | null;
   deploy_hook: string | null;
+  github_repo: string | null;
   plan: string;
   is_active: boolean;
   created_at: string;
