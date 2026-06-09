@@ -27,7 +27,7 @@ const NAV = [
     section: 'Tools',
     items: [
       { label: 'SEO Manager', href: '/seo', icon: Search, soon: true },
-      { label: 'Analytics', href: '/analytics', icon: BarChart2, soon: true },
+      { label: 'Analytics', href: '/analytics', icon: BarChart2 },
       { label: 'Forms & Leads', href: '/forms', icon: Mail, soon: true },
       { label: 'Announcements', href: '/announcements', icon: Megaphone, soon: true },
     ],
