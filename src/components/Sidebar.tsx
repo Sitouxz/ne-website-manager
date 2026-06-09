@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard, FileText, FileEdit, Image, BarChart2,
-  Search, Users, Settings, Megaphone, Mail, Clock,
+  Search, Users, Settings, Megaphone, Mail,
   ChevronDown, LogOut, Globe,
 } from 'lucide-react';
 
@@ -52,28 +52,28 @@ export default function Sidebar({ clientName = 'Al-Islah Mosque' }: { clientName
           {/* NE logo mark */}
           <div style={{
             width: 34, height: 34, borderRadius: 8,
-            background: 'var(--ne-accent)',
+            background: 'var(--ne-blue)',
             display: 'grid', placeItems: 'center',
             fontWeight: 900, fontSize: 13, color: '#fff', letterSpacing: '-.5px',
             flexShrink: 0,
           }}>NE</div>
           <div>
-            <div style={{ fontSize: 12, fontWeight: 800, color: '#fff', lineHeight: 1.1 }}>Website Manager</div>
-            <div style={{ fontSize: 10, color: 'var(--sidebar-text)', marginTop: 2 }}>by Neu Entity</div>
+            <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--fg1)', lineHeight: 1.1 }}>Website Manager</div>
+            <div style={{ fontSize: 10, color: 'var(--fg3)', marginTop: 2 }}>by Neu Entity</div>
           </div>
         </div>
 
         {/* Client selector */}
         <div style={{
-          marginTop: 16, padding: '9px 12px', background: 'rgba(255,255,255,.05)',
+          marginTop: 14, padding: '9px 12px', background: 'var(--surface-2)',
           borderRadius: 8, display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer',
-          border: '1px solid rgba(255,255,255,.08)',
+          border: '1px solid var(--border)',
         }}>
-          <Globe size={14} color="var(--sidebar-text)" />
-          <span style={{ fontSize: 12, fontWeight: 600, color: '#fff', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <Globe size={14} color="var(--fg3)" />
+          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--fg1)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {clientName}
           </span>
-          <ChevronDown size={13} color="var(--sidebar-text)" />
+          <ChevronDown size={13} color="var(--fg3)" />
         </div>
       </div>
 
@@ -90,7 +90,7 @@ export default function Sidebar({ clientName = 'Al-Islah Mosque' }: { clientName
                   key={item.href}
                   href={item.soon ? '#' : item.href}
                   className={`sidebar-link${active ? ' active' : ''}`}
-                  style={item.soon ? { opacity: 0.55, cursor: 'default' } : {}}
+                  style={item.soon ? { opacity: 0.5, cursor: 'default' } : {}}
                   onClick={item.soon ? (e) => e.preventDefault() : undefined}
                 >
                   <Icon size={16} />
@@ -104,25 +104,26 @@ export default function Sidebar({ clientName = 'Al-Islah Mosque' }: { clientName
       </nav>
 
       {/* Footer */}
-      <div style={{ padding: '16px 20px', borderTop: '1px solid rgba(255,255,255,.06)' }}>
+      <div style={{ padding: '14px 20px', borderTop: '1px solid var(--sidebar-border)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
           <div style={{
             width: 32, height: 32, borderRadius: '50%',
-            background: 'var(--ne-accent)',
+            background: 'var(--ne-blue-bg)',
+            border: '1.5px solid var(--ne-blue-muted)',
             display: 'grid', placeItems: 'center',
-            fontSize: 13, fontWeight: 700, color: '#fff',
+            fontSize: 13, fontWeight: 700, color: 'var(--ne-blue)',
           }}>A</div>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 12, fontWeight: 600, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Admin</div>
-            <div style={{ fontSize: 10, color: 'var(--sidebar-text)' }}>Content Manager</div>
+            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--fg1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Admin</div>
+            <div style={{ fontSize: 10, color: 'var(--fg3)' }}>Content Manager</div>
           </div>
-          <button style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--sidebar-text)', padding: 4 }}>
+          <button style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg3)', padding: 4 }}>
             <LogOut size={15} />
           </button>
         </div>
-        <div style={{ fontSize: 10, color: 'var(--sidebar-text)', textAlign: 'center' }}>
+        <div style={{ fontSize: 10, color: 'var(--fg3)', textAlign: 'center' }}>
           Powered by{' '}
-          <a href="https://neuentity.com" target="_blank" rel="noopener" style={{ color: 'var(--ne-accent)', fontWeight: 600, textDecoration: 'none' }}>
+          <a href="https://neuentity.com" target="_blank" rel="noopener" style={{ color: 'var(--ne-blue)', fontWeight: 600, textDecoration: 'none' }}>
             Neu Entity
           </a>
         </div>

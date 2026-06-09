@@ -89,7 +89,7 @@ export default function PostEditor({ params }: { params: { id: string } }) {
                 <input
                   value={form.slug}
                   onChange={(e) => setForm({ ...form, slug: e.target.value })}
-                  style={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', fontSize: 12, color: 'var(--ne-accent)', fontFamily: 'monospace' }}
+                  style={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', fontSize: 12, color: 'var(--ne-blue)', fontFamily: 'monospace' }}
                 />
               </div>
             </div>
@@ -277,7 +277,7 @@ export default function PostEditor({ params }: { params: { id: string } }) {
                     placeholder="Add tag..."
                     style={{ flex: 1, border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '7px 10px', fontSize: 12.5, outline: 'none' }}
                   />
-                  <button onClick={addTag} style={{ background: 'var(--ne-ink)', border: 'none', borderRadius: 'var(--r-sm)', padding: '7px 10px', cursor: 'pointer', color: '#fff' }}>
+                  <button onClick={addTag} style={{ background: 'var(--ne-blue)', border: 'none', borderRadius: 'var(--r-sm)', padding: '7px 10px', cursor: 'pointer', color: '#fff' }}>
                     <Plus size={14} />
                   </button>
                 </div>

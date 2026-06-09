@@ -90,10 +90,10 @@ export default function PagesPage() {
         </div>
 
         {/* Info card */}
-        <div style={{ marginTop: 20, background: 'var(--ne-accent-bg)', border: '1px solid rgba(232,89,12,.2)', borderRadius: 'var(--r-md)', padding: '16px 20px', display: 'flex', gap: 12, alignItems: 'flex-start' }}>
-          <Globe size={18} color="var(--ne-accent)" style={{ flexShrink: 0, marginTop: 2 }} />
+        <div style={{ marginTop: 20, background: 'var(--ne-blue-bg)', border: '1px solid var(--ne-blue-muted)', borderRadius: 'var(--r-md)', padding: '16px 20px', display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+          <Globe size={18} color="var(--ne-blue)" style={{ flexShrink: 0, marginTop: 2 }} />
           <div>
-            <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--ne-accent)', marginBottom: 4 }}>Page editing is coming soon</div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--ne-blue)', marginBottom: 4 }}>Page editing is coming soon</div>
             <p style={{ fontSize: 12.5, color: 'var(--fg2)', margin: 0 }}>
               Full visual page editing with drag-and-drop blocks is in development. For now, contact your Neu Entity team to update page content.
             </p>

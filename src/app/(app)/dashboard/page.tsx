@@ -3,7 +3,7 @@ import { FileText, Eye, Clock, TrendingUp, ArrowUpRight, BarChart2, Search, Imag
 import Link from 'next/link';
 
 const STATS = [
-  { label: 'Published Posts', value: '12', icon: FileText, delta: '+2 this week', color: 'var(--ne-accent)' },
+  { label: 'Published Posts', value: '12', icon: FileText, delta: '+2 this week', color: 'var(--ne-blue)' },
   { label: 'Draft Posts', value: '4', icon: Clock, delta: '3 pending review', color: 'var(--ne-warning)' },
   { label: 'Total Pages', value: '7', icon: Eye, delta: 'All published', color: 'var(--ne-success)' },
   { label: 'Last Updated', value: 'Today', icon: TrendingUp, delta: '2 hours ago', color: '#6366f1' },
@@ -34,25 +34,32 @@ export default function DashboardPage() {
 
         {/* Welcome banner */}
         <div style={{
-          background: 'linear-gradient(135deg, var(--ne-ink) 0%, var(--ne-ink-3) 100%)',
+          background: 'linear-gradient(135deg, var(--ne-blue) 0%, #1E40AF 100%)',
           borderRadius: 'var(--r-lg)', padding: '28px 32px', marginBottom: 28,
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           overflow: 'hidden', position: 'relative',
         }}>
-          <div style={{ position: 'absolute', right: -20, top: -20, width: 200, height: 200, borderRadius: '50%', background: 'rgba(232,89,12,.12)' }} />
-          <div style={{ position: 'absolute', right: 60, bottom: -40, width: 140, height: 140, borderRadius: '50%', background: 'rgba(232,89,12,.07)' }} />
+          <div style={{ position: 'absolute', right: -20, top: -20, width: 200, height: 200, borderRadius: '50%', background: 'rgba(255,255,255,.08)' }} />
+          <div style={{ position: 'absolute', right: 60, bottom: -40, width: 140, height: 140, borderRadius: '50%', background: 'rgba(255,255,255,.05)' }} />
           <div style={{ position: 'relative', zIndex: 1 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--ne-accent)', marginBottom: 8 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.1em', textTransform: 'uppercase', color: 'rgba(255,255,255,.7)', marginBottom: 8 }}>
               NE Website Manager
             </div>
             <h2 style={{ fontSize: 22, fontWeight: 800, color: '#fff', margin: '0 0 8px' }}>
               Good day, Al-Islah team 👋
             </h2>
-            <p style={{ fontSize: 13.5, color: '#8892A4', margin: 0, maxWidth: 420 }}>
+            <p style={{ fontSize: 13.5, color: 'rgba(255,255,255,.75)', margin: 0, maxWidth: 420 }}>
               Manage your website content from here. New posts, pages, and more — all in one place.
             </p>
           </div>
-          <Link href="/cms/posts/new" className="btn-ne" style={{ position: 'relative', zIndex: 1, whiteSpace: 'nowrap' }}>
+          <Link href="/cms/posts/new" style={{
+            position: 'relative', zIndex: 1, whiteSpace: 'nowrap',
+            background: '#fff', color: 'var(--ne-blue)', border: 'none',
+            padding: '9px 20px', borderRadius: 'var(--r-sm)',
+            fontSize: 13.5, fontWeight: 700, cursor: 'pointer',
+            display: 'inline-flex', alignItems: 'center', gap: 7,
+            textDecoration: 'none',
+          }}>
             <FileText size={15} /> New Post
           </Link>
         </div>
@@ -82,7 +89,7 @@ export default function DashboardPage() {
           <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
             <div style={{ padding: '18px 20px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--fg1)' }}>Recent Posts</div>
-              <Link href="/cms/posts" style={{ fontSize: 12, color: 'var(--ne-accent)', fontWeight: 600, textDecoration: 'none' }}>View all →</Link>
+              <Link href="/cms/posts" style={{ fontSize: 12, color: 'var(--ne-blue)', fontWeight: 600, textDecoration: 'none' }}>View all →</Link>
             </div>
             <table className="data-table">
               <thead>
@@ -117,7 +124,7 @@ export default function DashboardPage() {
             </div>
             <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
               {[
-                { label: 'Write new blog post', href: '/cms/posts/new', color: 'var(--ne-accent)', Icon: FileText },
+                { label: 'Write new blog post', href: '/cms/posts/new', color: 'var(--ne-blue)', Icon: FileText },
                 { label: 'Manage pages', href: '/cms/pages', color: '#6366f1', Icon: Eye },
                 { label: 'View all posts', href: '/cms/posts', color: 'var(--ne-success)', Icon: TrendingUp },
               ].map(({ label, href, color, Icon }) => (
@@ -139,7 +146,7 @@ export default function DashboardPage() {
 
             {/* Powered by NE */}
             <div style={{ margin: '4px 16px 16px', padding: '14px', background: 'var(--surface-2)', borderRadius: 'var(--r-sm)', border: '1px solid var(--border)' }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--ne-accent)', marginBottom: 4 }}>POWERED BY NEU ENTITY</div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--ne-blue)', marginBottom: 4 }}>POWERED BY NEU ENTITY</div>
               <p style={{ fontSize: 11.5, color: 'var(--fg3)', margin: 0 }}>Need help? Contact your Neu Entity account manager or visit neuentity.com</p>
             </div>
           </div>

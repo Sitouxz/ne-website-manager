@@ -43,7 +43,7 @@ export default function PostsPage() {
                 onClick={() => setStatus(s)}
                 style={{
                   padding: '6px 14px', borderRadius: 99, fontSize: 12.5, fontWeight: 600, cursor: 'pointer', border: 'none',
-                  background: status === s ? 'var(--ne-ink)' : 'var(--surface)',
+                  background: status === s ? 'var(--ne-blue)' : 'var(--surface)',
                   color: status === s ? '#fff' : 'var(--fg2)',
                   boxShadow: 'var(--shadow-sm)',
                 }}
@@ -147,7 +147,7 @@ export default function PostsPage() {
             <span style={{ fontSize: 12, color: 'var(--fg3)' }}>Showing {filtered.length} of {POSTS.length} posts</span>
             <div style={{ display: 'flex', gap: 4 }}>
               {[1, 2, 3].map((n) => (
-                <button key={n} style={{ width: 30, height: 30, borderRadius: 6, border: '1px solid var(--border)', background: n === 1 ? 'var(--ne-ink)' : 'var(--surface)', color: n === 1 ? '#fff' : 'var(--fg2)', fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}>{n}</button>
+                <button key={n} style={{ width: 30, height: 30, borderRadius: 6, border: '1px solid var(--border)', background: n === 1 ? 'var(--ne-blue)' : 'var(--surface)', color: n === 1 ? '#fff' : 'var(--fg2)', fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}>{n}</button>
               ))}
             </div>
           </div>
