@@ -82,7 +82,7 @@ export default function Sidebar({
       {/* Logo */}
       <div className="sidebar-logo">
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <img src="/logo-ne.png" alt="Neu Entity" style={{ height: 36, width: 'auto', flexShrink: 0, display: 'block' }} />
+          <img src="/logo-ne.svg" alt="Neu Entity" style={{ height: 36, width: 'auto', flexShrink: 0, display: 'block' }} />
           <div>
             <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--fg1)', lineHeight: 1.1 }}>Website Manager</div>
             <div style={{ fontSize: 10, color: 'var(--fg3)', marginTop: 2 }}>by Neu Entity</div>
