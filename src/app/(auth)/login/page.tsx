@@ -1,7 +1,6 @@
 'use client';
 
 import { useState } from 'react';
-import Image from 'next/image';
 import { createClient } from '@/lib/supabase/client';
 import { useRouter } from 'next/navigation';
 import { Eye, EyeOff, LogIn, AlertCircle } from 'lucide-react';
@@ -44,7 +43,7 @@ export default function LoginPage() {
 
         {/* Logo */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 32 }}>
-          <Image src="/logo-ne.svg" alt="Neu Entity" width={110} height={44} style={{ objectFit: 'contain' }} />
+          <img src="/logo-ne.svg" alt="Neu Entity" style={{ height: 48, width: 'auto' }} />
           <div>
             <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--fg1)', lineHeight: 1.1 }}>Website Manager</div>
             <div style={{ fontSize: 10.5, color: 'var(--fg3)' }}>by Neu Entity</div>
