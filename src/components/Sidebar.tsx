@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import NextImage from 'next/image';
 import { usePathname, useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import {
@@ -82,13 +83,7 @@ export default function Sidebar({
       {/* Logo */}
       <div className="sidebar-logo">
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <div style={{
-            width: 34, height: 34, borderRadius: 8,
-            background: 'var(--ne-blue)',
-            display: 'grid', placeItems: 'center',
-            fontWeight: 900, fontSize: 13, color: '#fff', letterSpacing: '-.5px',
-            flexShrink: 0,
-          }}>NE</div>
+          <NextImage src="/logo-ne.png" alt="Neu Entity" width={80} height={32} style={{ objectFit: 'contain', flexShrink: 0 }} />
           <div>
             <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--fg1)', lineHeight: 1.1 }}>Website Manager</div>
             <div style={{ fontSize: 10, color: 'var(--fg3)', marginTop: 2 }}>by Neu Entity</div>
