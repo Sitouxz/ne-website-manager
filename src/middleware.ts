@@ -25,8 +25,8 @@ export async function middleware(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser();
 
   const path = request.nextUrl.pathname;
-  const isLoginPage = path === '/login';
-  const isPublicApi  = path.startsWith('/api/client/');
+  const isLoginPage    = path === '/login';
+  const isPublicApi    = path.startsWith('/api/client/');
 
   // Unauthenticated → redirect to login (except public API and login itself)
   if (!user && !isLoginPage && !isPublicApi) {
