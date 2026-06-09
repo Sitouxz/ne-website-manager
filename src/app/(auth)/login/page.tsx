@@ -37,12 +37,12 @@ export default function LoginPage() {
       {/* Card */}
       <div style={{
         background: 'var(--surface)', border: '1px solid var(--border)',
-        borderRadius: 'var(--r-lg)', padding: '40px 36px',
+        borderRadius: 'var(--r-lg)', padding: '28px 36px 36px',
         boxShadow: '0 8px 32px rgba(0,0,0,.08)',
       }}>
 
         {/* Logo */}
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, marginBottom: 32 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, marginBottom: 20 }}>
           <img src="/logo-ne.png" alt="Neu Entity" style={{ height: 80, width: 'auto', display: 'block' }} />
           <div style={{ fontSize: 11, color: 'var(--fg3)', letterSpacing: '0.05em' }}>Website Manager</div>
         </div>
