@@ -202,8 +202,8 @@ const pages = await fetch('${pagesUrl}').then(r => r.json());`,
   const TAB_STYLES = (active: boolean): React.CSSProperties => ({
     padding: '8px 16px', fontSize: 13, fontWeight: active ? 700 : 500,
     color: active ? 'var(--ne-blue)' : 'var(--fg2)',
-    borderBottom: active ? '2px solid var(--ne-blue)' : '2px solid transparent',
-    background: 'none', border: 'none', cursor: 'pointer', whiteSpace: 'nowrap',
+    background: 'none', border: 'none', borderBottom: active ? '2px solid var(--ne-blue)' : '2px solid transparent',
+    cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0,
   });
 
   return (
