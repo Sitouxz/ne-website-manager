@@ -2,55 +2,175 @@
 
 import Topbar from '@/components/Topbar';
 import Link from 'next/link';
-import { useState } from 'react';
+import { useState, useEffect, use } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   ArrowLeft, Bold, Italic, Underline, Link2, List, ListOrdered,
-  Quote, Image, Code, Heading2, Heading3, Eye, Save, Send, ChevronDown, X, Plus,
+  Quote, Image, Code, Heading2, Heading3, Eye, Save, Send, X, Plus, Loader2,
 } from 'lucide-react';
+import { createClient } from '@/lib/supabase/client';
 
 const CATEGORIES = ['Character', 'Worship', 'Dakwah', 'Tafsir', 'Community', 'Events', 'Announcement'];
 
-export default function PostEditor({ params }: { params: { id: string } }) {
-  const isNew = params.id === 'new';
+const EMPTY_FORM = {
+  title: '', slug: '', excerpt: '', content: '',
+  category: 'Worship', status: 'draft',
+  featuredImg: '', tags: [] as string[],
+  seoTitle: '', seoDesc: '',
+};
 
-  const [form, setForm] = useState({
-    title: isNew ? '' : 'Sifat Sombong Pemusnah Segalanya',
-    slug: isNew ? '' : 'sifat-sombong-pemusnah-segalanya',
-    excerpt: isNew ? '' : 'Sombong adalah sifat yang amat dibenci oleh Allah SWT.',
-    content: isNew ? '' : `<h2>Mukadimah</h2><p>Sifat sombong adalah salah satu penyakit hati yang paling berbahaya dalam Islam. Allah SWT telah memperingatkan umat manusia tentang bahaya sifat ini berkali-kali dalam al-Quran.</p><p>Rasulullah SAW bersabda: "Tidak akan masuk syurga orang yang di dalam hatinya terdapat kesombongan sebesar biji sawi." (HR Muslim)</p><h2>Tanda-tanda Sifat Sombong</h2><p>Seseorang yang memiliki sifat sombong biasanya menunjukkan beberapa tanda yang jelas...</p>`,
-    category: isNew ? 'Worship' : 'Character',
-    status: isNew ? 'draft' : 'published',
-    featuredImg: '',
-    tags: isNew ? [] as string[] : ['character', 'tarbiyah'],
-    seoTitle: '',
-    seoDesc: '',
-  });
-  const [tagInput, setTagInput] = useState('');
+export default function PostEditor({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = use(params);
+  const isNew  = id === 'new';
+  const router = useRouter();
+
+  const [form,        setForm]      = useState({ ...EMPTY_FORM });
+  const [tagInput,    setTagInput]  = useState('');
   const [activeFormats, setActiveFormats] = useState<string[]>([]);
-  const [saved, setSaved] = useState(false);
+  const [loading,     setLoading]   = useState(!isNew);
+  const [saving,      setSaving]    = useState(false);
+  const [saved,       setSaved]     = useState(false);
+  const [error,       setError]     = useState('');
+  const [clientId,    setClientId]  = useState<string | null>(null);
 
+  // Load existing post + client_id
+  useEffect(() => {
+    async function load() {
+      const supabase = createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('client_id')
+        .eq('id', user.id)
+        .single();
+
+      setClientId(profile?.client_id ?? null);
+
+      if (!isNew) {
+        const { data: post } = await supabase
+          .from('posts')
+          .select('*')
+          .eq('id', id)
+          .single();
+
+        if (post) {
+          setForm({
+            title:      post.title       ?? '',
+            slug:       post.slug        ?? '',
+            excerpt:    post.excerpt     ?? '',
+            content:    post.content     ?? '',
+            category:   post.category    ?? 'Worship',
+            status:     post.status      ?? 'draft',
+            featuredImg:post.cover_url   ?? '',
+            tags:       post.tags        ?? [],
+            seoTitle:   post.seo_title   ?? '',
+            seoDesc:    post.seo_description ?? '',
+          });
+        }
+        setLoading(false);
+      }
+    }
+    load();
+  }, [id, isNew]);
+
+  const slugify = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
   const toggleFormat = (f: string) =>
     setActiveFormats((prev) => prev.includes(f) ? prev.filter((x) => x !== f) : [...prev, f]);
-
-  const handleSave = (newStatus?: string) => {
-    if (newStatus) setForm((f) => ({ ...f, status: newStatus }));
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
-  };
-
   const addTag = () => {
     const t = tagInput.trim().toLowerCase();
     if (t && !form.tags.includes(t)) setForm((f) => ({ ...f, tags: [...f.tags, t] }));
     setTagInput('');
   };
 
-  const slugify = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  async function handleSave(statusOverride?: string) {
+    if (!clientId) { setError('No client linked to your account. Contact Neu Entity support.'); return; }
+    setSaving(true);
+    setError('');
+
+    const supabase = createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) { setError('Not authenticated'); setSaving(false); return; }
+
+    const status     = statusOverride ?? form.status;
+    const published  = status === 'published' ? new Date().toISOString() : null;
+
+    const payload = {
+      title:           form.title || '(Untitled)',
+      slug:            form.slug  || slugify(form.title || Date.now().toString()),
+      excerpt:         form.excerpt,
+      content:         form.content,
+      category:        form.category,
+      tags:            form.tags,
+      status,
+      cover_url:       form.featuredImg || null,
+      seo_title:       form.seoTitle || null,
+      seo_description: form.seoDesc  || null,
+      ...(published ? { published_at: published } : {}),
+    };
+
+    if (isNew) {
+      const { data: newPost, error: err } = await supabase
+        .from('posts')
+        .insert({ ...payload, client_id: clientId, author_id: user.id })
+        .select()
+        .single();
+
+      if (err) { setError(err.message); setSaving(false); return; }
+
+      // Trigger deploy hook if publishing
+      if (status === 'published') await triggerDeploy(supabase, clientId);
+
+      setSaving(false);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+      router.replace(`/cms/posts/${newPost.id}`);
+    } else {
+      const { error: err } = await supabase
+        .from('posts')
+        .update(payload)
+        .eq('id', id);
+
+      if (err) { setError(err.message); setSaving(false); return; }
+
+      if (status === 'published') await triggerDeploy(supabase, clientId);
+
+      setForm((f) => ({ ...f, status }));
+      setSaving(false);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    }
+  }
+
+  async function triggerDeploy(supabase: ReturnType<typeof createClient>, cid: string) {
+    const { data: client } = await supabase
+      .from('clients')
+      .select('deploy_hook')
+      .eq('id', cid)
+      .single();
+    if (client?.deploy_hook) {
+      await fetch(client.deploy_hook, { method: 'POST' }).catch(() => null);
+    }
+  }
+
+  if (loading) {
+    return (
+      <>
+        <Topbar title="Edit Post" subtitle="Loading..." />
+        <div className="page-body" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 300 }}>
+          <Loader2 size={24} color="var(--ne-blue)" style={{ animation: 'spin .6s linear infinite' }} />
+          <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+        </div>
+      </>
+    );
+  }
 
   return (
     <>
       <Topbar
         title={isNew ? 'New Post' : 'Edit Post'}
-        subtitle={isNew ? 'Create a new blog post' : form.title}
+        subtitle={isNew ? 'Create a new blog post' : form.title || '(Untitled)'}
       />
       <div className="page-body">
         {/* Breadcrumb + actions */}
@@ -58,17 +178,16 @@ export default function PostEditor({ params }: { params: { id: string } }) {
           <Link href="/cms/posts" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--fg3)', textDecoration: 'none', fontWeight: 500 }}>
             <ArrowLeft size={14} /> Back to Posts
           </Link>
-          <div style={{ display: 'flex', gap: 8 }}>
-            {saved && (
-              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ne-success)', padding: '8px 14px', background: '#E8F8F1', borderRadius: 'var(--r-sm)' }}>
-                ✓ Saved
-              </div>
-            )}
-            <button className="btn-outline-ne" onClick={() => handleSave('draft')}>
-              <Save size={14} /> Save Draft
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            {error && <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ne-danger)', padding: '8px 14px', background: '#FEF2F2', borderRadius: 'var(--r-sm)' }}>{error}</div>}
+            {saved && <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ne-success)', padding: '8px 14px', background: '#DCFCE7', borderRadius: 'var(--r-sm)' }}>Saved</div>}
+            <button className="btn-outline-ne" onClick={() => handleSave('draft')} disabled={saving}>
+              {saving ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Save size={14} />}
+              Save Draft
             </button>
-            <button className="btn-ne" onClick={() => handleSave('published')}>
-              <Send size={14} /> {form.status === 'published' ? 'Update' : 'Publish'}
+            <button className="btn-ne" onClick={() => handleSave('published')} disabled={saving}>
+              {saving ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Send size={14} />}
+              {form.status === 'published' ? 'Update' : 'Publish'}
             </button>
           </div>
         </div>
@@ -76,7 +195,7 @@ export default function PostEditor({ params }: { params: { id: string } }) {
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: 20, alignItems: 'start' }}>
           {/* Main editor */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            {/* Title */}
+            {/* Title + slug */}
             <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
               <input
                 value={form.title}
@@ -96,33 +215,20 @@ export default function PostEditor({ params }: { params: { id: string } }) {
 
             {/* Rich text editor */}
             <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
-              {/* Toolbar */}
               <div className="editor-toolbar">
-                {[
-                  { id: 'h2', label: 'H2', Icon: Heading2 },
-                  { id: 'h3', label: 'H3', Icon: Heading3 },
-                ].map(({ id, Icon }) => (
+                {[{ id: 'h2', Icon: Heading2 }, { id: 'h3', Icon: Heading3 }].map(({ id, Icon }) => (
                   <button key={id} className={`toolbar-btn${activeFormats.includes(id) ? ' active' : ''}`} onClick={() => toggleFormat(id)}>
                     <Icon size={15} />
                   </button>
                 ))}
                 <div className="toolbar-sep" />
-                {[
-                  { id: 'bold', Icon: Bold },
-                  { id: 'italic', Icon: Italic },
-                  { id: 'underline', Icon: Underline },
-                ].map(({ id, Icon }) => (
+                {[{ id: 'bold', Icon: Bold }, { id: 'italic', Icon: Italic }, { id: 'underline', Icon: Underline }].map(({ id, Icon }) => (
                   <button key={id} className={`toolbar-btn${activeFormats.includes(id) ? ' active' : ''}`} onClick={() => toggleFormat(id)}>
                     <Icon size={15} />
                   </button>
                 ))}
                 <div className="toolbar-sep" />
-                {[
-                  { id: 'ul', Icon: List },
-                  { id: 'ol', Icon: ListOrdered },
-                  { id: 'quote', Icon: Quote },
-                  { id: 'code', Icon: Code },
-                ].map(({ id, Icon }) => (
+                {[{ id: 'ul', Icon: List }, { id: 'ol', Icon: ListOrdered }, { id: 'quote', Icon: Quote }, { id: 'code', Icon: Code }].map(({ id, Icon }) => (
                   <button key={id} className={`toolbar-btn${activeFormats.includes(id) ? ' active' : ''}`} onClick={() => toggleFormat(id)}>
                     <Icon size={15} />
                   </button>
@@ -130,24 +236,18 @@ export default function PostEditor({ params }: { params: { id: string } }) {
                 <div className="toolbar-sep" />
                 <button className="toolbar-btn"><Link2 size={15} /></button>
                 <button className="toolbar-btn"><Image size={15} /></button>
-                <div style={{ marginLeft: 'auto', display: 'flex', gap: 4 }}>
-                  <button className="toolbar-btn" style={{ fontSize: 11, fontWeight: 700, color: 'var(--fg3)' }}>
+                <div style={{ marginLeft: 'auto' }}>
+                  <button className="toolbar-btn" style={{ fontSize: 11, fontWeight: 700 }}>
                     <Eye size={14} /> Preview
                   </button>
                 </div>
               </div>
-
-              {/* Content area */}
               <div
                 contentEditable
                 suppressContentEditableWarning
                 dangerouslySetInnerHTML={{ __html: form.content }}
                 onInput={(e) => setForm({ ...form, content: (e.target as HTMLDivElement).innerHTML })}
-                style={{
-                  minHeight: 420, padding: '20px 24px', outline: 'none',
-                  fontSize: 14.5, lineHeight: 1.75, color: 'var(--fg1)',
-                  fontFamily: 'Inter, sans-serif',
-                }}
+                style={{ minHeight: 420, padding: '20px 24px', outline: 'none', fontSize: 14.5, lineHeight: 1.75, color: 'var(--fg1)' }}
               />
             </div>
 
@@ -193,17 +293,14 @@ export default function PostEditor({ params }: { params: { id: string } }) {
 
           {/* Sidebar panel */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            {/* Publish box */}
+            {/* Publish */}
             <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
               <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)', fontWeight: 700, fontSize: 13 }}>Publish Settings</div>
               <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
                 <div>
                   <label style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--fg3)', display: 'block', marginBottom: 5 }}>Status</label>
-                  <select
-                    value={form.status}
-                    onChange={(e) => setForm({ ...form, status: e.target.value })}
-                    style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '8px 10px', fontSize: 13, color: 'var(--fg1)', background: 'var(--surface)' }}
-                  >
+                  <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}
+                    style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '8px 10px', fontSize: 13, color: 'var(--fg1)', background: 'var(--surface)' }}>
                     <option value="draft">Draft</option>
                     <option value="published">Published</option>
                     <option value="archived">Archived</option>
@@ -211,18 +308,15 @@ export default function PostEditor({ params }: { params: { id: string } }) {
                 </div>
                 <div>
                   <label style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--fg3)', display: 'block', marginBottom: 5 }}>Category</label>
-                  <select
-                    value={form.category}
-                    onChange={(e) => setForm({ ...form, category: e.target.value })}
-                    style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '8px 10px', fontSize: 13, color: 'var(--fg1)', background: 'var(--surface)' }}
-                  >
+                  <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}
+                    style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '8px 10px', fontSize: 13, color: 'var(--fg1)', background: 'var(--surface)' }}>
                     {CATEGORIES.map((c) => <option key={c}>{c}</option>)}
                   </select>
                 </div>
-                <button className="btn-ne" style={{ width: '100%', justifyContent: 'center' }} onClick={() => handleSave('published')}>
+                <button className="btn-ne" style={{ width: '100%', justifyContent: 'center' }} onClick={() => handleSave('published')} disabled={saving}>
                   <Send size={14} /> {form.status === 'published' ? 'Update Post' : 'Publish Post'}
                 </button>
-                <button className="btn-outline-ne" style={{ width: '100%', justifyContent: 'center', fontSize: 13 }} onClick={() => handleSave('draft')}>
+                <button className="btn-outline-ne" style={{ width: '100%', justifyContent: 'center', fontSize: 13 }} onClick={() => handleSave('draft')} disabled={saving}>
                   <Save size={14} /> Save as Draft
                 </button>
               </div>
@@ -241,14 +335,10 @@ export default function PostEditor({ params }: { params: { id: string } }) {
                     </button>
                   </div>
                 ) : (
-                  <div style={{
-                    border: '2px dashed var(--border)', borderRadius: 'var(--r-sm)',
-                    padding: '28px 16px', textAlign: 'center', cursor: 'pointer',
-                  }}>
+                  <div style={{ border: '2px dashed var(--border)', borderRadius: 'var(--r-sm)', padding: '28px 16px', textAlign: 'center', cursor: 'pointer' }}>
                     <Image size={22} color="var(--fg3)" style={{ margin: '0 auto 8px' }} />
                     <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--fg2)', marginBottom: 4 }}>Add Featured Image</div>
-                    <div style={{ fontSize: 11, color: 'var(--fg3)' }}>Click to upload or drag & drop</div>
-                    <div style={{ fontSize: 10, color: 'var(--fg3)', marginTop: 4 }}>PNG, JPG up to 5MB</div>
+                    <div style={{ fontSize: 11, color: 'var(--fg3)' }}>PNG, JPG up to 5MB</div>
                   </div>
                 )}
               </div>
@@ -286,6 +376,7 @@ export default function PostEditor({ params }: { params: { id: string } }) {
           </div>
         </div>
       </div>
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </>
   );
 }

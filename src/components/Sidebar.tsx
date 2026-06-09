@@ -1,55 +1,83 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
+import { createClient } from '@/lib/supabase/client';
 import {
   LayoutDashboard, FileText, FileEdit, Image, BarChart2,
   Search, Users, Settings, Megaphone, Mail,
-  ChevronDown, LogOut, Globe,
+  ChevronDown, LogOut, Globe, ShieldCheck,
 } from 'lucide-react';
+import type { Role } from '@/lib/supabase/types';
 
-const NAV = [
+type NavItem = { label: string; href: string; icon: React.ElementType; soon?: boolean };
+type NavGroup = { section: string; items: NavItem[] };
+
+const NAV: NavGroup[] = [
   {
     section: 'Main',
     items: [
-      { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
+      { label: 'Dashboard',  href: '/dashboard',  icon: LayoutDashboard },
+      { label: 'Analytics',  href: '/analytics',  icon: BarChart2 },
     ],
   },
   {
     section: 'Content',
     items: [
-      { label: 'Blog Posts', href: '/cms/posts', icon: FileText },
-      { label: 'Pages', href: '/cms/pages', icon: FileEdit },
-      { label: 'Media Library', href: '/cms/media', icon: Image, soon: true },
+      { label: 'Blog Posts',    href: '/cms/posts', icon: FileText },
+      { label: 'Pages',         href: '/cms/pages', icon: FileEdit },
+      { label: 'Media Library', href: '/cms/media', icon: Image,     soon: true },
     ],
   },
   {
     section: 'Tools',
     items: [
-      { label: 'SEO Manager', href: '/seo', icon: Search, soon: true },
-      { label: 'Analytics', href: '/analytics', icon: BarChart2 },
-      { label: 'Forms & Leads', href: '/forms', icon: Mail, soon: true },
+      { label: 'SEO Manager',   href: '/seo',           icon: Search,    soon: true },
+      { label: 'Forms & Leads', href: '/forms',         icon: Mail,      soon: true },
       { label: 'Announcements', href: '/announcements', icon: Megaphone, soon: true },
     ],
   },
   {
     section: 'Settings',
     items: [
-      { label: 'Team Members', href: '/team', icon: Users, soon: true },
-      { label: 'Site Settings', href: '/settings', icon: Settings, soon: true },
+      { label: 'Site Settings', href: '/settings', icon: Settings },
+      { label: 'Team Members',  href: '/team',     icon: Users,   soon: true },
     ],
   },
 ];
 
-export default function Sidebar({ clientName = 'Al-Islah Mosque' }: { clientName?: string }) {
-  const path = usePathname();
+const ADMIN_NAV: NavGroup = {
+  section: 'NE Admin',
+  items: [
+    { label: 'All Clients', href: '/admin', icon: ShieldCheck },
+  ],
+};
+
+export default function Sidebar({
+  clientName = 'Website Manager',
+  role = 'editor',
+}: {
+  clientName?: string;
+  role?: Role;
+}) {
+  const path   = usePathname();
+  const router = useRouter();
+  const isAdmin = role === 'ne_admin';
+
+  async function handleLogout() {
+    const supabase = createClient();
+    await supabase.auth.signOut();
+    router.push('/login');
+    router.refresh();
+  }
+
+  const allNav = isAdmin ? [...NAV, ADMIN_NAV] : NAV;
 
   return (
     <aside className="sidebar">
       {/* Logo */}
       <div className="sidebar-logo">
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          {/* NE logo mark */}
           <div style={{
             width: 34, height: 34, borderRadius: 8,
             background: 'var(--ne-blue)',
@@ -66,7 +94,7 @@ export default function Sidebar({ clientName = 'Al-Islah Mosque' }: { clientName
         {/* Client selector */}
         <div style={{
           marginTop: 14, padding: '9px 12px', background: 'var(--surface-2)',
-          borderRadius: 8, display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer',
+          borderRadius: 8, display: 'flex', alignItems: 'center', gap: 8,
           border: '1px solid var(--border)',
         }}>
           <Globe size={14} color="var(--fg3)" />
@@ -79,7 +107,7 @@ export default function Sidebar({ clientName = 'Al-Islah Mosque' }: { clientName
 
       {/* Nav */}
       <nav style={{ flex: 1, paddingBottom: 16 }}>
-        {NAV.map((group) => (
+        {allNav.map((group) => (
           <div key={group.section}>
             <div className="sidebar-section-label">{group.section}</div>
             {group.items.map((item) => {
@@ -88,14 +116,14 @@ export default function Sidebar({ clientName = 'Al-Islah Mosque' }: { clientName
               return (
                 <Link
                   key={item.href}
-                  href={item.soon ? '#' : item.href}
+                  href={'soon' in item && item.soon ? '#' : item.href}
                   className={`sidebar-link${active ? ' active' : ''}`}
-                  style={item.soon ? { opacity: 0.5, cursor: 'default' } : {}}
-                  onClick={item.soon ? (e) => e.preventDefault() : undefined}
+                  style={'soon' in item && item.soon ? { opacity: 0.5, cursor: 'default' } : {}}
+                  onClick={'soon' in item && item.soon ? (e) => e.preventDefault() : undefined}
                 >
                   <Icon size={16} />
                   {item.label}
-                  {item.soon && <span className="badge-cs">Soon</span>}
+                  {'soon' in item && item.soon && <span className="badge-cs">Soon</span>}
                 </Link>
               );
             })}
@@ -112,12 +140,18 @@ export default function Sidebar({ clientName = 'Al-Islah Mosque' }: { clientName
             border: '1.5px solid var(--ne-blue-muted)',
             display: 'grid', placeItems: 'center',
             fontSize: 13, fontWeight: 700, color: 'var(--ne-blue)',
-          }}>A</div>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--fg1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Admin</div>
-            <div style={{ fontSize: 10, color: 'var(--fg3)' }}>Content Manager</div>
+          }}>
+            {isAdmin ? 'NE' : 'A'}
           </div>
-          <button style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg3)', padding: 4 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--fg1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {isAdmin ? 'Neu Entity' : 'Admin'}
+            </div>
+            <div style={{ fontSize: 10, color: 'var(--fg3)' }}>
+              {isAdmin ? 'Super Admin' : 'Content Manager'}
+            </div>
+          </div>
+          <button onClick={handleLogout} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg3)', padding: 4 }}>
             <LogOut size={15} />
           </button>
         </div>
