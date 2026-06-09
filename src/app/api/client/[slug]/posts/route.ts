@@ -2,11 +2,14 @@ import { createClient } from '@/lib/supabase/server';
 import { NextResponse } from 'next/server';
 
 export async function GET(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ slug: string }> }
 ) {
   const { slug } = await params;
   const supabase  = await createClient();
+  const url = new URL(req.url);
+  const category = url.searchParams.get('category');
+  const limit = parseInt(url.searchParams.get('limit') ?? '100', 10);
 
   const { data: client } = await supabase
     .from('clients')
@@ -18,12 +21,17 @@ export async function GET(
     return NextResponse.json({ error: 'Client not found' }, { status: 404 });
   }
 
-  const { data: posts, error } = await supabase
+  let query = supabase
     .from('posts')
-    .select('id, title, slug, excerpt, cover_url, category, tags, published_at')
+    .select('id, title, slug, excerpt, content, cover_url, category, tags, published_at')
     .eq('client_id', client.id)
     .eq('status', 'published')
-    .order('published_at', { ascending: false });
+    .order('published_at', { ascending: false })
+    .limit(limit);
+
+  if (category) query = query.eq('category', category);
+
+  const { data: posts, error } = await query;
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
