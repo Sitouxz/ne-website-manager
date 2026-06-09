@@ -44,7 +44,7 @@ export default function LoginPage() {
 
         {/* Logo */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 32 }}>
-          <Image src="/logo-ne.png" alt="Neu Entity" width={110} height={44} style={{ objectFit: 'contain' }} />
+          <Image src="/logo-ne.svg" alt="Neu Entity" width={110} height={44} style={{ objectFit: 'contain' }} />
           <div>
             <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--fg1)', lineHeight: 1.1 }}>Website Manager</div>
             <div style={{ fontSize: 10.5, color: 'var(--fg3)' }}>by Neu Entity</div>
