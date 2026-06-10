@@ -9,17 +9,18 @@ import {
 import { createClient } from '@/lib/supabase/client';
 import type { Client } from '@/lib/supabase/types';
 
-const CMS_BASE = 'https://ne-website-manager.vercel.app';
-
 type Tab = 'general' | 'deploy' | 'integration' | 'api';
 
 export default function SettingsPage() {
   const [client,   setClient]   = useState<Client | null>(null);
+  const [clients,  setClients]  = useState<Client[]>([]);
+  const [isAdmin,  setIsAdmin]  = useState(false);
   const [loading,  setLoading]  = useState(true);
   const [saving,   setSaving]   = useState(false);
   const [saved,    setSaved]    = useState(false);
   const [tab,      setTab]      = useState<Tab>('general');
   const [form,     setForm]     = useState({ name: '', website_url: '', deploy_hook: '', github_repo: '' });
+  const [cmsBase,  setCmsBase]  = useState('');
 
   // Integration state
   const [ghToken,   setGhToken]   = useState('');
@@ -28,26 +29,42 @@ export default function SettingsPage() {
   const [intErr,    setIntErr]    = useState('');
   const [copied,    setCopied]    = useState<string | null>(null);
 
+  function applyClient(c: Client | null) {
+    setClient(c);
+    setForm({
+      name: c?.name ?? '',
+      website_url: c?.website_url ?? '',
+      deploy_hook: c?.deploy_hook ?? '',
+      github_repo: c?.github_repo ?? '',
+    });
+  }
+
   useEffect(() => {
+    const originTimer = window.setTimeout(() => {
+      setCmsBase(window.location.origin.replace(/\/$/, ''));
+    }, 0);
+
     async function load() {
       const supabase = createClient();
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
-      const { data: profile } = await supabase.from('profiles').select('client_id').eq('id', user.id).single();
-      if (!profile?.client_id) { setLoading(false); return; }
-      const { data: c } = await supabase.from('clients').select('*').eq('id', profile.client_id).single();
-      if (c) {
-        setClient(c);
-        setForm({
-          name: c.name,
-          website_url: c.website_url ?? '',
-          deploy_hook: c.deploy_hook ?? '',
-          github_repo: c.github_repo ?? '',
-        });
+      const { data: profile } = await supabase.from('profiles').select('client_id, role').eq('id', user.id).single();
+      const admin = profile?.role === 'ne_admin';
+      setIsAdmin(admin);
+
+      if (admin) {
+        const { data: allClients } = await supabase.from('clients').select('*').order('name', { ascending: true });
+        const rows = (allClients ?? []) as Client[];
+        setClients(rows);
+        applyClient(rows[0] ?? null);
+      } else if (profile?.client_id) {
+        const { data: c } = await supabase.from('clients').select('*').eq('id', profile.client_id).single();
+        applyClient((c as Client | null) ?? null);
       }
       setLoading(false);
     }
     load();
+    return () => window.clearTimeout(originTimer);
   }, []);
 
   async function handleSave() {
@@ -63,6 +80,13 @@ export default function SettingsPage() {
     setSaving(false);
     setSaved(true);
     setTimeout(() => setSaved(false), 2500);
+  }
+
+  function handleClientSelect(id: string) {
+    applyClient(clients.find((c) => c.id === id) ?? null);
+    setSaved(false);
+    setPrUrl('');
+    setIntErr('');
   }
 
   async function testDeploy() {
@@ -118,15 +142,17 @@ export default function SettingsPage() {
   );
 
   const slug = client?.slug ?? '';
-  const postsUrl = `${CMS_BASE}/api/client/${slug}/posts`;
-  const pagesUrl = `${CMS_BASE}/api/client/${slug}/pages`;
+  const apiBase = cmsBase || '';
+  const postsUrl = `${apiBase}/api/client/${slug}/posts`;
+  const pagesUrl = `${apiBase}/api/client/${slug}/pages`;
+  const sdkUrl = `${apiBase}/api/client/${slug}/sdk`;
 
   const snippets: Record<string, { label: string; lang: string; code: string }[]> = {
     nextjs: [
       {
         label: 'Install CMS lib (copy file)',
         lang: 'bash',
-        code: `# Download lib/cms.ts into your Next.js project\ncurl -o lib/cms.ts https://ne-website-manager.vercel.app/api/client/${slug}/sdk`,
+        code: `# Download lib/cms.ts into your Next.js project\ncurl -o lib/cms.ts ${sdkUrl}`,
       },
       {
         label: 'Fetch posts (SSG)',
@@ -212,7 +238,22 @@ const pages = await fetch('${pagesUrl}').then(r => r.json());`,
       <div className="page-body" style={{ maxWidth: 760 }}>
 
         {/* Save bar */}
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 20, gap: 8 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 20, gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+          {isAdmin ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <label style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--fg2)' }}>Client</label>
+              <select
+                value={client?.id ?? ''}
+                onChange={(e) => handleClientSelect(e.target.value)}
+                style={{ fontSize: 12.5, border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '7px 10px', color: 'var(--fg1)', background: 'var(--surface)', minWidth: 220 }}
+              >
+                {clients.length === 0 ? <option value="">No clients</option> : clients.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+            </div>
+          ) : <div />}
+          <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
           {saved && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 600, color: 'var(--ne-success)', padding: '8px 14px', background: '#DCFCE7', borderRadius: 'var(--r-sm)' }}>
               <CheckCircle size={13} /> Saved
@@ -222,7 +263,15 @@ const pages = await fetch('${pagesUrl}').then(r => r.json());`,
             {saving ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Save size={14} />}
             Save Settings
           </button>
+          </div>
         </div>
+
+        {!client ? (
+          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', padding: '32px', color: 'var(--fg3)', fontSize: 13.5 }}>
+            No client is available for site settings yet. Create a client from NE Admin first.
+          </div>
+        ) : (
+          <>
 
         {/* Tabs */}
         <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', marginBottom: 24, gap: 0, overflowX: 'auto' }}>
@@ -426,6 +475,7 @@ const pages = await fetch('${pagesUrl}').then(r => r.json());`,
               {client && [
                 { label: 'Blog Posts', url: postsUrl },
                 { label: 'Pages',      url: pagesUrl },
+                { label: 'SDK',        url: sdkUrl },
               ].map(({ label, url }) => (
                 <div key={url} style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                   <div style={{ width: 80, fontSize: 12, fontWeight: 600, color: 'var(--fg2)', flexShrink: 0 }}>{label}</div>
@@ -438,7 +488,8 @@ const pages = await fetch('${pagesUrl}').then(r => r.json());`,
             </div>
           </div>
         )}
-
+          </>
+        )}
       </div>
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </>

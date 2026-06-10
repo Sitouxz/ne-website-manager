@@ -8,7 +8,7 @@ import {
   Search, Users, Settings, Megaphone, Mail,
   ChevronDown, LogOut, Globe, ShieldCheck,
 } from 'lucide-react';
-import type { Role } from '@/lib/supabase/types';
+import type { Client, Role } from '@/lib/supabase/types';
 
 type NavItem = { label: string; href: string; icon: React.ElementType; soon?: boolean };
 type NavGroup = { section: string; items: NavItem[] };
@@ -55,11 +55,15 @@ const ADMIN_NAV: NavGroup = {
 
 export default function Sidebar({
   clientName = 'Website Manager',
+  clients = [],
+  selectedClientId = null,
   role = 'editor',
   isOpen = false,
   onClose,
 }: {
   clientName?: string;
+  clients?: Client[];
+  selectedClientId?: string | null;
   role?: Role;
   isOpen?: boolean;
   onClose?: () => void;
@@ -72,6 +76,11 @@ export default function Sidebar({
     const supabase = createClient();
     await supabase.auth.signOut();
     router.push('/login');
+    router.refresh();
+  }
+
+  function handleClientChange(id: string) {
+    document.cookie = `ne_selected_client_id=${encodeURIComponent(id)}; path=/; max-age=31536000; samesite=lax`;
     router.refresh();
   }
 
@@ -96,10 +105,35 @@ export default function Sidebar({
           border: '1px solid var(--border)',
         }}>
           <Globe size={14} color="var(--fg3)" />
-          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--fg1)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {clientName}
-          </span>
-          <ChevronDown size={13} color="var(--fg3)" />
+          {isAdmin && clients.length > 0 ? (
+            <select
+              value={selectedClientId ?? ''}
+              onChange={(event) => handleClientChange(event.target.value)}
+              aria-label="Select client"
+              style={{
+                flex: 1,
+                minWidth: 0,
+                border: 'none',
+                background: 'transparent',
+                color: 'var(--fg1)',
+                fontSize: 12,
+                fontWeight: 600,
+                outline: 'none',
+                cursor: 'pointer',
+              }}
+            >
+              {clients.map((client) => (
+                <option key={client.id} value={client.id}>{client.name}</option>
+              ))}
+            </select>
+          ) : (
+            <>
+              <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--fg1)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {clientName}
+              </span>
+              <ChevronDown size={13} color="var(--fg3)" />
+            </>
+          )}
         </div>
       </div>
 

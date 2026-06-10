@@ -2,15 +2,14 @@
 
 import Topbar from '@/components/Topbar';
 import Link from 'next/link';
-import { useState, useEffect, use } from 'react';
+import { useState, useEffect, use, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   ArrowLeft, Bold, Italic, Underline, Link2, List, ListOrdered,
-  Quote, Image, Code, Heading2, Heading3, Eye, Save, Send, X, Plus, Loader2,
+  Quote, Image as ImageIcon, Code, Heading2, Heading3, Eye, Save, Send, X, Plus, Loader2,
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
-
-const CATEGORIES = ['Character', 'Worship', 'Dakwah', 'Tafsir', 'Community', 'Events', 'Announcement'];
+import { useSelectedClient } from '@/components/AppShell';
 
 const EMPTY_FORM = {
   title: '', slug: '', excerpt: '', content: '',
@@ -26,12 +25,15 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
 
   const [form,        setForm]      = useState({ ...EMPTY_FORM });
   const [tagInput,    setTagInput]  = useState('');
-  const [activeFormats, setActiveFormats] = useState<string[]>([]);
   const [loading,     setLoading]   = useState(!isNew);
   const [saving,      setSaving]    = useState(false);
   const [saved,       setSaved]     = useState(false);
   const [error,       setError]     = useState('');
   const [clientId,    setClientId]  = useState<string | null>(null);
+  const [isAdmin,     setIsAdmin]   = useState(false);
+  const [preview,     setPreview]   = useState(false);
+  const { selectedClientId } = useSelectedClient();
+  const editorRef = useRef<HTMLDivElement>(null);
 
   // Load existing post + client_id
   useEffect(() => {
@@ -42,11 +44,18 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
 
       const { data: profile } = await supabase
         .from('profiles')
-        .select('client_id')
+        .select('client_id, role')
         .eq('id', user.id)
         .single();
 
-      setClientId(profile?.client_id ?? null);
+      const admin = profile?.role === 'ne_admin';
+      setIsAdmin(admin);
+
+      if (admin) {
+        if (isNew) setClientId(selectedClientId ?? null);
+      } else {
+        setClientId(profile?.client_id ?? null);
+      }
 
       if (!isNew) {
         const { data: post } = await supabase
@@ -56,6 +65,7 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
           .single();
 
         if (post) {
+          if (admin) setClientId(post.client_id);
           setForm({
             title:      post.title       ?? '',
             slug:       post.slug        ?? '',
@@ -73,17 +83,36 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
       }
     }
     load();
-  }, [id, isNew]);
+  }, [id, isNew, selectedClientId]);
 
   const slugify = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-  const toggleFormat = (f: string) =>
-    setActiveFormats((prev) => prev.includes(f) ? prev.filter((x) => x !== f) : [...prev, f]);
+  const syncEditor = () => {
+    if (editorRef.current) {
+      setForm((f) => ({ ...f, content: editorRef.current?.innerHTML ?? '' }));
+    }
+  };
+  const applyFormat = (command: string, value?: string) => {
+    editorRef.current?.focus();
+    document.execCommand(command, false, value);
+    syncEditor();
+  };
+  const addLink = () => {
+    const url = window.prompt('Paste the link URL');
+    if (url) applyFormat('createLink', url);
+  };
+  const addInlineImage = () => {
+    const url = window.prompt('Paste the image URL');
+    if (url) applyFormat('insertImage', url);
+  };
+  const setFeaturedImage = () => {
+    const url = window.prompt('Paste the featured image URL');
+    if (url) setForm((f) => ({ ...f, featuredImg: url }));
+  };
   const addTag = () => {
     const t = tagInput.trim().toLowerCase();
     if (t && !form.tags.includes(t)) setForm((f) => ({ ...f, tags: [...f.tags, t] }));
     setTagInput('');
   };
-
   async function handleSave(statusOverride?: string) {
     if (!clientId) { setError('No client linked to your account. Contact Neu Entity support.'); return; }
     setSaving(true);
@@ -98,7 +127,7 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
 
     const payload = {
       title:           form.title || '(Untitled)',
-      slug:            form.slug  || slugify(form.title || Date.now().toString()),
+      slug:            form.slug || slugify(form.title) || 'untitled-post',
       excerpt:         form.excerpt,
       content:         form.content,
       category:        form.category,
@@ -179,6 +208,7 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
             <ArrowLeft size={14} /> Back to Posts
           </Link>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            {isAdmin && isNew && !clientId && <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ne-danger)', padding: '8px 14px', background: '#FEF2F2', borderRadius: 'var(--r-sm)' }}>Select a client in the sidebar first.</div>}
             {error && <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ne-danger)', padding: '8px 14px', background: '#FEF2F2', borderRadius: 'var(--r-sm)' }}>{error}</div>}
             {saved && <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ne-success)', padding: '8px 14px', background: '#DCFCE7', borderRadius: 'var(--r-sm)' }}>Saved</div>}
             <button className="btn-outline-ne" onClick={() => handleSave('draft')} disabled={saving}>
@@ -216,39 +246,52 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
             {/* Rich text editor */}
             <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
               <div className="editor-toolbar">
-                {[{ id: 'h2', Icon: Heading2 }, { id: 'h3', Icon: Heading3 }].map(({ id, Icon }) => (
-                  <button key={id} className={`toolbar-btn${activeFormats.includes(id) ? ' active' : ''}`} onClick={() => toggleFormat(id)}>
+                {[{ id: 'formatBlock', value: 'h2', Icon: Heading2 }, { id: 'formatBlock', value: 'h3', Icon: Heading3 }].map(({ id, value, Icon }) => (
+                  <button key={value} className="toolbar-btn" onClick={() => applyFormat(id, value)} title={value.toUpperCase()}>
                     <Icon size={15} />
                   </button>
                 ))}
                 <div className="toolbar-sep" />
                 {[{ id: 'bold', Icon: Bold }, { id: 'italic', Icon: Italic }, { id: 'underline', Icon: Underline }].map(({ id, Icon }) => (
-                  <button key={id} className={`toolbar-btn${activeFormats.includes(id) ? ' active' : ''}`} onClick={() => toggleFormat(id)}>
+                  <button key={id} className="toolbar-btn" onClick={() => applyFormat(id)} title={id}>
                     <Icon size={15} />
                   </button>
                 ))}
                 <div className="toolbar-sep" />
-                {[{ id: 'ul', Icon: List }, { id: 'ol', Icon: ListOrdered }, { id: 'quote', Icon: Quote }, { id: 'code', Icon: Code }].map(({ id, Icon }) => (
-                  <button key={id} className={`toolbar-btn${activeFormats.includes(id) ? ' active' : ''}`} onClick={() => toggleFormat(id)}>
+                {[
+                  { id: 'insertUnorderedList', Icon: List },
+                  { id: 'insertOrderedList', Icon: ListOrdered },
+                  { id: 'formatBlock', value: 'blockquote', Icon: Quote },
+                  { id: 'formatBlock', value: 'pre', Icon: Code },
+                ].map(({ id, value, Icon }) => (
+                  <button key={value ?? id} className="toolbar-btn" onClick={() => applyFormat(id, value)} title={value ?? id}>
                     <Icon size={15} />
                   </button>
                 ))}
                 <div className="toolbar-sep" />
-                <button className="toolbar-btn"><Link2 size={15} /></button>
-                <button className="toolbar-btn"><Image size={15} /></button>
+                <button className="toolbar-btn" onClick={addLink} title="Add link"><Link2 size={15} /></button>
+                <button className="toolbar-btn" onClick={addInlineImage} title="Insert image"><ImageIcon size={15} /></button>
                 <div style={{ marginLeft: 'auto' }}>
-                  <button className="toolbar-btn" style={{ fontSize: 11, fontWeight: 700 }}>
-                    <Eye size={14} /> Preview
+                  <button className={`toolbar-btn${preview ? ' active' : ''}`} style={{ fontSize: 11, fontWeight: 700 }} onClick={() => setPreview((p) => !p)}>
+                    <Eye size={14} /> {preview ? 'Edit' : 'Preview'}
                   </button>
                 </div>
               </div>
-              <div
-                contentEditable
-                suppressContentEditableWarning
-                dangerouslySetInnerHTML={{ __html: form.content }}
-                onInput={(e) => setForm({ ...form, content: (e.target as HTMLDivElement).innerHTML })}
-                style={{ minHeight: 420, padding: '20px 24px', outline: 'none', fontSize: 14.5, lineHeight: 1.75, color: 'var(--fg1)' }}
-              />
+              {preview ? (
+                <div
+                  dangerouslySetInnerHTML={{ __html: form.content || '<p style="color: var(--fg3)">Nothing to preview yet.</p>' }}
+                  style={{ minHeight: 420, padding: '20px 24px', fontSize: 14.5, lineHeight: 1.75, color: 'var(--fg1)' }}
+                />
+              ) : (
+                <div
+                  ref={editorRef}
+                  contentEditable
+                  suppressContentEditableWarning
+                  dangerouslySetInnerHTML={{ __html: form.content }}
+                  onInput={syncEditor}
+                  style={{ minHeight: 420, padding: '20px 24px', outline: 'none', fontSize: 14.5, lineHeight: 1.75, color: 'var(--fg1)' }}
+                />
+              )}
             </div>
 
             {/* Excerpt */}
@@ -308,10 +351,8 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
                 </div>
                 <div>
                   <label style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--fg3)', display: 'block', marginBottom: 5 }}>Category</label>
-                  <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}
-                    style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '8px 10px', fontSize: 13, color: 'var(--fg1)', background: 'var(--surface)' }}>
-                    {CATEGORIES.map((c) => <option key={c}>{c}</option>)}
-                  </select>
+                  <input value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}
+                    style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '8px 10px', fontSize: 13, color: 'var(--fg1)', background: 'var(--surface)' }} />
                 </div>
                 <button className="btn-ne" style={{ width: '100%', justifyContent: 'center' }} onClick={() => handleSave('published')} disabled={saving}>
                   <Send size={14} /> {form.status === 'published' ? 'Update Post' : 'Publish Post'}
@@ -335,11 +376,11 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
                     </button>
                   </div>
                 ) : (
-                  <div style={{ border: '2px dashed var(--border)', borderRadius: 'var(--r-sm)', padding: '28px 16px', textAlign: 'center', cursor: 'pointer' }}>
-                    <Image size={22} color="var(--fg3)" style={{ margin: '0 auto 8px' }} />
+                  <button type="button" onClick={setFeaturedImage} style={{ width: '100%', border: '2px dashed var(--border)', borderRadius: 'var(--r-sm)', padding: '28px 16px', textAlign: 'center', cursor: 'pointer', background: 'transparent' }}>
+                    <ImageIcon size={22} color="var(--fg3)" style={{ margin: '0 auto 8px' }} />
                     <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--fg2)', marginBottom: 4 }}>Add Featured Image</div>
-                    <div style={{ fontSize: 11, color: 'var(--fg3)' }}>PNG, JPG up to 5MB</div>
-                  </div>
+                    <div style={{ fontSize: 11, color: 'var(--fg3)' }}>Paste an image URL</div>
+                  </button>
                 )}
               </div>
             </div>

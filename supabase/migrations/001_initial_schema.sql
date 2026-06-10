@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS public.clients (
   slug        TEXT UNIQUE NOT NULL,
   website_url TEXT,
   deploy_hook TEXT,
+  github_repo TEXT,
   plan        TEXT DEFAULT 'starter',
   is_active   BOOLEAN DEFAULT true,
   created_at  TIMESTAMPTZ DEFAULT now(),

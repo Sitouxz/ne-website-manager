@@ -2,13 +2,13 @@
 
 import Topbar from '@/components/Topbar';
 import Link from 'next/link';
-import { useState, useEffect } from 'react';
-import { Plus, Search, Filter, MoreHorizontal, Edit, Trash2, Eye, Copy, Loader2 } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Plus, Search, Filter, MoreHorizontal, Edit, Trash2, Loader2 } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
+import { useSelectedClient } from '@/components/AppShell';
 import type { Post } from '@/lib/supabase/types';
 
 const STATUSES = ['All', 'published', 'draft', 'archived'];
-const CATS     = ['All', 'Character', 'Worship', 'Dakwah', 'Tafsir', 'Community', 'Events'];
 
 export default function PostsPage() {
   const [posts,    setPosts]    = useState<Post[]>([]);
@@ -18,21 +18,27 @@ export default function PostsPage() {
   const [status,   setStatus]   = useState('All');
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const { selectedClientId } = useSelectedClient();
 
-  useEffect(() => {
-    fetchPosts();
-  }, []);
-
-  async function fetchPosts() {
+  const fetchPosts = useCallback(async () => {
     setLoading(true);
     const supabase = createClient();
-    const { data } = await supabase
+    let query = supabase
       .from('posts')
       .select('*')
       .order('created_at', { ascending: false });
+    if (selectedClientId) query = query.eq('client_id', selectedClientId);
+    const { data } = await query;
     setPosts(data ?? []);
     setLoading(false);
-  }
+  }, [selectedClientId]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      fetchPosts();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [fetchPosts]);
 
   async function handleDelete(id: string) {
     if (!confirm('Delete this post? This cannot be undone.')) return;
@@ -49,6 +55,11 @@ export default function PostsPage() {
     (status === 'All' || p.status   === status) &&
     p.title.toLowerCase().includes(search.toLowerCase())
   );
+
+  const categories = useMemo(() => {
+    const values = new Set(posts.map((post) => post.category).filter(Boolean));
+    return ['All', ...[...values].sort((a, b) => a.localeCompare(b))];
+  }, [posts]);
 
   return (
     <>
@@ -90,7 +101,7 @@ export default function PostsPage() {
               <Filter size={13} color="var(--fg3)" />
               <select value={cat} onChange={(e) => setCat(e.target.value)}
                 style={{ fontSize: 12.5, border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '6px 10px', color: 'var(--fg1)', background: 'var(--surface)', cursor: 'pointer' }}>
-                {CATS.map((c) => <option key={c}>{c}</option>)}
+                {categories.map((c) => <option key={c}>{c}</option>)}
               </select>
             </div>
           </div>

@@ -23,7 +23,7 @@ export async function GET(
 
   let query = supabase
     .from('posts')
-    .select('id, title, slug, excerpt, content, cover_url, category, tags, published_at')
+    .select('id, title, slug, excerpt, content, cover_url, category, tags, status, seo_title, seo_description, published_at, created_at, updated_at')
     .eq('client_id', client.id)
     .eq('status', 'published')
     .order('published_at', { ascending: false })
@@ -37,5 +37,16 @@ export async function GET(
 
   return NextResponse.json(posts ?? [], {
     headers: { 'Access-Control-Allow-Origin': '*' },
+  });
+}
+
+export async function OPTIONS() {
+  return new Response(null, {
+    status: 204,
+    headers: {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type',
+    },
   });
 }

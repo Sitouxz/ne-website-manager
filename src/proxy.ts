@@ -1,7 +1,7 @@
 import { createServerClient } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request });
 
   const supabase = createServerClient(
@@ -21,21 +21,18 @@ export async function middleware(request: NextRequest) {
     }
   );
 
-  // Refresh session — MUST be called before any other Supabase calls
   const { data: { user } } = await supabase.auth.getUser();
 
   const path = request.nextUrl.pathname;
-  const isLoginPage    = path === '/login';
-  const isPublicApi    = path.startsWith('/api/client/');
+  const isLoginPage = path === '/login';
+  const isPublicApi = path.startsWith('/api/client/');
 
-  // Unauthenticated → redirect to login (except public API and login itself)
   if (!user && !isLoginPage && !isPublicApi) {
     const url = request.nextUrl.clone();
     url.pathname = '/login';
     return NextResponse.redirect(url);
   }
 
-  // Already authenticated → skip login page
   if (user && isLoginPage) {
     const url = request.nextUrl.clone();
     url.pathname = '/dashboard';

@@ -1,11 +1,13 @@
 import Topbar from '@/components/Topbar';
+import { cookies } from 'next/headers';
 import { createClient } from '@/lib/supabase/server';
-import { FileText, Eye, Clock, TrendingUp, ArrowUpRight, BarChart2, Search, Image, Mail, Megaphone, Users } from 'lucide-react';
+import { FileText, Eye, Clock, TrendingUp, ArrowUpRight, Search, Image, Mail, Megaphone, Users } from 'lucide-react';
 import Link from 'next/link';
 import type { Profile } from '@/lib/supabase/types';
 
+const SELECTED_CLIENT_COOKIE = 'ne_selected_client_id';
+
 const COMING_SOON = [
-  { icon: BarChart2, label: 'Analytics', desc: 'Page views, engagement, traffic sources' },
   { icon: Search, label: 'SEO Manager', desc: 'Meta tags, sitemaps, keyword tracking' },
   { icon: Image, label: 'Media Library', desc: 'Centralised image & file management' },
   { icon: Mail, label: 'Forms & Leads', desc: 'Contact forms, lead capture, submissions' },
@@ -41,17 +43,26 @@ export default async function DashboardPage() {
     .single() as { data: Profile | null };
 
   const isAdmin = profile?.role === 'ne_admin';
-  const clientId = profile?.client_id;
-  const clientName = profile?.clients?.name ?? 'Your Website';
+  const selectedClientId = isAdmin ? (await cookies()).get(SELECTED_CLIENT_COOKIE)?.value : null;
+  const clientId = selectedClientId ?? profile?.client_id;
+  let clientName = profile?.clients?.name ?? 'Website Manager';
+  if (isAdmin && clientId) {
+    const { data: selectedClient } = await supabase
+      .from('clients')
+      .select('name')
+      .eq('id', clientId)
+      .single();
+    clientName = selectedClient?.name ?? 'Website Manager';
+  }
 
   // Fetch posts scoped to client (or all posts for admin)
   let postsQuery = supabase.from('posts').select('id, title, slug, status, published_at, updated_at, created_at');
-  if (!isAdmin && clientId) postsQuery = postsQuery.eq('client_id', clientId);
+  if (clientId) postsQuery = postsQuery.eq('client_id', clientId);
   const { data: allPosts = [] } = await postsQuery.order('updated_at', { ascending: false });
 
   // Fetch pages
   let pagesQuery = supabase.from('pages').select('id, status, updated_at');
-  if (!isAdmin && clientId) pagesQuery = pagesQuery.eq('client_id', clientId);
+  if (clientId) pagesQuery = pagesQuery.eq('client_id', clientId);
   const { data: allPages = [] } = await pagesQuery;
 
   const published = (allPosts ?? []).filter(p => p.status === 'published').length;
@@ -88,7 +99,7 @@ export default async function DashboardPage() {
               NE Website Manager
             </div>
             <h2 style={{ fontSize: 22, fontWeight: 800, color: '#fff', margin: '0 0 8px' }}>
-              Good day, {clientName} team 👋
+              Good day, {isAdmin ? 'Neu Entity team' : `${clientName} team`} 👋
             </h2>
             <p style={{ fontSize: 13.5, color: 'rgba(255,255,255,.75)', margin: 0, maxWidth: 420 }}>
               Manage your website content from here. New posts, pages, and more — all in one place.
@@ -140,13 +151,12 @@ export default async function DashboardPage() {
                   <th>Title</th>
                   <th>Status</th>
                   <th>Date</th>
-                  <th>Views</th>
                 </tr>
               </thead>
               <tbody>
                 {recentPosts.length === 0 ? (
                   <tr>
-                    <td colSpan={4} style={{ textAlign: 'center', color: 'var(--fg3)', padding: '28px 16px', fontSize: 13 }}>
+                    <td colSpan={3} style={{ textAlign: 'center', color: 'var(--fg3)', padding: '28px 16px', fontSize: 13 }}>
                       No posts yet. <Link href="/cms/posts/new" style={{ color: 'var(--ne-blue)', fontWeight: 600, textDecoration: 'none' }}>Create your first post →</Link>
                     </td>
                   </tr>
@@ -159,7 +169,6 @@ export default async function DashboardPage() {
                     </td>
                     <td><span className={`status-pill ${p.status}`}>{p.status}</span></td>
                     <td style={{ color: 'var(--fg3)', fontSize: 12 }}>{fmtDate(p.published_at ?? p.created_at)}</td>
-                    <td style={{ color: 'var(--fg3)', fontSize: 12 }}>—</td>
                   </tr>
                 ))}
               </tbody>

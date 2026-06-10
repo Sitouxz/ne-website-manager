@@ -2,15 +2,19 @@
 
 import { useState } from 'react';
 import Sidebar from './Sidebar';
-import type { Role } from '@/lib/supabase/types';
+import type { Client, Role } from '@/lib/supabase/types';
 
 export default function AppShell({
   children,
   clientName,
+  clients,
+  selectedClientId,
   role,
 }: {
   children: React.ReactNode;
   clientName: string;
+  clients: Client[];
+  selectedClientId: string | null;
   role: Role;
 }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -25,6 +29,8 @@ export default function AppShell({
 
       <Sidebar
         clientName={clientName}
+        clients={clients}
+        selectedClientId={selectedClientId}
         role={role}
         isOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
@@ -36,7 +42,9 @@ export default function AppShell({
         <div data-sidebar-toggle="true" style={{ display: 'contents' }}>
           {/* Use a global custom event to communicate hamburger click */}
           <MobileMenuProvider onToggle={() => setSidebarOpen((o) => !o)}>
-            {children}
+            <ClientSelectionProvider selectedClientId={selectedClientId} clientName={clientName}>
+              {children}
+            </ClientSelectionProvider>
           </MobileMenuProvider>
         </div>
       </div>
@@ -50,10 +58,32 @@ import { createContext, useContext } from 'react';
 const MobileMenuContext = createContext<{ onToggle: () => void }>({ onToggle: () => {} });
 export function useMobileMenu() { return useContext(MobileMenuContext); }
 
+const ClientSelectionContext = createContext<{ selectedClientId: string | null; clientName: string }>({
+  selectedClientId: null,
+  clientName: 'Website Manager',
+});
+export function useSelectedClient() { return useContext(ClientSelectionContext); }
+
 function MobileMenuProvider({ children, onToggle }: { children: React.ReactNode; onToggle: () => void }) {
   return (
     <MobileMenuContext.Provider value={{ onToggle }}>
       {children}
     </MobileMenuContext.Provider>
+  );
+}
+
+function ClientSelectionProvider({
+  children,
+  selectedClientId,
+  clientName,
+}: {
+  children: React.ReactNode;
+  selectedClientId: string | null;
+  clientName: string;
+}) {
+  return (
+    <ClientSelectionContext.Provider value={{ selectedClientId, clientName }}>
+      {children}
+    </ClientSelectionContext.Provider>
   );
 }
