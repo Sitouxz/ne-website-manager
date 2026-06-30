@@ -1,6 +1,9 @@
 export type Role = 'ne_admin' | 'client_admin' | 'editor';
 export type PostStatus = 'draft' | 'published' | 'archived';
 export type PageStatus = 'draft' | 'published';
+export type PropertyStatus = 'active' | 'archived';
+export type ListingType = 'sale' | 'rent';
+export type Segment = 'Prime' | 'City fringe' | 'Suburban';
 
 export interface Client {
   id: string;
@@ -52,5 +55,47 @@ export interface Page {
   content: string;
   status: PageStatus;
   visibility: 'public' | 'private';
+  updated_at: string;
+}
+
+export interface PropertyHighlight { label: string; body: string; }
+export interface PropertyGalleryItem { src: string; alt: string; }
+export interface PropertyTour { src: string; poster: string; label: string; description: string; duration?: string; }
+
+export interface Property {
+  id: string;
+  client_id: string;
+  slug: string;
+  name: string;
+  address: string;
+  area: string;
+  district: string;
+  listing: ListingType;
+  segment: Segment;
+  property_type: string;
+  tenure: string;
+  bedrooms: number;
+  bathrooms: number;
+  price: number | null;
+  psf: number | null;
+  size_sqft: number | null;
+  completion_year: number | null;
+  furnishing: string | null;
+  tagline: string;
+  story: string;
+  location_note: string;
+  highlights: PropertyHighlight[];
+  connectivity: string[];
+  amenities: string[];
+  hero_url: string;
+  hero_alt: string;
+  gallery: PropertyGalleryItem[];
+  available: string | null;
+  tour: PropertyTour | null;
+  source_url: string | null;
+  status: PropertyStatus;
+  seo_title: string | null;
+  seo_description: string | null;
+  created_at: string;
   updated_at: string;
 }
