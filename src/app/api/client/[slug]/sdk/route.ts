@@ -56,6 +56,31 @@ export function getPostBySlug(slug: string): Promise<CmsPost | null> {
 export function getPages(): Promise<CmsPage[]> {
   return fetchJson<CmsPage[]>(\`/api/client/\${CLIENT_SLUG}/pages\`);
 }
+
+export function getCollection<T = Record<string, unknown>>(collection: string, params?: { limit?: number }): Promise<T[]> {
+  const search = new URLSearchParams();
+  if (params?.limit) search.set('limit', String(params.limit));
+  const qs = search.toString();
+  return fetchJson<T[]>(\`/api/client/\${CLIENT_SLUG}/collections/\${collection}\${qs ? \`?\${qs}\` : ''}\`);
+}
+
+export function getCollectionItem<T = Record<string, unknown>>(collection: string, itemSlug: string): Promise<T | null> {
+  return fetchJson<T>(\`/api/client/\${CLIENT_SLUG}/collections/\${collection}/\${encodeURIComponent(itemSlug)}\`)
+    .catch(() => null);
+}
+
+export interface CmsMenuItem {
+  label: string;
+  icon: string | null;
+  link_type: 'collection' | 'url' | 'custom';
+  collection_slug: string | null;
+  url: string | null;
+  children: CmsMenuItem[];
+}
+
+export function getMenu(): Promise<CmsMenuItem[]> {
+  return fetchJson<CmsMenuItem[]>(\`/api/client/\${CLIENT_SLUG}/menu\`);
+}
 `;
 }
 

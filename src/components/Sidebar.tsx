@@ -6,9 +6,10 @@ import { createClient } from '@/lib/supabase/client';
 import {
   LayoutDashboard, FileText, FileEdit, Image, BarChart2,
   Search, Users, Settings, Megaphone, Mail,
-  ChevronDown, LogOut, Globe, ShieldCheck, Home,
+  ChevronDown, LogOut, Globe, ShieldCheck, Home, Layers, ListTree,
 } from 'lucide-react';
-import type { Client, Role } from '@/lib/supabase/types';
+import { getIcon } from '@/lib/collections/icons';
+import type { Client, Role, MenuItem as CmsMenuItem } from '@/lib/supabase/types';
 
 type NavItem = { label: string; href: string; icon: React.ElementType; soon?: boolean };
 type NavGroup = { section: string; items: NavItem[] };
@@ -21,31 +22,43 @@ const NAV: NavGroup[] = [
       { label: 'Analytics',  href: '/analytics',  icon: BarChart2 },
     ],
   },
-  {
-    section: 'Content',
-    items: [
-      { label: 'Blog Posts',    href: '/cms/posts',      icon: FileText },
-      { label: 'Properties',    href: '/cms/properties', icon: Home },
-      { label: 'Pages',         href: '/cms/pages',      icon: FileEdit },
-      { label: 'Media Library', href: '/cms/media',      icon: Image,  soon: true },
-    ],
-  },
-  {
-    section: 'Tools',
-    items: [
-      { label: 'SEO Manager',   href: '/seo',           icon: Search,    soon: true },
-      { label: 'Forms & Leads', href: '/forms',         icon: Mail,      soon: true },
-      { label: 'Announcements', href: '/announcements', icon: Megaphone, soon: true },
-    ],
-  },
-  {
-    section: 'Settings',
-    items: [
-      { label: 'Site Settings', href: '/settings', icon: Settings },
-      { label: 'Team Members',  href: '/team',     icon: Users,   soon: true },
-    ],
-  },
 ];
+
+// Fallback content links shown until a client configures a sidebar menu.
+const DEFAULT_CONTENT_NAV: NavGroup = {
+  section: 'Content',
+  items: [
+    { label: 'Blog Posts',    href: '/cms/posts',      icon: FileText },
+    { label: 'Properties',    href: '/cms/properties', icon: Home },
+    { label: 'Pages',         href: '/cms/pages',      icon: FileEdit },
+    { label: 'Media Library', href: '/cms/media',      icon: Image,  soon: true },
+  ],
+};
+
+const BUILDER_NAV: NavGroup = {
+  section: 'Builder',
+  items: [
+    { label: 'Collections', href: '/cms/collections', icon: Layers },
+    { label: 'Menus',       href: '/cms/menus',        icon: ListTree },
+  ],
+};
+
+const TOOLS_NAV: NavGroup = {
+  section: 'Tools',
+  items: [
+    { label: 'SEO Manager',   href: '/seo',           icon: Search,    soon: true },
+    { label: 'Forms & Leads', href: '/forms',         icon: Mail,      soon: true },
+    { label: 'Announcements', href: '/announcements', icon: Megaphone, soon: true },
+  ],
+};
+
+const SETTINGS_NAV: NavGroup = {
+  section: 'Settings',
+  items: [
+    { label: 'Site Settings', href: '/settings', icon: Settings },
+    { label: 'Team Members',  href: '/team',     icon: Users,   soon: true },
+  ],
+};
 
 const ADMIN_NAV: NavGroup = {
   section: 'NE Admin',
@@ -54,11 +67,34 @@ const ADMIN_NAV: NavGroup = {
   ],
 };
 
+function menuItemHref(item: CmsMenuItem): string {
+  if (item.link_type === 'collection' && item.collection_slug) return `/cms/c/${item.collection_slug}`;
+  if (item.link_type === 'url' && item.url) return item.url;
+  return '#';
+}
+
+// The dynamic sidebar menu, driven by menu_items(location='cms_sidebar') for the
+// selected client, falls back to the legacy hardcoded content links until a
+// client configures one via the Menus builder.
+function buildContentGroup(menuItems: CmsMenuItem[]): NavGroup {
+  const visible = menuItems.filter((item) => item.is_visible).sort((a, b) => a.sort_order - b.sort_order);
+  if (visible.length === 0) return DEFAULT_CONTENT_NAV;
+  return {
+    section: 'Content',
+    items: visible.map((item) => ({
+      label: item.label,
+      href: menuItemHref(item),
+      icon: getIcon(item.icon),
+    })),
+  };
+}
+
 export default function Sidebar({
   clientName = 'Website Manager',
   clients = [],
   selectedClientId = null,
   role = 'editor',
+  menuItems = [],
   isOpen = false,
   onClose,
 }: {
@@ -66,6 +102,7 @@ export default function Sidebar({
   clients?: Client[];
   selectedClientId?: string | null;
   role?: Role;
+  menuItems?: CmsMenuItem[];
   isOpen?: boolean;
   onClose?: () => void;
 }) {
@@ -85,7 +122,14 @@ export default function Sidebar({
     router.refresh();
   }
 
-  const allNav = isAdmin ? [...NAV, ADMIN_NAV] : NAV;
+  const allNav = [
+    ...NAV,
+    buildContentGroup(menuItems),
+    BUILDER_NAV,
+    TOOLS_NAV,
+    SETTINGS_NAV,
+    ...(isAdmin ? [ADMIN_NAV] : []),
+  ];
 
   return (
     <aside className={`sidebar${isOpen ? ' sidebar-open' : ''}`}>

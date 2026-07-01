@@ -55,6 +55,42 @@ export async function getPages(): Promise<CmsPage[]> {
   if (!res.ok) return [];
   return res.json();
 }
+
+export async function getCollection<T = Record<string, unknown>>(collection: string, params?: { limit?: number }): Promise<T[]> {
+  const search = new URLSearchParams();
+  if (params?.limit) search.set('limit', String(params.limit));
+  const qs = search.toString();
+  const res = await fetch(\`\${CMS_BASE}/api/client/\${CLIENT_SLUG}/collections/\${collection}\${qs ? \`?\${qs}\` : ''}\`, {
+    next: { revalidate: 60 },
+  });
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function getCollectionItem<T = Record<string, unknown>>(collection: string, itemSlug: string): Promise<T | null> {
+  const res = await fetch(\`\${CMS_BASE}/api/client/\${CLIENT_SLUG}/collections/\${collection}/\${encodeURIComponent(itemSlug)}\`, {
+    next: { revalidate: 60 },
+  });
+  if (!res.ok) return null;
+  return res.json();
+}
+
+export interface CmsMenuItem {
+  label: string;
+  icon: string | null;
+  link_type: 'collection' | 'url' | 'custom';
+  collection_slug: string | null;
+  url: string | null;
+  children: CmsMenuItem[];
+}
+
+export async function getMenu(): Promise<CmsMenuItem[]> {
+  const res = await fetch(\`\${CMS_BASE}/api/client/\${CLIENT_SLUG}/menu\`, {
+    next: { revalidate: 60 },
+  });
+  if (!res.ok) return [];
+  return res.json();
+}
 `;
 }
 

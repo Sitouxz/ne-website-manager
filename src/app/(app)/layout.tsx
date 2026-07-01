@@ -2,7 +2,7 @@ import { redirect } from 'next/navigation';
 import { cookies } from 'next/headers';
 import { createClient } from '@/lib/supabase/server';
 import AppShell from '@/components/AppShell';
-import type { Client, Profile } from '@/lib/supabase/types';
+import type { Client, MenuItem, Profile } from '@/lib/supabase/types';
 
 const SELECTED_CLIENT_COOKIE = 'ne_selected_client_id';
 
@@ -37,8 +37,19 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const clientName = selectedClient?.name ?? 'Website Manager';
   const selectedClientId = selectedClient?.id ?? profile?.client_id ?? null;
 
+  let menuItems: MenuItem[] = [];
+  if (selectedClientId) {
+    const { data: menuRows } = await supabase
+      .from('menu_items')
+      .select('*')
+      .eq('client_id', selectedClientId)
+      .eq('location', 'cms_sidebar')
+      .order('sort_order', { ascending: true });
+    menuItems = (menuRows ?? []) as MenuItem[];
+  }
+
   return (
-    <AppShell clientName={clientName} clients={clients} selectedClientId={selectedClientId} role={role}>
+    <AppShell clientName={clientName} clients={clients} selectedClientId={selectedClientId} role={role} menuItems={menuItems}>
       {children}
     </AppShell>
   );

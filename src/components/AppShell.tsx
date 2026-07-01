@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import Sidebar from './Sidebar';
-import type { Client, Role } from '@/lib/supabase/types';
+import type { Client, MenuItem, Role } from '@/lib/supabase/types';
 
 export default function AppShell({
   children,
@@ -10,12 +10,14 @@ export default function AppShell({
   clients,
   selectedClientId,
   role,
+  menuItems = [],
 }: {
   children: React.ReactNode;
   clientName: string;
   clients: Client[];
   selectedClientId: string | null;
   role: Role;
+  menuItems?: MenuItem[];
 }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
@@ -32,6 +34,7 @@ export default function AppShell({
         clients={clients}
         selectedClientId={selectedClientId}
         role={role}
+        menuItems={menuItems}
         isOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
       />
