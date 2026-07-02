@@ -34,10 +34,34 @@ export interface CmsPage {
   updated_at: string;
 }
 
+export type AnalyticsMetadata = Record<string, string | number | boolean | null>;
+
 async function fetchJson<T>(path: string): Promise<T> {
   const res = await fetch(\`\${CMS_BASE}\${path}\`, { next: { revalidate: 60 } });
   if (!res.ok) throw new Error(\`NE Website Manager request failed: \${res.status}\`);
   return res.json() as Promise<T>;
+}
+
+function getVisitorId() {
+  if (typeof window === 'undefined') return undefined;
+  const key = 'ne_visitor_id';
+  let id = window.localStorage.getItem(key);
+  if (!id) {
+    id = crypto.randomUUID?.() ?? Math.random().toString(36).slice(2);
+    window.localStorage.setItem(key, id);
+  }
+  return id;
+}
+
+function getSessionId() {
+  if (typeof window === 'undefined') return undefined;
+  const key = 'ne_session_id';
+  let id = window.sessionStorage.getItem(key);
+  if (!id) {
+    id = crypto.randomUUID?.() ?? Math.random().toString(36).slice(2);
+    window.sessionStorage.setItem(key, id);
+  }
+  return id;
 }
 
 export function getPosts(params?: { category?: string; limit?: number }): Promise<CmsPost[]> {
@@ -55,6 +79,50 @@ export function getPostBySlug(slug: string): Promise<CmsPost | null> {
 
 export function getPages(): Promise<CmsPage[]> {
   return fetchJson<CmsPage[]>(\`/api/client/\${CLIENT_SLUG}/pages\`);
+}
+
+export function trackEvent(eventName: string, metadata: AnalyticsMetadata = {}) {
+  if (typeof window === 'undefined') return Promise.resolve();
+
+  const payload = {
+    event_name: eventName,
+    path: window.location.pathname,
+    title: document.title,
+    referrer: document.referrer,
+    visitor_id: getVisitorId(),
+    session_id: getSessionId(),
+    metadata,
+  };
+
+  return fetch(\`\${CMS_BASE}/api/client/\${CLIENT_SLUG}/analytics\`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    keepalive: true,
+    body: JSON.stringify(payload),
+  }).then(() => undefined).catch(() => undefined);
+}
+
+export function trackPageView(metadata: AnalyticsMetadata = {}) {
+  return trackEvent('page_view', metadata);
+}
+
+export function installAnalytics() {
+  if (typeof window === 'undefined') return;
+  trackPageView();
+
+  const originalPushState = history.pushState;
+  const originalReplaceState = history.replaceState;
+  const emit = () => window.setTimeout(() => trackPageView(), 0);
+
+  history.pushState = function pushState(...args) {
+    originalPushState.apply(this, args);
+    emit();
+  };
+  history.replaceState = function replaceState(...args) {
+    originalReplaceState.apply(this, args);
+    emit();
+  };
+  window.addEventListener('popstate', emit);
 }
 `;
 }

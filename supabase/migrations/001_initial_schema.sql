@@ -74,6 +74,27 @@ CREATE TABLE IF NOT EXISTS public.media (
   created_at  TIMESTAMPTZ DEFAULT now()
 );
 
+-- Analytics events: first-party page views and custom events
+CREATE TABLE IF NOT EXISTS public.analytics_events (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id   UUID REFERENCES public.clients(id) ON DELETE CASCADE NOT NULL,
+  event_name  TEXT NOT NULL DEFAULT 'page_view',
+  path        TEXT NOT NULL DEFAULT '/',
+  title       TEXT,
+  referrer    TEXT,
+  visitor_id  TEXT,
+  session_id  TEXT,
+  device      TEXT DEFAULT 'unknown',
+  browser     TEXT DEFAULT 'unknown',
+  country     TEXT,
+  metadata    JSONB DEFAULT '{}'::jsonb,
+  created_at  TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS analytics_events_client_created_idx ON public.analytics_events (client_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS analytics_events_client_path_idx ON public.analytics_events (client_id, path);
+CREATE INDEX IF NOT EXISTS analytics_events_client_event_idx ON public.analytics_events (client_id, event_name);
+
 -- updated_at trigger function
 CREATE OR REPLACE FUNCTION public.handle_updated_at()
 RETURNS TRIGGER LANGUAGE plpgsql AS $$
@@ -110,6 +131,7 @@ ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.posts    ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.pages    ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.media    ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.analytics_events ENABLE ROW LEVEL SECURITY;
 
 -- Helper functions
 CREATE OR REPLACE FUNCTION public.my_client_id()
@@ -130,6 +152,7 @@ CREATE POLICY "profiles_insert" ON public.profiles FOR INSERT WITH CHECK (id = a
 -- Clients
 CREATE POLICY "clients_ne_admin"  ON public.clients FOR ALL    USING (is_ne_admin());
 CREATE POLICY "clients_read_own"  ON public.clients FOR SELECT USING (id = my_client_id());
+CREATE POLICY "clients_public_read_active" ON public.clients FOR SELECT USING (is_active = true);
 
 -- Posts (authenticated users see own client; public anon read for published)
 CREATE POLICY "posts_authenticated" ON public.posts FOR ALL    USING (client_id = my_client_id() OR is_ne_admin());
@@ -141,6 +164,12 @@ CREATE POLICY "pages_public_read"   ON public.pages FOR SELECT USING (status = '
 
 -- Media
 CREATE POLICY "media_authenticated" ON public.media FOR ALL USING (client_id = my_client_id() OR is_ne_admin());
+
+-- Analytics
+CREATE POLICY "analytics_select_authenticated" ON public.analytics_events
+  FOR SELECT USING (client_id = my_client_id() OR is_ne_admin());
+CREATE POLICY "analytics_public_insert" ON public.analytics_events
+  FOR INSERT WITH CHECK (true);
 
 -- =============================================================
 -- Seed: Al-Islah as first client

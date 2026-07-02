@@ -46,6 +46,33 @@ const checks = [
         && /router\.refresh\(\)/.test(sidebar);
     },
   },
+  {
+    name: 'analytics has first-party event storage and public tracking route',
+    pass: () => {
+      const migration = read('supabase/migrations/001_initial_schema.sql');
+      return /\bCREATE TABLE IF NOT EXISTS public\.analytics_events\b/i.test(migration)
+        && existsSync(join(root, 'src/app/api/client/[slug]/analytics/route.ts'));
+    },
+  },
+  {
+    name: 'analytics page reads traffic events instead of promising future provider data',
+    pass: () => {
+      const src = read('src/app/(app)/analytics/page.tsx');
+      return /analytics_events/.test(src)
+        && /Top Pages/.test(src)
+        && /Referrers/.test(src)
+        && !/will appear here after a real analytics provider is connected/i.test(src);
+    },
+  },
+  {
+    name: 'generated SDK includes analytics tracking helpers',
+    pass: () => {
+      const src = read('src/app/api/client/[slug]/sdk/route.ts');
+      return /trackPageView/.test(src)
+        && /trackEvent/.test(src)
+        && /installAnalytics/.test(src);
+    },
+  },
 ];
 
 const failures = checks.filter((check) => !check.pass());

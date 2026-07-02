@@ -1,11 +1,14 @@
 import Topbar from '@/components/Topbar';
 import { cookies } from 'next/headers';
 import { createClient } from '@/lib/supabase/server';
-import { BarChart2, Clock, Eye, FileText, Globe, Layers, TrendingUp } from 'lucide-react';
+import {
+  Activity, BarChart2, Eye, MousePointerClick, MonitorSmartphone, Users,
+} from 'lucide-react';
 import Link from 'next/link';
 import type { Profile } from '@/lib/supabase/types';
 
 const SELECTED_CLIENT_COOKIE = 'ne_selected_client_id';
+const DAY_MS = 86400000;
 
 type CmsPost = {
   id: string;
@@ -27,15 +30,77 @@ type CmsPage = {
   updated_at: string | null;
 };
 
+type AnalyticsEvent = {
+  id: string;
+  event_name: string;
+  path: string;
+  title: string | null;
+  referrer: string | null;
+  visitor_id: string | null;
+  session_id: string | null;
+  device: string | null;
+  browser: string | null;
+  country: string | null;
+  created_at: string;
+};
+
 function fmtDate(iso: string | null | undefined) {
   if (!iso) return 'Never';
   return new Date(iso).toLocaleDateString('en-SG', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
-function daysSince(iso: string | null | undefined) {
+function fmtDateTime(iso: string | null | undefined) {
+  if (!iso) return 'Never';
+  return new Date(iso).toLocaleString('en-SG', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
+function daysSince(iso: string | null | undefined, nowMs: number) {
   if (!iso) return null;
-  const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
+  const days = Math.floor((nowMs - new Date(iso).getTime()) / DAY_MS);
   return Math.max(0, days);
+}
+
+function host(referrer: string | null) {
+  if (!referrer) return 'Direct';
+  try {
+    return new URL(referrer).hostname.replace(/^www\./, '');
+  } catch {
+    return 'Other';
+  }
+}
+
+function countBy<T>(items: T[], getKey: (item: T) => string | null | undefined) {
+  const counts = new Map<string, number>();
+  for (const item of items) {
+    const key = getKey(item)?.trim() || 'Unknown';
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+}
+
+function dailyBuckets(events: AnalyticsEvent[], days = 14) {
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  start.setDate(start.getDate() - (days - 1));
+
+  const buckets = Array.from({ length: days }, (_, index) => {
+    const date = new Date(start.getTime() + index * DAY_MS);
+    return {
+      key: date.toISOString().slice(0, 10),
+      label: date.toLocaleDateString('en-SG', { day: 'numeric', month: 'short' }),
+      count: 0,
+    };
+  });
+
+  const byKey = new Map(buckets.map((bucket) => [bucket.key, bucket]));
+  for (const event of events) {
+    const key = new Date(event.created_at).toISOString().slice(0, 10);
+    const bucket = byKey.get(key);
+    if (bucket) bucket.count += 1;
+  }
+  return buckets;
 }
 
 function Card({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
@@ -74,27 +139,36 @@ function StatCard({ label, value, sub, icon: Icon, color }: {
   );
 }
 
-function categoryCounts(posts: CmsPost[]) {
-  const counts = new Map<string, number>();
-  for (const post of posts) {
-    const name = post.category?.trim() || 'Uncategorized';
-    counts.set(name, (counts.get(name) ?? 0) + 1);
+function BarList({ rows, total }: { rows: { name: string; count: number }[]; total: number }) {
+  if (rows.length === 0) {
+    return <div style={{ color: 'var(--fg3)', fontSize: 13, padding: '28px 0', textAlign: 'center' }}>No data yet.</div>;
   }
-  return [...counts.entries()]
-    .map(([name, count]) => ({ name, count }))
-    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 13 }}>
+      {rows.slice(0, 6).map((row) => (
+        <div key={row.name}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 5 }}>
+            <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12.5, fontWeight: 600, color: 'var(--fg1)' }}>{row.name}</span>
+            <span style={{ fontSize: 12, color: 'var(--fg3)' }}>{row.count}</span>
+          </div>
+          <div style={{ height: 5, background: 'var(--surface-3)', borderRadius: 99 }}>
+            <div style={{ height: '100%', width: `${Math.max(4, Math.round((row.count / Math.max(1, total)) * 100))}%`, background: 'var(--ne-blue)', borderRadius: 99 }} />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
 }
 
-function monthBuckets(posts: CmsPost[]) {
-  const counts = new Map<string, number>();
-  for (const post of posts) {
-    const iso = post.published_at ?? post.created_at;
-    if (!iso) continue;
-    const date = new Date(iso);
-    const key = date.toLocaleDateString('en-SG', { month: 'short', year: '2-digit' });
-    counts.set(key, (counts.get(key) ?? 0) + 1);
-  }
-  return [...counts.entries()].slice(-8).map(([label, count]) => ({ label, count }));
+function MiniMetric({ label, value, sub }: { label: string; value: string; sub: string }) {
+  return (
+    <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '12px 14px', background: 'var(--surface-2)' }}>
+      <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--fg1)', lineHeight: 1 }}>{value}</div>
+      <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--fg2)', marginTop: 6 }}>{label}</div>
+      <div style={{ fontSize: 11, color: 'var(--fg3)', marginTop: 4 }}>{sub}</div>
+    </div>
+  );
 }
 
 export default async function AnalyticsPage() {
@@ -120,6 +194,18 @@ export default async function AnalyticsPage() {
     clientName = selectedClient?.name ?? 'Website Manager';
   }
 
+  const nowMs = new Date().getTime();
+  const since = new Date(nowMs - 30 * DAY_MS).toISOString();
+
+  let eventsQuery = supabase
+    .from('analytics_events')
+    .select('id, event_name, path, title, referrer, visitor_id, session_id, device, browser, country, created_at')
+    .gte('created_at', since)
+    .order('created_at', { ascending: false })
+    .limit(1000);
+  if (clientId) eventsQuery = eventsQuery.eq('client_id', clientId);
+  const { data: eventsData = [] } = await eventsQuery;
+
   let postsQuery = supabase
     .from('posts')
     .select('id, title, slug, status, category, published_at, updated_at, created_at');
@@ -132,51 +218,63 @@ export default async function AnalyticsPage() {
   if (clientId) pagesQuery = pagesQuery.eq('client_id', clientId);
   const { data: pagesData = [] } = await pagesQuery.order('updated_at', { ascending: false });
 
+  const events = (eventsData ?? []) as AnalyticsEvent[];
+  const pageViews = events.filter((event) => event.event_name === 'page_view');
+  const customEvents = events.filter((event) => event.event_name !== 'page_view');
+  const visitors = new Set(events.map((event) => event.visitor_id).filter(Boolean)).size;
+  const sessions = new Set(events.map((event) => event.session_id).filter(Boolean)).size;
+  const last24h = events.filter((event) => nowMs - new Date(event.created_at).getTime() <= DAY_MS).length;
+
   const posts = (postsData ?? []) as CmsPost[];
   const pages = (pagesData ?? []) as CmsPage[];
   const publishedPosts = posts.filter((post) => post.status === 'published');
-  const draftPosts = posts.filter((post) => post.status === 'draft');
   const publicPages = pages.filter((page) => page.status === 'published' && page.visibility === 'public');
   const lastUpdated = [...posts.map((p) => p.updated_at), ...pages.map((p) => p.updated_at)]
     .filter(Boolean)
     .sort()
     .at(-1);
-  const freshness = daysSince(lastUpdated);
-  const categories = categoryCounts(posts);
-  const buckets = monthBuckets(publishedPosts);
+  const freshness = daysSince(lastUpdated, nowMs);
+
+  const topPages = countBy(pageViews, (event) => event.path);
+  const referrers = countBy(pageViews, (event) => host(event.referrer));
+  const devices = countBy(events, (event) => event.device);
+  const browsers = countBy(events, (event) => event.browser);
+  const countries = countBy(events, (event) => event.country);
+  const eventTypes = countBy(events, (event) => event.event_name);
+  const buckets = dailyBuckets(pageViews);
   const maxBucket = Math.max(1, ...buckets.map((bucket) => bucket.count));
 
   return (
     <>
-      <Topbar title="Analytics" subtitle={`${clientName} · CMS content health`} />
+      <Topbar title="Analytics" subtitle={`${clientName} · Traffic and CMS performance`} />
       <div className="page-body" style={{ maxWidth: 1180 }}>
         <div style={{ marginBottom: 20, background: 'var(--ne-blue-bg)', border: '1px solid var(--ne-blue-muted)', borderRadius: 'var(--r-md)', padding: '14px 18px', display: 'flex', gap: 12, alignItems: 'center' }}>
           <BarChart2 size={17} color="var(--ne-blue)" style={{ flexShrink: 0 }} />
           <p style={{ fontSize: 12.5, color: 'var(--fg2)', margin: 0 }}>
-            This view uses live CMS content only. Traffic, search, device, and conversion metrics will appear here after a real analytics provider is connected.
+            Tracking the last 30 days of first-party page views and events collected through the NE Website Manager analytics endpoint.
           </p>
         </div>
 
         <div className="grid-stats">
-          <StatCard label="Published Posts" value={String(publishedPosts.length)} sub={`${posts.length} total posts`} icon={FileText} color="var(--ne-blue)" />
-          <StatCard label="Draft Posts" value={String(draftPosts.length)} sub="Waiting to publish" icon={Clock} color="var(--ne-warning)" />
-          <StatCard label="Public Pages" value={String(publicPages.length)} sub={`${pages.length} managed pages`} icon={Globe} color="var(--ne-success)" />
-          <StatCard label="Last CMS Update" value={freshness === null ? '-' : `${freshness}d`} sub={fmtDate(lastUpdated)} icon={TrendingUp} color="#6366f1" />
+          <StatCard label="Page Views" value={String(pageViews.length)} sub={`${last24h} events in the last 24h`} icon={Eye} color="var(--ne-blue)" />
+          <StatCard label="Visitors" value={String(visitors)} sub={visitors === 0 ? 'Install tracker to begin' : 'Known unique visitors'} icon={Users} color="var(--ne-success)" />
+          <StatCard label="Sessions" value={String(sessions)} sub="Browser sessions recorded" icon={Activity} color="#6366f1" />
+          <StatCard label="Custom Events" value={String(customEvents.length)} sub={`${eventTypes.length} event types`} icon={MousePointerClick} color="var(--ne-warning)" />
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1.2fr .8fr', gap: 20, marginBottom: 24 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1.35fr .65fr', gap: 20, marginBottom: 24 }}>
           <Card>
-            <CardHead title="Publishing Cadence" action={<Link href="/cms/posts" style={{ fontSize: 12, color: 'var(--ne-blue)', fontWeight: 600, textDecoration: 'none' }}>Manage posts</Link>} />
+            <CardHead title="Page Views Trend" action={<span style={{ fontSize: 12, color: 'var(--fg3)' }}>Last 14 days</span>} />
             <div style={{ padding: 20 }}>
-              {buckets.length === 0 ? (
-                <div style={{ color: 'var(--fg3)', fontSize: 13, padding: '28px 0', textAlign: 'center' }}>No published post dates yet.</div>
+              {pageViews.length === 0 ? (
+                <div style={{ color: 'var(--fg3)', fontSize: 13, padding: '48px 0', textAlign: 'center' }}>No page views recorded yet. Add the generated analytics helper to the client website.</div>
               ) : (
-                <div style={{ display: 'grid', gridTemplateColumns: `repeat(${buckets.length}, 1fr)`, gap: 10, alignItems: 'end', minHeight: 210 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: `repeat(${buckets.length}, 1fr)`, gap: 8, alignItems: 'end', minHeight: 220 }}>
                   {buckets.map((bucket) => (
-                    <div key={bucket.label} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
-                      <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--fg1)' }}>{bucket.count}</div>
-                      <div style={{ width: '100%', height: Math.max(10, Math.round((bucket.count / maxBucket) * 150)), borderRadius: '6px 6px 0 0', background: 'var(--ne-blue)' }} />
-                      <div style={{ fontSize: 11, color: 'var(--fg3)', whiteSpace: 'nowrap' }}>{bucket.label}</div>
+                    <div key={bucket.key} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--fg1)' }}>{bucket.count}</div>
+                      <div style={{ width: '100%', height: Math.max(8, Math.round((bucket.count / maxBucket) * 154)), borderRadius: '6px 6px 0 0', background: 'var(--ne-blue)' }} />
+                      <div style={{ fontSize: 10.5, color: 'var(--fg3)', whiteSpace: 'nowrap' }}>{bucket.label}</div>
                     </div>
                   ))}
                 </div>
@@ -185,48 +283,77 @@ export default async function AnalyticsPage() {
           </Card>
 
           <Card>
-            <CardHead title="Categories" />
+            <CardHead title="Event Types" />
             <div style={{ padding: 20 }}>
-              {categories.length === 0 ? (
-                <div style={{ color: 'var(--fg3)', fontSize: 13, padding: '28px 0', textAlign: 'center' }}>No categories yet.</div>
-              ) : categories.map((category) => (
-                <div key={category.name} style={{ marginBottom: 12 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 5 }}>
-                    <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--fg1)' }}>{category.name}</span>
-                    <span style={{ fontSize: 12, color: 'var(--fg3)' }}>{category.count}</span>
-                  </div>
-                  <div style={{ height: 5, background: 'var(--surface-3)', borderRadius: 99 }}>
-                    <div style={{ height: '100%', width: `${Math.round((category.count / posts.length) * 100)}%`, background: 'var(--ne-blue)', borderRadius: 99 }} />
-                  </div>
-                </div>
-              ))}
+              <BarList rows={eventTypes} total={events.length} />
             </div>
           </Card>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginBottom: 24 }}>
           <Card>
-            <CardHead title="Recently Updated Posts" />
+            <CardHead title="Top Pages" />
+            <div style={{ padding: 20 }}>
+              <BarList rows={topPages} total={pageViews.length} />
+            </div>
+          </Card>
+
+          <Card>
+            <CardHead title="Referrers" />
+            <div style={{ padding: 20 }}>
+              <BarList rows={referrers} total={pageViews.length} />
+            </div>
+          </Card>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 20, marginBottom: 24 }}>
+          <Card>
+            <CardHead title="Devices" />
+            <div style={{ padding: 20 }}>
+              <BarList rows={devices} total={events.length} />
+            </div>
+          </Card>
+          <Card>
+            <CardHead title="Browsers" />
+            <div style={{ padding: 20 }}>
+              <BarList rows={browsers} total={events.length} />
+            </div>
+          </Card>
+          <Card>
+            <CardHead title="Countries" />
+            <div style={{ padding: 20 }}>
+              <BarList rows={countries} total={events.length} />
+            </div>
+          </Card>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1.1fr .9fr', gap: 20, marginBottom: 24 }}>
+          <Card>
+            <CardHead title="Recent Events" />
             <div className="table-responsive">
               <table className="data-table">
                 <thead>
                   <tr>
-                    <th style={{ paddingLeft: 20 }}>Title</th>
-                    <th>Status</th>
-                    <th>Updated</th>
+                    <th style={{ paddingLeft: 20 }}>Event</th>
+                    <th>Path</th>
+                    <th>Device</th>
+                    <th>Time</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {posts.slice(0, 6).length === 0 ? (
-                    <tr><td colSpan={3} style={{ textAlign: 'center', padding: 34, color: 'var(--fg3)' }}>No posts found.</td></tr>
-                  ) : posts.slice(0, 6).map((post) => (
-                    <tr key={post.id}>
-                      <td style={{ paddingLeft: 20 }}>
-                        <Link href={`/cms/posts/${post.id}`} style={{ color: 'var(--fg1)', textDecoration: 'none', fontWeight: 600 }}>{post.title || '(Untitled)'}</Link>
-                        <div style={{ color: 'var(--fg3)', fontSize: 11.5 }}>/{post.slug}</div>
+                  {events.slice(0, 8).length === 0 ? (
+                    <tr><td colSpan={4} style={{ textAlign: 'center', padding: 34, color: 'var(--fg3)' }}>No analytics events have been captured yet.</td></tr>
+                  ) : events.slice(0, 8).map((event) => (
+                    <tr key={event.id}>
+                      <td style={{ paddingLeft: 20, fontWeight: 600 }}>{event.event_name}</td>
+                      <td style={{ maxWidth: 260 }}>
+                        <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--fg1)' }}>{event.path}</div>
+                        <div style={{ color: 'var(--fg3)', fontSize: 11.5 }}>{host(event.referrer)}</div>
                       </td>
-                      <td><span className={`status-pill ${post.status}`}>{post.status}</span></td>
-                      <td style={{ color: 'var(--fg3)', fontSize: 12 }}>{fmtDate(post.updated_at)}</td>
+                      <td style={{ color: 'var(--fg3)', fontSize: 12 }}>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}><MonitorSmartphone size={13} />{event.device ?? 'unknown'}</span>
+                      </td>
+                      <td style={{ color: 'var(--fg3)', fontSize: 12 }}>{fmtDateTime(event.created_at)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -235,37 +362,28 @@ export default async function AnalyticsPage() {
           </Card>
 
           <Card>
-            <CardHead title="Managed Pages" action={<Link href="/cms/pages" style={{ fontSize: 12, color: 'var(--ne-blue)', fontWeight: 600, textDecoration: 'none' }}>View pages</Link>} />
-            <div className="table-responsive">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th style={{ paddingLeft: 20 }}>Page</th>
-                    <th>Status</th>
-                    <th>Visibility</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {pages.slice(0, 6).length === 0 ? (
-                    <tr><td colSpan={3} style={{ textAlign: 'center', padding: 34, color: 'var(--fg3)' }}>No pages are managed by the CMS yet.</td></tr>
-                  ) : pages.slice(0, 6).map((page) => (
-                    <tr key={page.id}>
-                      <td style={{ paddingLeft: 20 }}>
-                        <div style={{ color: 'var(--fg1)', fontWeight: 600 }}>{page.title || '(Untitled)'}</div>
-                        <code style={{ color: 'var(--fg3)', fontSize: 11.5 }}>{page.path}</code>
-                      </td>
-                      <td><span className={`status-pill ${page.status}`}>{page.status}</span></td>
-                      <td style={{ color: 'var(--fg3)', fontSize: 12, display: 'flex', alignItems: 'center', gap: 5 }}>
-                        {page.visibility === 'public' ? <Eye size={13} /> : <Layers size={13} />}
-                        {page.visibility}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <CardHead title="CMS Health" action={<Link href="/cms/posts" style={{ fontSize: 12, color: 'var(--ne-blue)', fontWeight: 600, textDecoration: 'none' }}>Manage posts</Link>} />
+            <div style={{ padding: 20, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <MiniMetric label="Published Posts" value={String(publishedPosts.length)} sub={`${posts.length} total posts`} />
+              <MiniMetric label="Public Pages" value={String(publicPages.length)} sub={`${pages.length} managed pages`} />
+              <MiniMetric label="Last CMS Update" value={freshness === null ? '-' : `${freshness}d`} sub={fmtDate(lastUpdated)} />
+              <MiniMetric label="Managed Pages" value={String(pages.length)} sub="Published and draft" />
             </div>
           </Card>
         </div>
+
+        <Card>
+          <CardHead title="Integration Snippet" action={<Link href="/settings" style={{ fontSize: 12, color: 'var(--ne-blue)', fontWeight: 600, textDecoration: 'none' }}>Open API settings</Link>} />
+          <div style={{ padding: 20 }}>
+            <p style={{ fontSize: 12.5, color: 'var(--fg3)', margin: '0 0 12px' }}>
+              Install the generated CMS SDK on the client website, then call <code>installAnalytics()</code> once from the browser entry point.
+            </p>
+            <pre style={{ margin: 0, padding: '14px 16px', background: 'var(--ne-ink)', borderRadius: 6, fontSize: 12, lineHeight: 1.7, color: '#e2e8f0', overflowX: 'auto' }}>{`import { installAnalytics, trackEvent } from '@/lib/cms';
+
+installAnalytics();
+trackEvent('contact_click', { location: 'footer' });`}</pre>
+          </div>
+        </Card>
       </div>
     </>
   );
