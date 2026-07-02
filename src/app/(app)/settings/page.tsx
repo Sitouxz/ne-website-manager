@@ -1,20 +1,44 @@
 'use client';
 
 import Topbar from '@/components/Topbar';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   Save, Globe, Webhook, Loader2, CheckCircle, Code2,
   GitBranch, ExternalLink, Copy, Check, Zap, Terminal,
+  KeyRound, Plus, Trash2, X, AlertTriangle,
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import type { Client } from '@/lib/supabase/types';
 
 type Tab = 'general' | 'deploy' | 'integration' | 'api';
 
+interface ApiKeyRow {
+  id: string;
+  name: string;
+  prefix: string;
+  created_at: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+}
+
+function CopyBtn({
+  text, k, copiedKey, onCopy,
+}: { text: string; k: string; copiedKey: string | null; onCopy: (text: string, key: string) => void }) {
+  return (
+    <button
+      onClick={() => onCopy(text, k)}
+      style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg3)', padding: '4px 8px', borderRadius: 4, display: 'flex', alignItems: 'center', gap: 4, fontSize: 11.5, fontWeight: 600 }}
+    >
+      {copiedKey === k ? <><Check size={12} color="var(--ne-success)" /> Copied!</> : <><Copy size={12} /> Copy</>}
+    </button>
+  );
+}
+
 export default function SettingsPage() {
   const [client,   setClient]   = useState<Client | null>(null);
   const [clients,  setClients]  = useState<Client[]>([]);
   const [isAdmin,  setIsAdmin]  = useState(false);
+  const [role,     setRole]     = useState<string | null>(null);
   const [loading,  setLoading]  = useState(true);
   const [saving,   setSaving]   = useState(false);
   const [saved,    setSaved]    = useState(false);
@@ -28,6 +52,17 @@ export default function SettingsPage() {
   const [prUrl,     setPrUrl]     = useState('');
   const [intErr,    setIntErr]    = useState('');
   const [copied,    setCopied]    = useState<string | null>(null);
+
+  // API Keys state
+  const canManageKeys = isAdmin || role === 'client_admin';
+  const [apiKeys,       setApiKeys]       = useState<ApiKeyRow[]>([]);
+  const [keysLoading,   setKeysLoading]   = useState(false);
+  const [keysErr,       setKeysErr]       = useState('');
+  const [showKeyDialog, setShowKeyDialog] = useState(false);
+  const [newKeyName,    setNewKeyName]    = useState('');
+  const [generating,    setGenerating]    = useState(false);
+  const [newPlaintext,  setNewPlaintext]  = useState<string | null>(null);
+  const [revokingId,    setRevokingId]    = useState<string | null>(null);
 
   function applyClient(c: Client | null) {
     setClient(c);
@@ -51,6 +86,7 @@ export default function SettingsPage() {
       const { data: profile } = await supabase.from('profiles').select('client_id, role').eq('id', user.id).single();
       const admin = profile?.role === 'ne_admin';
       setIsAdmin(admin);
+      setRole(profile?.role ?? null);
 
       if (admin) {
         const { data: allClients } = await supabase.from('clients').select('*').order('name', { ascending: true });
@@ -116,20 +152,78 @@ export default function SettingsPage() {
     else { setPrUrl(json.pr_url); }
   }
 
+  const loadKeys = useCallback(async (clientId: string) => {
+    setKeysLoading(true);
+    setKeysErr('');
+    try {
+      const res = await fetch(`/api/keys?client_id=${clientId}`);
+      const json = await res.json();
+      if (!res.ok) {
+        setKeysErr(json.error ?? 'Failed to load API keys');
+        setApiKeys([]);
+      } else {
+        setApiKeys(json as ApiKeyRow[]);
+      }
+    } catch {
+      setKeysErr('Failed to load API keys');
+    }
+    setKeysLoading(false);
+  }, []);
+
+  useEffect(() => {
+    if (!(tab === 'api' && canManageKeys && client?.id)) return;
+    const clientId = client.id;
+    const timer = window.setTimeout(() => loadKeys(clientId), 0);
+    return () => window.clearTimeout(timer);
+  }, [tab, canManageKeys, client?.id, loadKeys]);
+
+  async function handleGenerateKey() {
+    if (!client) return;
+    setGenerating(true);
+    setKeysErr('');
+    try {
+      const res = await fetch('/api/keys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ client_id: client.id, name: newKeyName.trim() || 'Untitled key' }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        setKeysErr(json.error ?? 'Failed to generate key');
+      } else {
+        setNewPlaintext(json.plaintext);
+        setNewKeyName('');
+        loadKeys(client.id);
+      }
+    } catch {
+      setKeysErr('Failed to generate key');
+    }
+    setGenerating(false);
+  }
+
+  async function handleRevokeKey(id: string) {
+    if (!client) return;
+    if (!window.confirm('Revoke this API key? Any site using it will immediately lose keyed access.')) return;
+    setRevokingId(id);
+    try {
+      const res = await fetch(`/api/keys?id=${id}`, { method: 'DELETE' });
+      if (res.ok) loadKeys(client.id);
+    } finally {
+      setRevokingId(null);
+    }
+  }
+
+  function closeKeyDialog() {
+    setShowKeyDialog(false);
+    setNewPlaintext(null);
+    setNewKeyName('');
+  }
+
   function copyText(text: string, key: string) {
     navigator.clipboard.writeText(text);
     setCopied(key);
     setTimeout(() => setCopied(null), 2000);
   }
-
-  const CopyBtn = ({ text, k }: { text: string; k: string }) => (
-    <button
-      onClick={() => copyText(text, k)}
-      style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg3)', padding: '4px 8px', borderRadius: 4, display: 'flex', alignItems: 'center', gap: 4, fontSize: 11.5, fontWeight: 600 }}
-    >
-      {copied === k ? <><Check size={12} color="var(--ne-success)" /> Copied!</> : <><Copy size={12} /> Copy</>}
-    </button>
-  );
 
   if (loading) return (
     <>
@@ -446,7 +540,7 @@ const pages = await fetch('${pagesUrl}').then(r => r.json());`,
                       <div key={snippet.label} style={{ marginBottom: 12 }}>
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'var(--ne-ink-2)', borderRadius: '6px 6px 0 0', padding: '8px 14px' }}>
                           <span style={{ fontSize: 12, color: '#94a3b8', fontWeight: 500 }}>{snippet.label}</span>
-                          <CopyBtn text={snippet.code} k={`${framework}-${snippet.label}`} />
+                          <CopyBtn text={snippet.code} k={`${framework}-${snippet.label}`} copiedKey={copied} onCopy={copyText} />
                         </div>
                         <pre style={{
                           margin: 0, padding: '14px 16px', background: 'var(--ne-ink)', borderRadius: '0 0 6px 6px',
@@ -466,6 +560,7 @@ const pages = await fetch('${pagesUrl}').then(r => r.json());`,
 
         {/* ── API Access ── */}
         {tab === 'api' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
           <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
             <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', fontWeight: 700, fontSize: 14 }}>API Endpoints (public read-only)</div>
             <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -482,15 +577,138 @@ const pages = await fetch('${pagesUrl}').then(r => r.json());`,
                   <code style={{ flex: 1, minWidth: 0, fontSize: 11.5, background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 6, padding: '7px 12px', color: 'var(--ne-blue)', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {url}
                   </code>
-                  <CopyBtn text={url} k={`api-${label}`} />
+                  <CopyBtn text={url} k={`api-${label}`} copiedKey={copied} onCopy={copyText} />
                 </div>
               ))}
             </div>
+          </div>
+
+          {/* API Keys — ne_admin + client_admin only */}
+          {canManageKeys && client && (
+            <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
+              <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <KeyRound size={16} color="var(--ne-blue)" />
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: 14 }}>API Keys</div>
+                    <div style={{ fontSize: 11.5, color: 'var(--fg3)' }}>Optional Bearer-token auth for the endpoints above</div>
+                  </div>
+                </div>
+                <button className="btn-ne" onClick={() => setShowKeyDialog(true)}>
+                  <Plus size={13} /> Generate Key
+                </button>
+              </div>
+              <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {keysErr && (
+                  <div style={{ padding: '10px 14px', background: '#FEF2F2', color: 'var(--ne-danger)', borderRadius: 'var(--r-sm)', fontSize: 13 }}>
+                    {keysErr}
+                  </div>
+                )}
+                {keysLoading ? (
+                  <div style={{ fontSize: 12.5, color: 'var(--fg3)' }}>Loading keys...</div>
+                ) : apiKeys.length === 0 ? (
+                  <div style={{ fontSize: 12.5, color: 'var(--fg3)' }}>No API keys yet. Generate one to enable keyed access.</div>
+                ) : (
+                  apiKeys.map((k) => (
+                    <div
+                      key={k.id}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px',
+                        border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', flexWrap: 'wrap',
+                        opacity: k.revoked_at ? 0.55 : 1,
+                      }}
+                    >
+                      <div style={{ flex: 1, minWidth: 160 }}>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg1)' }}>{k.name}</div>
+                        <div style={{ fontSize: 11, color: 'var(--fg3)', fontFamily: 'monospace' }}>ne_{k.prefix}_••••••••</div>
+                      </div>
+                      <div style={{ fontSize: 11, color: 'var(--fg3)', flexShrink: 0 }}>
+                        Created {new Date(k.created_at).toLocaleDateString()}
+                        {' · '}
+                        {k.last_used_at ? `Last used ${new Date(k.last_used_at).toLocaleDateString()}` : 'Never used'}
+                      </div>
+                      {k.revoked_at ? (
+                        <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--ne-danger)', flexShrink: 0 }}>Revoked</span>
+                      ) : (
+                        <button
+                          onClick={() => handleRevokeKey(k.id)}
+                          disabled={revokingId === k.id}
+                          style={{
+                            background: 'none', border: '1px solid var(--border)', borderRadius: 6, padding: '6px 10px',
+                            fontSize: 11.5, fontWeight: 600, color: 'var(--ne-danger)', cursor: 'pointer',
+                            display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0,
+                          }}
+                        >
+                          {revokingId === k.id
+                            ? <Loader2 size={12} style={{ animation: 'spin .6s linear infinite' }} />
+                            : <Trash2 size={12} />}
+                          Revoke
+                        </button>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
           </div>
         )}
           </>
         )}
       </div>
+
+      {/* Generate Key dialog */}
+      {showKeyDialog && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.4)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-lg)', padding: '28px 32px', width: 460, boxShadow: '0 16px 48px rgba(0,0,0,.15)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+              <div style={{ fontWeight: 800, fontSize: 16 }}>{newPlaintext ? 'API Key Generated' : 'Generate API Key'}</div>
+              <button onClick={closeKeyDialog} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg3)' }}><X size={18} /></button>
+            </div>
+
+            {newPlaintext ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                <div style={{ display: 'flex', gap: 8, padding: '10px 14px', background: '#FEF9E7', color: '#92600C', borderRadius: 'var(--r-sm)', fontSize: 12.5, alignItems: 'flex-start' }}>
+                  <AlertTriangle size={15} style={{ flexShrink: 0, marginTop: 1 }} />
+                  <span>Copy this key now — for security, you won&apos;t be able to see it again.</span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <code style={{ flex: 1, minWidth: 0, fontSize: 12, background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 6, padding: '10px 12px', color: 'var(--ne-blue)', overflowWrap: 'anywhere' }}>
+                    {newPlaintext}
+                  </code>
+                  <CopyBtn text={newPlaintext} k="new-api-key" copiedKey={copied} onCopy={copyText} />
+                </div>
+                <button className="btn-ne" style={{ justifyContent: 'center' }} onClick={closeKeyDialog}>Done</button>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                {keysErr && (
+                  <div style={{ padding: '10px 14px', background: '#FEF2F2', color: 'var(--ne-danger)', borderRadius: 'var(--r-sm)', fontSize: 13 }}>
+                    {keysErr}
+                  </div>
+                )}
+                <div>
+                  <label style={{ display: 'block', fontSize: 12.5, fontWeight: 600, color: 'var(--fg2)', marginBottom: 6 }}>Key Name</label>
+                  <input
+                    value={newKeyName}
+                    onChange={(e) => setNewKeyName(e.target.value)}
+                    placeholder="e.g. Production website"
+                    style={{ width: '100%', padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', fontSize: 13.5, outline: 'none', color: 'var(--fg1)' }}
+                  />
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button className="btn-ne" style={{ flex: 1, justifyContent: 'center' }} onClick={handleGenerateKey} disabled={generating}>
+                    {generating ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Plus size={14} />}
+                    Generate
+                  </button>
+                  <button className="btn-outline-ne" onClick={closeKeyDialog}>Cancel</button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </>
   );

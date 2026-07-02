@@ -1,5 +1,11 @@
 import { createClient } from '@/lib/supabase/server';
+import { parsePagination } from '@/lib/api/pagination';
 import { NextResponse } from 'next/server';
+
+// Matches the pre-pagination hardcoded default (`parseInt(... ?? '100')`)
+// so a request with no `limit`/`offset` params returns exactly what it did
+// before this endpoint accepted pagination params.
+const PAGINATION = { defaultLimit: 100, maxLimit: 100 };
 
 export async function GET(
   req: Request,
@@ -9,7 +15,7 @@ export async function GET(
   const supabase  = await createClient();
   const url = new URL(req.url);
   const listing = url.searchParams.get('listing');
-  const limit   = parseInt(url.searchParams.get('limit') ?? '100', 10);
+  const { limit, offset } = parsePagination(url, PAGINATION);
 
   const { data: client } = await supabase
     .from('clients')
@@ -27,16 +33,28 @@ export async function GET(
     .eq('client_id', client.id)
     .eq('status', 'active')
     .order('created_at', { ascending: false })
-    .limit(limit);
+    .range(offset, offset + limit - 1);
 
-  if (listing) query = query.eq('listing', listing);
+  let countQuery = supabase
+    .from('properties')
+    .select('id', { count: 'exact', head: true })
+    .eq('client_id', client.id)
+    .eq('status', 'active');
 
-  const { data: properties, error } = await query;
+  if (listing) {
+    query = query.eq('listing', listing);
+    countQuery = countQuery.eq('listing', listing);
+  }
+
+  const [{ data: properties, error }, { count }] = await Promise.all([query, countQuery]);
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   return NextResponse.json(properties ?? [], {
-    headers: { 'Access-Control-Allow-Origin': '*' },
+    headers: {
+      'Access-Control-Allow-Origin': '*',
+      'X-Total-Count': String(count ?? 0),
+    },
   });
 }
 
