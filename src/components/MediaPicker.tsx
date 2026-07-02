@@ -1,11 +1,18 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { X, Search, UploadCloud, Loader2 } from 'lucide-react';
 import { useSelectedClient } from '@/components/AppShell';
 import { useMediaUpload } from '@/lib/hooks/useMediaUpload';
+import { useMediaList } from '@/lib/hooks/useMediaList';
 import { MediaGrid } from '@/components/MediaGrid';
 import type { MediaItem } from '@/app/api/media/route';
+
+// Same page size as the library page's "Load more" — media libraries can
+// exceed the API's 100/request cap (see `route.ts`'s `PAGINATION`), so a
+// single unpaginated fetch would make older items unreachable through the
+// picker. This mirrors `cms/media/page.tsx` exactly (see `useMediaList`).
+const LIMIT = 60;
 
 /**
  * Reusable media-picker dialog, consumed by the post/property editors (Task
@@ -20,9 +27,21 @@ import type { MediaItem } from '@/app/api/media/route';
  * Data fetching: this component does its own independent `GET /api/media`
  * call (rather than expecting a parent to have preloaded media) so any
  * editor can drop in `<MediaPicker />` without wiring up media state itself.
- * It fetches once when `open` flips true. `accept="image"` is applied
- * server-side via `?type=image` rather than a client-side filter, since the
- * API already supports it and it keeps the payload smaller.
+ * It (re)fetches the first page whenever `open` flips true, via the same
+ * offset-paginated `useMediaList` hook the library page
+ * (`cms/media/page.tsx`) uses, so a "Load more" button here behaves
+ * identically (appends the next page, reads `X-Total-Count` for whether more
+ * remain) — libraries over one page (100 items, the API's cap) stay fully
+ * reachable through the picker, not just the most recent 100.
+ * `accept="image"` is applied server-side via `?type=image` rather than a
+ * client-side filter, since the API already supports it and it keeps the
+ * payload smaller.
+ *
+ * Search only filters the currently-loaded page(s), same scope decision the
+ * library page already made — "Load more" is hidden while a search term is
+ * active there (searching a subset of loaded items, then loading more,
+ * would be a confusing "did that load new matches or not?" interaction), so
+ * this mirrors that rather than inventing a different rule.
  */
 export default function MediaPicker({
   open,
@@ -36,41 +55,26 @@ export default function MediaPicker({
   accept?: 'image' | 'all';
 }) {
   const { selectedClientId } = useSelectedClient();
-  const [items,     setItems]     = useState<MediaItem[]>([]);
-  const [loading,   setLoading]   = useState(false);
-  const [loadError, setLoadError] = useState('');
+  const {
+    items, setItems,
+    loading, error: loadError,
+    fetchPage, loadMore, canLoadMore,
+  } = useMediaList({
+    clientId: selectedClientId,
+    type: accept === 'image' ? 'image' : undefined,
+    limit: LIMIT,
+  });
   const [search,    setSearch]    = useState('');
   const [dragOver,  setDragOver]  = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { uploading, error: uploadError, uploadFiles } = useMediaUpload(selectedClientId);
 
-  const fetchMedia = useCallback(async () => {
-    setLoading(true);
-    setLoadError('');
-    try {
-      const params = new URLSearchParams({ limit: '100' });
-      if (selectedClientId) params.set('client_id', selectedClientId);
-      if (accept === 'image') params.set('type', 'image');
-      const res = await fetch(`/api/media?${params.toString()}`);
-      const json = await res.json();
-      if (!res.ok) {
-        setLoadError(json.error ?? 'Failed to load media');
-        setItems([]);
-      } else {
-        setItems(json as MediaItem[]);
-      }
-    } catch {
-      setLoadError('Failed to load media');
-    }
-    setLoading(false);
-  }, [selectedClientId, accept]);
-
   useEffect(() => {
     if (!open) return;
-    const timer = window.setTimeout(() => fetchMedia(), 0);
+    const timer = window.setTimeout(() => fetchPage(0, false), 0);
     return () => window.clearTimeout(timer);
-  }, [open, fetchMedia]);
+  }, [open, fetchPage]);
 
   async function handleFiles(files: FileList | File[]) {
     const uploaded = await uploadFiles(files);
@@ -164,7 +168,16 @@ export default function MediaPicker({
               <Loader2 size={20} color="var(--ne-blue)" style={{ animation: 'spin .6s linear infinite' }} />
             </div>
           ) : (
-            <MediaGrid items={filtered} onSelect={handleSelect} />
+            <>
+              <MediaGrid items={filtered} onSelect={handleSelect} />
+              {!search && canLoadMore && (
+                <div style={{ display: 'flex', justifyContent: 'center', marginTop: 16 }}>
+                  <button className="btn-outline-ne" onClick={loadMore}>
+                    Load more
+                  </button>
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>

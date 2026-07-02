@@ -1,11 +1,12 @@
 'use client';
 
 import Topbar from '@/components/Topbar';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Search, UploadCloud, Loader2 } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { useSelectedClient } from '@/components/AppShell';
 import { useMediaUpload } from '@/lib/hooks/useMediaUpload';
+import { useMediaList } from '@/lib/hooks/useMediaList';
 import { MediaGrid } from '@/components/MediaGrid';
 import type { MediaItem } from '@/app/api/media/route';
 
@@ -24,10 +25,12 @@ export default function MediaLibraryPage() {
   // silently ignores it for anyone else (see route.ts `resolveClientId`).
   const { selectedClientId } = useSelectedClient();
 
-  const [items,       setItems]       = useState<MediaItem[]>([]);
-  const [totalCount,  setTotalCount]  = useState(0);
-  const [loading,     setLoading]     = useState(true);
-  const [loadError,   setLoadError]   = useState('');
+  const {
+    items, setItems,
+    totalCount, setTotalCount,
+    loading, error: loadError,
+    fetchPage, loadMore, canLoadMore,
+  } = useMediaList({ clientId: selectedClientId, limit: LIMIT, initialLoading: true });
   const [search,      setSearch]      = useState('');
   const [dragOver,    setDragOver]    = useState(false);
   const [deletingId,  setDeletingId]  = useState<string | null>(null);
@@ -35,32 +38,10 @@ export default function MediaLibraryPage() {
 
   const { uploading, error: uploadError, uploadFiles } = useMediaUpload(selectedClientId);
 
-  const fetchMedia = useCallback(async (offset: number, append: boolean) => {
-    if (!append) setLoading(true);
-    setLoadError('');
-    try {
-      const params = new URLSearchParams({ limit: String(LIMIT), offset: String(offset) });
-      if (selectedClientId) params.set('client_id', selectedClientId);
-      const res = await fetch(`/api/media?${params.toString()}`);
-      const json = await res.json();
-      if (!res.ok) {
-        setLoadError(json.error ?? 'Failed to load media');
-        if (!append) setItems([]);
-      } else {
-        const data = json as MediaItem[];
-        setItems((prev) => (append ? [...prev, ...data] : data));
-        setTotalCount(Number(res.headers.get('X-Total-Count') ?? data.length));
-      }
-    } catch {
-      setLoadError('Failed to load media');
-    }
-    setLoading(false);
-  }, [selectedClientId]);
-
   useEffect(() => {
-    const timer = window.setTimeout(() => fetchMedia(0, false), 0);
+    const timer = window.setTimeout(() => fetchPage(0, false), 0);
     return () => window.clearTimeout(timer);
-  }, [fetchMedia]);
+  }, [fetchPage]);
 
   async function handleFiles(files: FileList | File[]) {
     const uploaded = await uploadFiles(files);
@@ -107,7 +88,6 @@ export default function MediaLibraryPage() {
   const filtered = items.filter((i) =>
     (i.filename ?? '').toLowerCase().includes(search.toLowerCase())
   );
-  const canLoadMore = items.length < totalCount;
 
   return (
     <>
@@ -178,7 +158,7 @@ export default function MediaLibraryPage() {
 
         {!loading && !search && canLoadMore && (
           <div style={{ display: 'flex', justifyContent: 'center', marginTop: 20 }}>
-            <button className="btn-outline-ne" onClick={() => fetchMedia(items.length, true)}>
+            <button className="btn-outline-ne" onClick={loadMore}>
               Load more
             </button>
           </div>
