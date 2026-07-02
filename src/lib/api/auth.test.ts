@@ -121,4 +121,47 @@ describe('resolveApiAccess', () => {
 
     expect(result).toEqual({ level: 'keyed', clientId: 'client-1' });
   });
+
+  // The hash comparison uses crypto.timingSafeEqual (not `!==`) to avoid
+  // leaking timing information about how many leading hex chars of the
+  // stored hash match a guess. These tests confirm the swap didn't change
+  // observable behavior: a matching key is still accepted, a near-miss
+  // (same length, differs by one char) is still rejected, and a corrupted
+  // (wrong-length) stored hash is rejected rather than throwing.
+  it('accepts a key whose hash matches exactly (constant-time comparison, matching case)', async () => {
+    const { plaintext, prefix, keyHash } = generateApiKey();
+    const supabase = mockSupabase({
+      clients: [{ id: 'client-1', slug: 'acme' }],
+      api_keys: [{ client_id: 'client-1', prefix, key_hash: keyHash, revoked_at: null }],
+    });
+
+    const result = await resolveApiAccess(reqWith(`Bearer ${plaintext}`), 'acme', supabase);
+
+    expect(result).toEqual({ level: 'keyed', clientId: 'client-1' });
+  });
+
+  it('rejects a key whose hash differs by a single trailing character (constant-time comparison, near-miss case)', async () => {
+    const { plaintext, prefix, keyHash } = generateApiKey();
+    const flippedLastChar = keyHash.slice(0, -1) + (keyHash.at(-1) === '0' ? '1' : '0');
+    const supabase = mockSupabase({
+      clients: [{ id: 'client-1', slug: 'acme' }],
+      api_keys: [{ client_id: 'client-1', prefix, key_hash: flippedLastChar, revoked_at: null }],
+    });
+
+    const result = await resolveApiAccess(reqWith(`Bearer ${plaintext}`), 'acme', supabase);
+
+    expect(result).toEqual({ level: 'public', clientId: 'client-1' });
+  });
+
+  it('does not throw and returns public when the stored key_hash is a corrupted, non-64-char value', async () => {
+    const { plaintext, prefix } = generateApiKey();
+    const supabase = mockSupabase({
+      clients: [{ id: 'client-1', slug: 'acme' }],
+      api_keys: [{ client_id: 'client-1', prefix, key_hash: 'too-short', revoked_at: null }],
+    });
+
+    const result = await resolveApiAccess(reqWith(`Bearer ${plaintext}`), 'acme', supabase);
+
+    expect(result).toEqual({ level: 'public', clientId: 'client-1' });
+  });
 });

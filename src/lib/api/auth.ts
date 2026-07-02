@@ -11,7 +11,7 @@
  * time, and is never persisted or logged anywhere.
  */
 
-import { createHash, randomBytes } from 'crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'crypto';
 
 export type ApiAccessLevel = 'public' | 'keyed';
 
@@ -53,6 +53,22 @@ function extractKeyPrefix(presentedKey: string): string | null {
 /** SHA-256 hex digest of a full presented/generated key string. */
 export function hashApiKey(key: string): string {
   return createHash('sha256').update(key).digest('hex');
+}
+
+/** A well-formed SHA-256 hex digest: exactly 64 lowercase/uppercase hex chars. */
+const HEX_SHA256_PATTERN = /^[0-9a-fA-F]{64}$/;
+
+/**
+ * Constant-time comparison of two SHA-256 hex digests. Using plain string
+ * (in)equality here would leak timing information proportional to how many
+ * leading characters match, letting an attacker incrementally brute-force
+ * the stored hash. `crypto.timingSafeEqual` requires equal-length buffers,
+ * so any digest that isn't a well-formed 64-char hex string (e.g. a
+ * corrupted DB row) is rejected outright rather than risking a throw.
+ */
+function hashesMatch(a: string, b: string): boolean {
+  if (!HEX_SHA256_PATTERN.test(a) || !HEX_SHA256_PATTERN.test(b)) return false;
+  return timingSafeEqual(Buffer.from(a, 'hex'), Buffer.from(b, 'hex'));
 }
 
 export interface GeneratedApiKey {
@@ -116,7 +132,10 @@ export async function resolveApiAccess(
   if (!keyRow) return { level: 'public', clientId };
   if (keyRow.revoked_at) return { level: 'public', clientId };
   if (keyRow.client_id !== clientId) return { level: 'public', clientId };
-  if (hashApiKey(presentedKey) !== keyRow.key_hash) return { level: 'public', clientId };
+  if (typeof keyRow.key_hash !== 'string') return { level: 'public', clientId };
+  if (!hashesMatch(hashApiKey(presentedKey), keyRow.key_hash)) {
+    return { level: 'public', clientId };
+  }
 
   return { level: 'keyed', clientId };
 }
