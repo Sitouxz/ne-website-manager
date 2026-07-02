@@ -2,38 +2,81 @@
 
 import Topbar from '@/components/Topbar';
 import Link from 'next/link';
-import { useState, useEffect, use, useRef } from 'react';
+import { useEffect, useState, use, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  ArrowLeft, Bold, Italic, Underline, Link2, List, ListOrdered,
-  Quote, Image as ImageIcon, Code, Heading2, Heading3, Eye, Save, Send, X, Plus, Loader2,
+  ArrowLeft, Image as ImageIcon, Save, Send, X, Plus, Loader2, Eye, History,
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { useSelectedClient } from '@/components/AppShell';
 import { logActivity } from '@/lib/activity';
 import MediaPicker from '@/components/MediaPicker';
 import type { MediaItem } from '@/app/api/media/route';
+import RichTextEditor from '@/components/editor/RichTextEditor';
+import type { PostStatus } from '@/lib/supabase/types';
 
 const ACTIVITY_LABELS: Record<string, string> = {
   created: 'Created',
   updated: 'Updated',
   published: 'Published',
   archived: 'Archived',
+  // Not one of the four DB-level activity actions the plan originally
+  // documented (created/updated/published/archived) — that comment is
+  // non-enforced documentation, not a CHECK constraint on `activity_log`, so
+  // using a fifth, more descriptive action string here for the
+  // draft->scheduled transition gives a clearer audit trail than lumping it
+  // in under 'updated'.
+  scheduled: 'Scheduled',
 };
 
-const EMPTY_FORM = {
-  title: '', slug: '', excerpt: '', content: '',
+interface FormState {
+  title: string;
+  slug: string;
+  excerpt: string;
+  content: string;
+  contentJson: Record<string, unknown> | null;
+  category: string;
+  status: PostStatus;
+  featuredImg: string;
+  tags: string[];
+  seoTitle: string;
+  seoDesc: string;
+  /** `datetime-local` input value (local time, no timezone suffix); empty when not scheduled. */
+  scheduledAt: string;
+}
+
+const EMPTY_FORM: FormState = {
+  title: '', slug: '', excerpt: '', content: '', contentJson: null,
   category: 'Worship', status: 'draft',
-  featuredImg: '', tags: [] as string[],
+  featuredImg: '', tags: [],
   seoTitle: '', seoDesc: '',
+  scheduledAt: '',
 };
+
+const REVISION_SNAPSHOT_INTERVAL_MS = 60_000;
+const PREVIEW_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** Converts an ISO timestamp to the local-time value a `datetime-local` input expects. */
+function toDatetimeLocalValue(iso: string): string {
+  const d = new Date(iso);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+interface RevisionListItem {
+  id: string;
+  created_at: string;
+  author_id: string | null;
+  author_name?: string;
+  snapshot: Record<string, unknown>;
+}
 
 export default function PostEditor({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const isNew  = id === 'new';
   const router = useRouter();
 
-  const [form,        setForm]      = useState({ ...EMPTY_FORM });
+  const [form,        setForm]      = useState<FormState>({ ...EMPTY_FORM });
   const [tagInput,    setTagInput]  = useState('');
   const [loading,     setLoading]   = useState(!isNew);
   const [saving,      setSaving]    = useState(false);
@@ -41,10 +84,37 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
   const [error,       setError]     = useState('');
   const [clientId,    setClientId]  = useState<string | null>(null);
   const [isAdmin,     setIsAdmin]   = useState(false);
-  const [preview,     setPreview]   = useState(false);
   const [showImagePicker, setShowImagePicker] = useState(false);
+  const [autosaveState, setAutosaveState] = useState<'idle' | 'saving' | 'saved'>('idle');
+  const [previewError, setPreviewError] = useState('');
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const { selectedClientId } = useSelectedClient();
-  const editorRef = useRef<HTMLDivElement>(null);
+
+  // Guards against autosave firing in response to *this component* setting
+  // `form` itself (initial load from the DB, or a revision restore) rather
+  // than a genuine user edit. See the `useEffect` below.
+  const skipNextAutosaveRef = useRef(true);
+  const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastRevisionSnapshotAtRef = useRef(0);
+
+  function applyPostToForm(post: Record<string, unknown>) {
+    skipNextAutosaveRef.current = true;
+    setForm({
+      title:       (post.title as string) ?? '',
+      slug:        (post.slug as string) ?? '',
+      excerpt:     (post.excerpt as string) ?? '',
+      content:     (post.content as string) ?? '',
+      contentJson: (post.content_json as Record<string, unknown> | null) ?? null,
+      category:    (post.category as string) ?? 'Worship',
+      status:      (post.status as PostStatus) ?? 'draft',
+      featuredImg: (post.cover_url as string) ?? '',
+      tags:        (post.tags as string[]) ?? [],
+      seoTitle:    (post.seo_title as string) ?? '',
+      seoDesc:     (post.seo_description as string) ?? '',
+      scheduledAt: post.scheduled_at ? toDatetimeLocalValue(post.scheduled_at as string) : '',
+    });
+  }
 
   // Load existing post + client_id
   useEffect(() => {
@@ -77,18 +147,7 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
 
         if (post) {
           if (admin) setClientId(post.client_id);
-          setForm({
-            title:      post.title       ?? '',
-            slug:       post.slug        ?? '',
-            excerpt:    post.excerpt     ?? '',
-            content:    post.content     ?? '',
-            category:   post.category    ?? 'Worship',
-            status:     post.status      ?? 'draft',
-            featuredImg:post.cover_url   ?? '',
-            tags:       post.tags        ?? [],
-            seoTitle:   post.seo_title   ?? '',
-            seoDesc:    post.seo_description ?? '',
-          });
+          applyPostToForm(post);
         }
         setLoading(false);
       }
@@ -97,31 +156,111 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
   }, [id, isNew, selectedClientId]);
 
   const slugify = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-  const syncEditor = () => {
-    if (editorRef.current) {
-      setForm((f) => ({ ...f, content: editorRef.current?.innerHTML ?? '' }));
-    }
-  };
-  const applyFormat = (command: string, value?: string) => {
-    editorRef.current?.focus();
-    document.execCommand(command, false, value);
-    syncEditor();
-  };
-  const addLink = () => {
-    const url = window.prompt('Paste the link URL');
-    if (url) applyFormat('createLink', url);
-  };
-  const addInlineImage = () => {
-    const url = window.prompt('Paste the image URL');
-    if (url) applyFormat('insertImage', url);
-  };
+
   const addTag = () => {
     const t = tagInput.trim().toLowerCase();
     if (t && !form.tags.includes(t)) setForm((f) => ({ ...f, tags: [...f.tags, t] }));
     setTagInput('');
   };
-  async function handleSave(statusOverride?: string) {
+
+  /**
+   * The content-only fields every save path (manual, autosave, restore)
+   * writes — never status/published_at/scheduled_at. Depends on nothing but
+   * its `f` argument: `slugify` is a pure, stateless helper closed over here,
+   * so its identity changing every render isn't a real dependency.
+   */
+  const buildContentPayload = useCallback((f: FormState) => ({
+    title:           f.title || '(Untitled)',
+    slug:            f.slug || slugify(f.title) || 'untitled-post',
+    excerpt:         f.excerpt,
+    content:         f.content,
+    content_json:    f.contentJson,
+    category:        f.category,
+    tags:            f.tags,
+    cover_url:       f.featuredImg || null,
+    seo_title:       f.seoTitle || null,
+    seo_description: f.seoDesc  || null,
+  }), []);
+
+  /**
+   * Writes a `revisions` row, throttled to at most once per
+   * `REVISION_SNAPSHOT_INTERVAL_MS` — except when `force` is set, which
+   * every explicit user action (manual save, status change, publish,
+   * restore) always passes, so an explicit action is never silently
+   * un-snapshotted by the throttle. Tracked in a ref (not state) so the
+   * throttle check itself never triggers a re-render.
+   */
+  async function maybeSnapshotRevision(
+    supabase: ReturnType<typeof createClient>,
+    authorId: string,
+    entityId: string,
+    cid: string,
+    snapshot: Record<string, unknown>,
+    force: boolean
+  ) {
+    const now = Date.now();
+    if (!force && now - lastRevisionSnapshotAtRef.current < REVISION_SNAPSHOT_INTERVAL_MS) return;
+    lastRevisionSnapshotAtRef.current = now;
+    await supabase.from('revisions').insert({
+      client_id: cid,
+      entity_type: 'post',
+      entity_id: entityId,
+      snapshot,
+      author_id: authorId,
+    });
+  }
+
+  // Autosave: debounced 2s after the last content edit, for any existing
+  // post (not `isNew` — there's no row to write to yet). Runs regardless of
+  // status (including `published`, per the brief: an in-progress edit to a
+  // published post shouldn't be lost to a stray tab-close before the next
+  // manual save) but the payload from `buildContentPayload` never includes
+  // status/published_at/scheduled_at, so autosave can never flip those.
+  useEffect(() => {
+    if (isNew || loading || !clientId) return;
+    if (skipNextAutosaveRef.current) { skipNextAutosaveRef.current = false; return; }
+
+    // Hide any stale "All changes saved" from a previous cycle the instant a
+    // new edit comes in — it shouldn't keep claiming "saved" for the 2s
+    // window before the next debounced write actually lands.
+    setAutosaveState('idle');
+
+    if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
+    autosaveTimerRef.current = setTimeout(async () => {
+      setAutosaveState('saving');
+      const supabase = createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) { setAutosaveState('idle'); return; }
+
+      const payload = buildContentPayload(form);
+      const { error: err } = await supabase.from('posts').update(payload).eq('id', id);
+      if (err) { setAutosaveState('idle'); return; }
+
+      setAutosaveState('saved');
+      await maybeSnapshotRevision(supabase, user.id, id, clientId, payload, false);
+    }, 2000);
+
+    return () => { if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current); };
+    // Deliberately depends on each content field individually (not `form` as
+    // a whole, and excluding status/scheduledAt) so a status- or
+    // schedule-only change never schedules an autosave cycle — autosave
+    // must never silently change what a manual save or an explicit status
+    // transition controls.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    form.title, form.slug, form.excerpt, form.content, form.contentJson,
+    form.category, form.tags, form.featuredImg, form.seoTitle, form.seoDesc,
+  ]);
+
+  async function handleSave(statusOverride?: PostStatus) {
     if (!clientId) { setError('No client linked to your account. Contact Neu Entity support.'); return; }
+
+    const status = statusOverride ?? form.status;
+    if (status === 'scheduled' && !form.scheduledAt) {
+      setError('Pick a date and time to schedule this post.');
+      return;
+    }
+
     setSaving(true);
     setError('');
 
@@ -130,20 +269,13 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
     if (!user) { setError('Not authenticated'); setSaving(false); return; }
 
     const previousStatus = form.status;
-    const status     = statusOverride ?? form.status;
-    const published  = status === 'published' ? new Date().toISOString() : null;
+    const published = status === 'published' ? new Date().toISOString() : null;
+    const scheduledAtIso = status === 'scheduled' ? new Date(form.scheduledAt).toISOString() : null;
 
     const payload = {
-      title:           form.title || '(Untitled)',
-      slug:            form.slug || slugify(form.title) || 'untitled-post',
-      excerpt:         form.excerpt,
-      content:         form.content,
-      category:        form.category,
-      tags:            form.tags,
+      ...buildContentPayload(form),
       status,
-      cover_url:       form.featuredImg || null,
-      seo_title:       form.seoTitle || null,
-      seo_description: form.seoDesc  || null,
+      scheduled_at: scheduledAtIso,
       ...(published ? { published_at: published } : {}),
     };
 
@@ -156,10 +288,9 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
 
       if (err) { setError(err.message); setSaving(false); return; }
 
-      // Trigger deploy hook if publishing
       if (status === 'published') await triggerDeploy(supabase, clientId);
 
-      const action = status === 'published' ? 'published' : 'created';
+      const action = status === 'published' ? 'published' : status === 'scheduled' ? 'scheduled' : 'created';
       await logActivity(supabase, {
         clientId,
         actorId: user.id,
@@ -168,6 +299,7 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
         entityId: newPost.id,
         summary: `${ACTIVITY_LABELS[action]} "${payload.title}"`,
       });
+      await maybeSnapshotRevision(supabase, user.id, newPost.id, clientId, payload, true);
 
       setSaving(false);
       setSaved(true);
@@ -185,7 +317,10 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
 
       const action =
         previousStatus !== status
-          ? (status === 'published' ? 'published' : status === 'archived' ? 'archived' : 'updated')
+          ? (status === 'published' ? 'published'
+            : status === 'archived' ? 'archived'
+            : status === 'scheduled' ? 'scheduled'
+            : 'updated')
           : 'updated';
       await logActivity(supabase, {
         clientId,
@@ -195,8 +330,9 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
         entityId: id,
         summary: `${ACTIVITY_LABELS[action]} "${payload.title}"`,
       });
+      await maybeSnapshotRevision(supabase, user.id, id, clientId, payload, true);
 
-      setForm((f) => ({ ...f, status }));
+      setForm((f) => ({ ...f, status, scheduledAt: status === 'scheduled' ? f.scheduledAt : '' }));
       setSaving(false);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
@@ -212,6 +348,41 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
     if (client?.deploy_hook) {
       await fetch(client.deploy_hook, { method: 'POST' }).catch(() => null);
     }
+  }
+
+  async function handlePreview() {
+    if (isNew || !clientId) return;
+    setPreviewError('');
+    setPreviewLoading(true);
+
+    const supabase = createClient();
+    const { data: client } = await supabase
+      .from('clients')
+      .select('website_url')
+      .eq('id', clientId)
+      .single();
+
+    const websiteUrl = client?.website_url;
+    if (!websiteUrl) {
+      setPreviewError('No website URL configured for this client — set one in Settings.');
+      setPreviewLoading(false);
+      return;
+    }
+
+    const token = crypto.randomUUID();
+    const expiresAt = new Date(Date.now() + PREVIEW_TOKEN_TTL_MS).toISOString();
+    const { error: err } = await supabase.from('preview_tokens').insert({
+      client_id: clientId,
+      entity_type: 'post',
+      entity_id: id,
+      token,
+      expires_at: expiresAt,
+    });
+
+    setPreviewLoading(false);
+    if (err) { setPreviewError(err.message); return; }
+
+    window.open(`${websiteUrl.replace(/\/$/, '')}/api/preview?token=${token}`, '_blank');
   }
 
   if (loading) {
@@ -241,7 +412,26 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             {isAdmin && isNew && !clientId && <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ne-danger)', padding: '8px 14px', background: '#FEF2F2', borderRadius: 'var(--r-sm)' }}>Select a client in the sidebar first.</div>}
             {error && <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ne-danger)', padding: '8px 14px', background: '#FEF2F2', borderRadius: 'var(--r-sm)' }}>{error}</div>}
+            {previewError && <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ne-danger)', padding: '8px 14px', background: '#FEF2F2', borderRadius: 'var(--r-sm)' }}>{previewError}</div>}
+            {!isNew && autosaveState !== 'idle' && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11.5, fontWeight: 600, color: 'var(--fg3)' }}>
+                {autosaveState === 'saving'
+                  ? <><Loader2 size={12} style={{ animation: 'spin .6s linear infinite' }} /> Saving…</>
+                  : 'All changes saved'}
+              </div>
+            )}
             {saved && <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ne-success)', padding: '8px 14px', background: '#DCFCE7', borderRadius: 'var(--r-sm)' }}>Saved</div>}
+            {!isNew && (
+              <button className="btn-outline-ne" onClick={() => setHistoryOpen(true)} title="Revision history">
+                <History size={14} /> History
+              </button>
+            )}
+            {!isNew && (
+              <button className="btn-outline-ne" onClick={handlePreview} disabled={previewLoading} title="Preview on live site">
+                {previewLoading ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Eye size={14} />}
+                Preview
+              </button>
+            )}
             <button className="btn-outline-ne" onClick={() => handleSave('draft')} disabled={saving}>
               {saving ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Save size={14} />}
               Save Draft
@@ -274,56 +464,12 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
               </div>
             </div>
 
-            {/* Rich text editor */}
-            <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
-              <div className="editor-toolbar">
-                {[{ id: 'formatBlock', value: 'h2', Icon: Heading2 }, { id: 'formatBlock', value: 'h3', Icon: Heading3 }].map(({ id, value, Icon }) => (
-                  <button key={value} className="toolbar-btn" onClick={() => applyFormat(id, value)} title={value.toUpperCase()}>
-                    <Icon size={15} />
-                  </button>
-                ))}
-                <div className="toolbar-sep" />
-                {[{ id: 'bold', Icon: Bold }, { id: 'italic', Icon: Italic }, { id: 'underline', Icon: Underline }].map(({ id, Icon }) => (
-                  <button key={id} className="toolbar-btn" onClick={() => applyFormat(id)} title={id}>
-                    <Icon size={15} />
-                  </button>
-                ))}
-                <div className="toolbar-sep" />
-                {[
-                  { id: 'insertUnorderedList', Icon: List },
-                  { id: 'insertOrderedList', Icon: ListOrdered },
-                  { id: 'formatBlock', value: 'blockquote', Icon: Quote },
-                  { id: 'formatBlock', value: 'pre', Icon: Code },
-                ].map(({ id, value, Icon }) => (
-                  <button key={value ?? id} className="toolbar-btn" onClick={() => applyFormat(id, value)} title={value ?? id}>
-                    <Icon size={15} />
-                  </button>
-                ))}
-                <div className="toolbar-sep" />
-                <button className="toolbar-btn" onClick={addLink} title="Add link"><Link2 size={15} /></button>
-                <button className="toolbar-btn" onClick={addInlineImage} title="Insert image"><ImageIcon size={15} /></button>
-                <div style={{ marginLeft: 'auto' }}>
-                  <button className={`toolbar-btn${preview ? ' active' : ''}`} style={{ fontSize: 11, fontWeight: 700 }} onClick={() => setPreview((p) => !p)}>
-                    <Eye size={14} /> {preview ? 'Edit' : 'Preview'}
-                  </button>
-                </div>
-              </div>
-              {preview ? (
-                <div
-                  dangerouslySetInnerHTML={{ __html: form.content || '<p style="color: var(--fg3)">Nothing to preview yet.</p>' }}
-                  style={{ minHeight: 420, padding: '20px 24px', fontSize: 14.5, lineHeight: 1.75, color: 'var(--fg1)' }}
-                />
-              ) : (
-                <div
-                  ref={editorRef}
-                  contentEditable
-                  suppressContentEditableWarning
-                  dangerouslySetInnerHTML={{ __html: form.content }}
-                  onInput={syncEditor}
-                  style={{ minHeight: 420, padding: '20px 24px', outline: 'none', fontSize: 14.5, lineHeight: 1.75, color: 'var(--fg1)' }}
-                />
-              )}
-            </div>
+            {/* Rich text body */}
+            <RichTextEditor
+              valueJson={form.contentJson}
+              fallbackHtml={form.content}
+              onChange={(json, html) => setForm((f) => ({ ...f, contentJson: json as Record<string, unknown>, content: html }))}
+            />
 
             {/* Excerpt */}
             <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', padding: '18px 20px' }}>
@@ -373,23 +519,36 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
               <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
                 <div>
                   <label style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--fg3)', display: 'block', marginBottom: 5 }}>Status</label>
-                  <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}
+                  <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value as PostStatus })}
                     style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '8px 10px', fontSize: 13, color: 'var(--fg1)', background: 'var(--surface)' }}>
                     <option value="draft">Draft</option>
-                    <option value="published">Published</option>
-                    <option value="archived">Archived</option>
+                    <option value="in_review">In review</option>
+                    <option value="scheduled">Schedule</option>
+                    <option value="published">Publish now</option>
                   </select>
                 </div>
+                {form.status === 'scheduled' && (
+                  <div>
+                    <label style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--fg3)', display: 'block', marginBottom: 5 }}>Publish at</label>
+                    <input
+                      type="datetime-local"
+                      value={form.scheduledAt}
+                      onChange={(e) => setForm({ ...form, scheduledAt: e.target.value })}
+                      style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '8px 10px', fontSize: 13, color: 'var(--fg1)', background: 'var(--surface)' }}
+                    />
+                  </div>
+                )}
                 <div>
                   <label style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--fg3)', display: 'block', marginBottom: 5 }}>Category</label>
                   <input value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}
                     style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '8px 10px', fontSize: 13, color: 'var(--fg1)', background: 'var(--surface)' }} />
                 </div>
-                <button className="btn-ne" style={{ width: '100%', justifyContent: 'center' }} onClick={() => handleSave('published')} disabled={saving}>
-                  <Send size={14} /> {form.status === 'published' ? 'Update Post' : 'Publish Post'}
-                </button>
-                <button className="btn-outline-ne" style={{ width: '100%', justifyContent: 'center', fontSize: 13 }} onClick={() => handleSave('draft')} disabled={saving}>
-                  <Save size={14} /> Save as Draft
+                <button className="btn-ne" style={{ width: '100%', justifyContent: 'center' }} onClick={() => handleSave()} disabled={saving}>
+                  <Send size={14} />
+                  {form.status === 'scheduled' ? 'Schedule Post'
+                    : form.status === 'in_review' ? 'Submit for Review'
+                    : form.status === 'published' ? 'Update Post'
+                    : 'Save as Draft'}
                 </button>
               </div>
             </div>
@@ -460,7 +619,143 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
         onSelect={(item: MediaItem) => setForm((f) => ({ ...f, featuredImg: item.url }))}
       />
 
+      {!isNew && (
+        <RevisionPanel
+          open={historyOpen}
+          onClose={() => setHistoryOpen(false)}
+          postId={id}
+          onRestore={(row) => applyPostToForm(row)}
+        />
+      )}
+
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </>
+  );
+}
+
+/**
+ * Right-side slide-in drawer for revision history — the hand-rolled
+ * `position: fixed` overlay + panel pattern already established by
+ * `MediaPicker.tsx` and the Settings API Keys dialog, anchored to the right
+ * edge instead of centered. Deliberately not the shadcn `Sheet` in
+ * `components/ui/sheet.tsx`, which (like `components/ui/dialog.tsx`) isn't
+ * used anywhere else in this codebase.
+ */
+function RevisionPanel({
+  open, onClose, postId, onRestore,
+}: {
+  open: boolean;
+  onClose: () => void;
+  postId: string;
+  onRestore: (row: Record<string, unknown>) => void;
+}) {
+  const [revisions, setRevisions] = useState<RevisionListItem[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [restoringId, setRestoringId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+
+    async function load() {
+      setLoading(true);
+      setError('');
+      try {
+        const res = await fetch(`/api/cms/revisions?entity_type=post&entity_id=${postId}`);
+        const body = await res.json();
+        if (!res.ok) throw new Error(body?.error ?? 'Failed to load revision history');
+        if (!cancelled) setRevisions(body);
+      } catch (err) {
+        if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load revision history');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    load();
+    return () => { cancelled = true; };
+  }, [open, postId]);
+
+  async function handleRestore(revisionId: string) {
+    if (!window.confirm('Restore this version? The current state will be saved as a revision first, so this can be undone.')) return;
+
+    setRestoringId(revisionId);
+    setError('');
+    try {
+      const res = await fetch('/api/cms/revisions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ entity_type: 'post', entity_id: postId, revision_id: revisionId }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body?.error ?? 'Failed to restore revision');
+      onRestore(body);
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to restore revision');
+    } finally {
+      setRestoringId(null);
+    }
+  }
+
+  if (!open) return null;
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.4)', zIndex: 200 }} onClick={onClose}>
+      <div
+        style={{
+          position: 'fixed', top: 0, bottom: 0, right: 0, width: 380, maxWidth: '92vw',
+          background: 'var(--surface)', borderLeft: '1px solid var(--border)',
+          boxShadow: '-16px 0 48px rgba(0,0,0,.15)', display: 'flex', flexDirection: 'column',
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '18px 20px', borderBottom: '1px solid var(--border)' }}>
+          <div style={{ fontWeight: 800, fontSize: 15 }}>Revision History</div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg3)' }}>
+            <X size={18} />
+          </button>
+        </div>
+
+        <div style={{ flex: 1, overflowY: 'auto', padding: '14px 16px' }}>
+          {loading && (
+            <div style={{ display: 'flex', justifyContent: 'center', padding: 30 }}>
+              <Loader2 size={18} color="var(--ne-blue)" style={{ animation: 'spin .6s linear infinite' }} />
+            </div>
+          )}
+          {error && (
+            <div style={{ padding: '8px 12px', background: '#FEF2F2', color: 'var(--ne-danger)', borderRadius: 'var(--r-sm)', fontSize: 12.5, marginBottom: 10 }}>
+              {error}
+            </div>
+          )}
+          {!loading && revisions.length === 0 && !error && (
+            <div style={{ fontSize: 13, color: 'var(--fg3)', textAlign: 'center', padding: '30px 0' }}>
+              No revisions yet.
+            </div>
+          )}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {revisions.map((rev) => (
+              <div key={rev.id} style={{ border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '10px 12px' }}>
+                <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--fg1)' }}>
+                  {new Date(rev.created_at).toLocaleString()}
+                </div>
+                <div style={{ fontSize: 11.5, color: 'var(--fg3)', marginBottom: 8 }}>
+                  {rev.author_name ?? 'Unknown'}
+                </div>
+                <button
+                  className="btn-outline-ne"
+                  style={{ fontSize: 12, padding: '5px 10px' }}
+                  onClick={() => handleRestore(rev.id)}
+                  disabled={restoringId === rev.id}
+                >
+                  {restoringId === rev.id ? <Loader2 size={12} style={{ animation: 'spin .6s linear infinite' }} /> : null}
+                  Restore
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }

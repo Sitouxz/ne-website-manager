@@ -92,6 +92,12 @@ class QueryBuilder<T = Row, Single extends boolean = false>
     return this;
   }
 
+  in(column: string, values: unknown[]): this {
+    const set = new Set(values);
+    this.rows = this.rows.filter((row) => set.has(row[column]));
+    return this;
+  }
+
   /**
    * Minimal Postgrest-style `LIKE` (case-sensitive; `%` = any run of chars,
    * `_` = any single char). Only what callers in this codebase need
