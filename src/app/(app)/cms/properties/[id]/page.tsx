@@ -7,6 +7,14 @@ import { useRouter } from 'next/navigation';
 import { ArrowLeft, Save, Send, Loader2, Plus, X, Image as ImageIcon } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { useSelectedClient } from '@/components/AppShell';
+import { logActivity } from '@/lib/activity';
+
+const ACTIVITY_LABELS: Record<string, string> = {
+  created: 'Created',
+  updated: 'Updated',
+  published: 'Published',
+  archived: 'Archived',
+};
 
 const EMPTY_FORM = {
   name: '', slug: '', address: '', area: '', district: '',
@@ -140,6 +148,9 @@ export default function PropertyEditor({ params }: { params: Promise<{ id: strin
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) { setError('Not authenticated'); setSaving(false); return; }
 
+    const previousStatus = form.status;
+    const newStatus = statusOverride ?? form.status;
+
     const payload = {
       name:           form.name || '(Untitled)',
       slug:           form.slug || slugify(form.name) || 'untitled',
@@ -168,7 +179,7 @@ export default function PropertyEditor({ params }: { params: Promise<{ id: strin
       gallery:        form.gallery,
       available:      form.available      || null,
       source_url:     form.source_url     || null,
-      status:         statusOverride ?? form.status,
+      status:         newStatus,
       seo_title:      form.seo_title      || null,
       seo_description:form.seo_description|| null,
     };
@@ -179,6 +190,17 @@ export default function PropertyEditor({ params }: { params: Promise<{ id: strin
         .insert({ ...payload, client_id: clientId })
         .select().single();
       if (err) { setError(err.message); setSaving(false); return; }
+
+      const action = newStatus === 'archived' ? 'archived' : 'created';
+      await logActivity(supabase, {
+        clientId,
+        actorId: user.id,
+        action,
+        entityType: 'property',
+        entityId: newProp.id,
+        summary: `${ACTIVITY_LABELS[action]} "${payload.name}"`,
+      });
+
       setSaving(false); setSaved(true); setTimeout(() => setSaved(false), 2000);
       router.replace(`/cms/properties/${newProp.id}`);
     } else {
@@ -186,6 +208,20 @@ export default function PropertyEditor({ params }: { params: Promise<{ id: strin
         .from('properties').update(payload).eq('id', id);
       if (err) { setError(err.message); setSaving(false); return; }
       if (statusOverride) set('status', statusOverride);
+
+      const action =
+        previousStatus !== newStatus
+          ? (newStatus === 'archived' ? 'archived' : 'published')
+          : 'updated';
+      await logActivity(supabase, {
+        clientId,
+        actorId: user.id,
+        action,
+        entityType: 'property',
+        entityId: id,
+        summary: `${ACTIVITY_LABELS[action]} "${payload.name}"`,
+      });
+
       setSaving(false); setSaved(true); setTimeout(() => setSaved(false), 2000);
     }
   }

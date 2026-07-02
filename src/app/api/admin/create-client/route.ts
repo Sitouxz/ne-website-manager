@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { logActivity } from '@/lib/activity';
 
 export async function POST(req: Request) {
   // Verify caller is NE admin
@@ -55,6 +56,15 @@ export async function POST(req: Request) {
     .from('profiles')
     .update({ client_id: client.id, role: 'client_admin' })
     .eq('id', authData.user.id);
+
+  await logActivity(admin, {
+    clientId: client.id,
+    actorId: user.id,
+    action: 'created',
+    entityType: 'client',
+    entityId: client.id,
+    summary: `Created client "${name}"`,
+  });
 
   return NextResponse.json({ success: true, clientId: client.id, userId: authData.user.id });
 }

@@ -10,6 +10,14 @@ import {
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { useSelectedClient } from '@/components/AppShell';
+import { logActivity } from '@/lib/activity';
+
+const ACTIVITY_LABELS: Record<string, string> = {
+  created: 'Created',
+  updated: 'Updated',
+  published: 'Published',
+  archived: 'Archived',
+};
 
 const EMPTY_FORM = {
   title: '', slug: '', excerpt: '', content: '',
@@ -122,6 +130,7 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) { setError('Not authenticated'); setSaving(false); return; }
 
+    const previousStatus = form.status;
     const status     = statusOverride ?? form.status;
     const published  = status === 'published' ? new Date().toISOString() : null;
 
@@ -151,6 +160,16 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
       // Trigger deploy hook if publishing
       if (status === 'published') await triggerDeploy(supabase, clientId);
 
+      const action = status === 'published' ? 'published' : 'created';
+      await logActivity(supabase, {
+        clientId,
+        actorId: user.id,
+        action,
+        entityType: 'post',
+        entityId: newPost.id,
+        summary: `${ACTIVITY_LABELS[action]} "${payload.title}"`,
+      });
+
       setSaving(false);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
@@ -164,6 +183,19 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
       if (err) { setError(err.message); setSaving(false); return; }
 
       if (status === 'published') await triggerDeploy(supabase, clientId);
+
+      const action =
+        previousStatus !== status
+          ? (status === 'published' ? 'published' : status === 'archived' ? 'archived' : 'updated')
+          : 'updated';
+      await logActivity(supabase, {
+        clientId,
+        actorId: user.id,
+        action,
+        entityType: 'post',
+        entityId: id,
+        summary: `${ACTIVITY_LABELS[action]} "${payload.title}"`,
+      });
 
       setForm((f) => ({ ...f, status }));
       setSaving(false);
