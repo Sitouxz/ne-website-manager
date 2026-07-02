@@ -1,5 +1,5 @@
 export type Role = 'ne_admin' | 'client_admin' | 'editor';
-export type PostStatus = 'draft' | 'published' | 'archived';
+export type PostStatus = 'draft' | 'in_review' | 'scheduled' | 'published' | 'archived';
 export type PageStatus = 'draft' | 'published';
 export type PropertyStatus = 'active' | 'archived';
 export type ListingType = 'sale' | 'rent';
@@ -41,6 +41,8 @@ export interface Post {
   status: PostStatus;
   seo_title: string | null;
   seo_description: string | null;
+  content_json: Record<string, unknown> | null;
+  scheduled_at: string | null;
   author_id: string | null;
   published_at: string | null;
   created_at: string;
@@ -55,6 +57,9 @@ export interface Page {
   content: string;
   status: PageStatus;
   visibility: 'public' | 'private';
+  content_json: Record<string, unknown> | null;
+  seo_title: string | null;
+  seo_description: string | null;
   updated_at: string;
 }
 
@@ -98,4 +103,24 @@ export interface Property {
   seo_description: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface Revision {
+  id: string;
+  client_id: string;
+  entity_type: string;
+  entity_id: string;
+  snapshot: Record<string, unknown>;
+  author_id: string | null;
+  created_at: string;
+}
+
+export interface PreviewToken {
+  id: string;
+  client_id: string;
+  entity_type: string;
+  entity_id: string;
+  token: string;
+  expires_at: string;
+  created_at: string;
 }
