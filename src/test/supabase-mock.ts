@@ -92,6 +92,19 @@ class QueryBuilder<T = Row, Single extends boolean = false>
     return this;
   }
 
+  /**
+   * Minimal Postgrest-style `LIKE` (case-sensitive; `%` = any run of chars,
+   * `_` = any single char). Only what callers in this codebase need
+   * (e.g. `mime_type LIKE 'image/%'`) — no escaping of literal `%`/`_`.
+   */
+  like(column: string, pattern: string): this {
+    const regex = new RegExp(
+      `^${pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/%/g, '.*').replace(/_/g, '.')}$`
+    );
+    this.rows = this.rows.filter((row) => typeof row[column] === 'string' && regex.test(row[column] as string));
+    return this;
+  }
+
   order(column: string, options?: { ascending?: boolean }): this {
     const ascending = options?.ascending ?? true;
     const sorted = [...this.rows].sort((a, b) => compare(a[column], b[column]));
