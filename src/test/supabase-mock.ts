@@ -9,6 +9,8 @@
  *   supabase.from('analytics_events').insert({...})
  *   supabase.from('clients').update({...}).eq('id', id)
  *   supabase.from('clients').delete().eq('id', id)
+ *   supabase.from('posts').select('*').eq(...).order(...).range(from, to)
+ *   supabase.from('posts').select('id', { count: 'exact', head: true }).eq(...)
  *
  * Fixtures are copied on the way in and mutated in place by insert/update/
  * delete, so successive queries against the same mock client observe each
@@ -19,9 +21,15 @@
 type Row = Record<string, unknown>;
 type Fixtures = Record<string, Row[]>;
 
+interface SelectOptions {
+  count?: 'exact';
+  head?: boolean;
+}
+
 interface QueryResult<T> {
   data: T | null;
   error: { message: string; code?: string } | null;
+  count: number | null;
 }
 
 type MutationKind = 'insert' | 'update' | 'delete' | null;
@@ -54,6 +62,17 @@ class QueryBuilder<T = Row, Single extends boolean = false>
   private mutationPayload: Row | null = null;
   /** Whether the caller wants rows back (true for reads; false for a bare insert/update/delete). */
   private dataRequested = true;
+  /** Set by `select(columns, { count: 'exact' })`. */
+  private countRequested = false;
+  /** Set by `select(columns, { head: true })` — Postgrest HEAD requests never return rows. */
+  private headOnly = false;
+  /**
+   * Snapshot of how many rows matched the filters (`.eq()`/`.order()`) at the
+   * moment `.range()` or `.limit()` first truncates the set — i.e. the total
+   * count "ignoring any subsequent `.range()`/`.limit()`" that real
+   * Supabase's `{ count: 'exact' }` reports. `null` until captured.
+   */
+  private matchedCount: number | null = null;
 
   constructor(private readonly store: Fixtures, private readonly table: string) {
     this.rows = [...(store[table] ?? (store[table] = []))];
@@ -61,9 +80,10 @@ class QueryBuilder<T = Row, Single extends boolean = false>
 
   // Column projection isn't needed for tests — fixtures already contain
   // exactly the shape a test cares about.
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  select(_columns?: string): this {
+  select(_columns?: string, options?: SelectOptions): this {
     this.dataRequested = true;
+    if (options?.count === 'exact') this.countRequested = true;
+    if (options?.head) this.headOnly = true;
     return this;
   }
 
@@ -80,8 +100,26 @@ class QueryBuilder<T = Row, Single extends boolean = false>
   }
 
   limit(count: number): this {
+    this.captureMatchedCount();
     this.rows = this.rows.slice(0, count);
     return this;
+  }
+
+  /**
+   * Postgrest-style range: both bounds inclusive, applied to whatever the
+   * chain has filtered/sorted down to so far (e.g. after `.eq()`/`.order()`).
+   */
+  range(from: number, to: number): this {
+    this.captureMatchedCount();
+    this.rows = this.rows.slice(from, to + 1);
+    return this;
+  }
+
+  /** Records the pre-truncation row count the first time `.range()`/`.limit()` is called. */
+  private captureMatchedCount(): void {
+    if (this.countRequested && this.matchedCount === null) {
+      this.matchedCount = this.rows.length;
+    }
   }
 
   single(): QueryBuilder<T, true> {
@@ -132,18 +170,28 @@ class QueryBuilder<T = Row, Single extends boolean = false>
       this.store[this.table] = table.filter((row) => !toDelete.has(row));
     }
 
+    // `count` reflects rows matched by `.eq()`/`.order()` filtering, ignoring
+    // any later `.range()`/`.limit()` truncation — captured by those methods,
+    // or (if neither was called) simply the current, untruncated row count.
+    const count = this.countRequested ? this.matchedCount ?? this.rows.length : null;
+
     if (!this.dataRequested) {
-      return { data: null, error: null };
+      return { data: null, error: null, count };
+    }
+
+    // Postgrest HEAD requests (`{ head: true }`) never return rows.
+    if (this.headOnly) {
+      return { data: null, error: null, count };
     }
 
     if (this.isSingle) {
       if (this.rows.length !== 1) {
-        return { data: null, error: { message: 'No rows found', code: 'PGRST116' } };
+        return { data: null, error: { message: 'No rows found', code: 'PGRST116' }, count };
       }
-      return { data: this.rows[0] as Resolved<T, Single>, error: null };
+      return { data: this.rows[0] as Resolved<T, Single>, error: null, count };
     }
 
-    return { data: this.rows as Resolved<T, Single>, error: null };
+    return { data: this.rows as Resolved<T, Single>, error: null, count };
   }
 }
 
