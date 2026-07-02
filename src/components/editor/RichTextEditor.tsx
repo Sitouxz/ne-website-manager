@@ -1,7 +1,7 @@
 'use client';
 
-import { forwardRef, useImperativeHandle, useState } from 'react';
-import { useEditor, EditorContent, type Editor } from '@tiptap/react';
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Link from '@tiptap/extension-link';
 import Image from '@tiptap/extension-image';
@@ -9,6 +9,28 @@ import Placeholder from '@tiptap/extension-placeholder';
 import { EditorToolbar } from './EditorToolbar';
 import MediaPicker from '@/components/MediaPicker';
 import type { MediaItem } from '@/app/api/media/route';
+
+/**
+ * Narrow imperative surface exposed via `ref`, instead of the raw Tiptap
+ * `Editor` instance. Deliberately minimal: `focus` for a future consumer
+ * that needs to move focus into the editor programmatically, and
+ * `insertContent` for tests to drive real edits through the component (see
+ * `RichTextEditor.test.tsx` — jsdom's contenteditable doesn't support
+ * simulated typing, so tests must call into Tiptap's own commands, but they
+ * do so through this narrow handle rather than reaching into `editor.state`/
+ * `editor.commands`/`editor.view` directly). Do not widen this without a
+ * concrete need — the whole point is that consumers build against
+ * `{ valueJson, fallbackHtml, onChange }` and this handle, not against
+ * Tiptap's full API surface.
+ */
+export interface RichTextEditorHandle {
+  /** Moves focus into the editor. */
+  focus: () => void;
+  /** Inserts content at the end of the document (after existing content),
+   * moving focus there first. Used by tests to simulate a user typing
+   * without needing to know about ProseMirror positions. */
+  insertContent: (content: string | object) => void;
+}
 
 export interface RichTextEditorProps {
   /** Tiptap JSON document. When present, takes precedence over `fallbackHtml`
@@ -44,16 +66,55 @@ export interface RichTextEditorProps {
  * means `editor` is `null` on the very first render and becomes non-null
  * once mounted; `EditorToolbar` and this component both handle that.
  *
- * Exposes the underlying Tiptap `Editor` via `ref` (in addition to the exact
- * `{ valueJson, fallbackHtml, onChange }` prop contract, which is
- * unchanged) so tests — and future consumers that need to e.g. imperatively
- * focus the editor — can reach it without widening the props API.
+ * ## Re-syncing content after mount
+ *
+ * `useEditor`'s `content` option only seeds the *initial* document — Tiptap
+ * never re-reads it on later renders. Without extra handling, a parent that
+ * re-renders this component with new `valueJson`/`fallbackHtml` (e.g.
+ * content that finishes loading asynchronously after first paint, or the
+ * same mounted instance being reused for a different record) would keep
+ * showing stale content forever.
+ *
+ * A `useEffect` below re-syncs the document when `valueJson`/`fallbackHtml`
+ * change, but it has to avoid a second failure mode: this component's own
+ * `onUpdate` calls `onChange(json, html)` on every keystroke, and a typical
+ * controlled-component consumer will store that in state and pass it right
+ * back down as the `valueJson` prop. That "echo" is *not* new external data
+ * — it's just the editor's own last edit reflected back — and calling
+ * `editor.commands.setContent(...)` in response would be redundant at best
+ * and would reset the cursor/selection at worst.
+ *
+ * The guard: a ref (`lastSyncedContentRef`) remembers, as a JSON string, the
+ * content this component itself last set (whether from an incoming prop
+ * sync or from its own `onUpdate`). The effect only calls `setContent` when
+ * the incoming `valueJson ?? fallbackHtml` serializes to something
+ * *different* from that ref — i.e. content this component didn't already
+ * know about. `onUpdate` updates the same ref immediately, so by the time
+ * the echoed prop comes back around, it matches and the effect no-ops.
+ *
+ * Tradeoffs of this approach:
+ * - It compares by `JSON.stringify`, not deep-equal or reference identity.
+ *   That's intentionally cheap and simple, but it means a parent that
+ *   round-trips the JSON through something that reorders object keys (e.g.
+ *   certain DB layers) could produce a false "this is new" mismatch — the
+ *   consequence is just an extra (harmless but cursor-resetting) resync,
+ *   not data loss, so this is an acceptable tradeoff for this component's
+ *   scale of documents.
+ * - It does not attempt to preserve cursor position across a genuine
+ *   external resync (switching records, async data arriving) — `setContent`
+ *   replaces the whole document, which is the correct behavior for "this is
+ *   a different record now."
+ *
+ * Exposes a narrow `RichTextEditorHandle` via `ref` (not the raw Tiptap
+ * `Editor`) — see that type's doc comment for why the surface is
+ * deliberately small.
  */
-const RichTextEditor = forwardRef<Editor | null, RichTextEditorProps>(function RichTextEditor(
+const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(function RichTextEditor(
   { valueJson, fallbackHtml, onChange },
   ref,
 ) {
   const [imagePickerOpen, setImagePickerOpen] = useState(false);
+  const lastSyncedContentRef = useRef<string>(JSON.stringify(valueJson ?? fallbackHtml));
 
   const editor = useEditor({
     immediatelyRender: false,
@@ -81,11 +142,50 @@ const RichTextEditor = forwardRef<Editor | null, RichTextEditorProps>(function R
       }),
     ],
     onUpdate: ({ editor }) => {
-      onChange(editor.getJSON(), editor.getHTML());
+      const json = editor.getJSON();
+      const html = editor.getHTML();
+      // Record this as "known" content before calling onChange, so that if
+      // the parent stores it and passes it straight back as `valueJson`, the
+      // resync effect below recognizes it as an echo rather than external
+      // data and leaves the document (and cursor) alone.
+      lastSyncedContentRef.current = JSON.stringify(json);
+      onChange(json, html);
     },
   });
 
-  useImperativeHandle<Editor | null, Editor | null>(ref, () => editor, [editor]);
+  // See "Re-syncing content after mount" above.
+  useEffect(() => {
+    if (!editor) return;
+    const incoming = valueJson ?? fallbackHtml;
+    const incomingKey = JSON.stringify(incoming);
+    if (incomingKey === lastSyncedContentRef.current) {
+      return;
+    }
+    lastSyncedContentRef.current = incomingKey;
+    editor.commands.setContent(incoming);
+  }, [editor, valueJson, fallbackHtml]);
+
+  useImperativeHandle<RichTextEditorHandle, RichTextEditorHandle>(
+    ref,
+    () => ({
+      focus: () => {
+        editor?.commands.focus();
+      },
+      insertContent: (content) => {
+        // 'end' resolves to the last valid cursor position inside the
+        // document (not the outer document boundary), so this appends into
+        // the last block rather than creating a new empty paragraph after
+        // it. `scrollIntoView: false` because this is a programmatic
+        // insertion (used by tests and any future non-interactive caller),
+        // not a user-driven focus change — the browser default of scrolling
+        // the focused position into view isn't warranted here, and jsdom
+        // (used in tests) doesn't implement the layout APIs that
+        // `scrollIntoView: true` relies on.
+        editor?.chain().focus('end', { scrollIntoView: false }).insertContent(content).run();
+      },
+    }),
+    [editor],
+  );
 
   function handleImageSelect(item: MediaItem) {
     editor?.chain().focus().setImage({ src: item.url, alt: item.alt ?? undefined }).run();
