@@ -8,6 +8,8 @@ import { ArrowLeft, Save, Send, Loader2, Plus, X, Image as ImageIcon } from 'luc
 import { createClient } from '@/lib/supabase/client';
 import { useSelectedClient } from '@/components/AppShell';
 import { logActivity } from '@/lib/activity';
+import MediaPicker from '@/components/MediaPicker';
+import type { MediaItem } from '@/app/api/media/route';
 
 const ACTIVITY_LABELS: Record<string, string> = {
   created: 'Created',
@@ -70,6 +72,9 @@ export default function PropertyEditor({ params }: { params: Promise<{ id: strin
   const [newHlBody,       setNewHlBody]       = useState('');
   const [newGalSrc,       setNewGalSrc]       = useState('');
   const [newGalAlt,       setNewGalAlt]       = useState('');
+
+  // MediaPicker: one instance, `pickerMode` tracks which field it's filling.
+  const [pickerMode, setPickerMode] = useState<'hero' | 'gallery' | null>(null);
 
   const { selectedClientId } = useSelectedClient();
 
@@ -451,21 +456,42 @@ export default function PropertyEditor({ params }: { params: Promise<{ id: strin
             <div style={cardStyle}>
               <div style={sectionTitle}>Media</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-                  <Field label="Hero Image URL">
-                    <input value={form.hero_url} onChange={(e) => set('hero_url', e.target.value)} style={inputStyle} placeholder="https://..." />
-                  </Field>
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--fg3)', marginBottom: 5 }}>Hero Image</div>
+                  {form.hero_url ? (
+                    <div style={{ position: 'relative', marginBottom: 12 }}>
+                      <img src={form.hero_url} alt={form.hero_alt} style={{ width: '100%', maxHeight: 200, objectFit: 'cover', borderRadius: 'var(--r-sm)', display: 'block' }} />
+                      <button onClick={() => setPickerMode('hero')}
+                        style={{ position: 'absolute', bottom: 8, left: 8, background: 'rgba(0,0,0,.6)', border: 'none', borderRadius: 'var(--r-sm)', padding: '5px 12px', cursor: 'pointer', color: '#fff', fontSize: 11.5, fontWeight: 600 }}>
+                        Change
+                      </button>
+                      <button onClick={() => { set('hero_url', ''); set('hero_alt', ''); }}
+                        style={{ position: 'absolute', top: 8, right: 8, background: 'rgba(0,0,0,.6)', border: 'none', borderRadius: '50%', width: 24, height: 24, cursor: 'pointer', color: '#fff', display: 'grid', placeItems: 'center' }}>
+                        <X size={12} />
+                      </button>
+                    </div>
+                  ) : (
+                    <button type="button" onClick={() => setPickerMode('hero')}
+                      style={{ width: '100%', border: '2px dashed var(--border)', borderRadius: 'var(--r-sm)', padding: '24px 16px', textAlign: 'center', cursor: 'pointer', background: 'transparent', marginBottom: 12 }}>
+                      <ImageIcon size={20} color="var(--fg3)" style={{ margin: '0 auto 6px' }} />
+                      <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--fg2)' }}>Choose Hero Image</div>
+                      <div style={{ fontSize: 11, color: 'var(--fg3)' }}>From the media library</div>
+                    </button>
+                  )}
                   <Field label="Hero Alt Text">
                     <input value={form.hero_alt} onChange={(e) => set('hero_alt', e.target.value)} style={inputStyle} placeholder="Living room view" />
                   </Field>
                 </div>
-                {form.hero_url && (
-                  <img src={form.hero_url} alt={form.hero_alt} style={{ width: '100%', maxHeight: 200, objectFit: 'cover', borderRadius: 'var(--r-sm)' }} />
-                )}
 
                 {/* Gallery */}
                 <div>
-                  <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--fg3)', marginBottom: 8 }}>Gallery</div>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--fg3)' }}>Gallery</div>
+                    <button type="button" onClick={() => setPickerMode('gallery')}
+                      style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11.5, fontWeight: 600, color: 'var(--ne-blue)', background: 'none', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '5px 10px', cursor: 'pointer' }}>
+                      <ImageIcon size={12} /> Add from Library
+                    </button>
+                  </div>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
                     {form.gallery.map((g, i) => (
                       <div key={i} style={{ position: 'relative', width: 80, height: 80 }}>
@@ -580,6 +606,21 @@ export default function PropertyEditor({ params }: { params: Promise<{ id: strin
           </div>
         </div>
       </div>
+
+      <MediaPicker
+        open={pickerMode !== null}
+        onOpenChange={(o) => { if (!o) setPickerMode(null); }}
+        accept="image"
+        onSelect={(item: MediaItem) => {
+          if (pickerMode === 'hero') {
+            set('hero_url', item.url);
+            if (!form.hero_alt && item.alt) set('hero_alt', item.alt);
+          } else if (pickerMode === 'gallery') {
+            set('gallery', [...form.gallery, { src: item.url, alt: item.alt ?? '' }]);
+          }
+        }}
+      />
+
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </>
   );

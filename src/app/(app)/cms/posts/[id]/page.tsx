@@ -11,6 +11,8 @@ import {
 import { createClient } from '@/lib/supabase/client';
 import { useSelectedClient } from '@/components/AppShell';
 import { logActivity } from '@/lib/activity';
+import MediaPicker from '@/components/MediaPicker';
+import type { MediaItem } from '@/app/api/media/route';
 
 const ACTIVITY_LABELS: Record<string, string> = {
   created: 'Created',
@@ -40,6 +42,7 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
   const [clientId,    setClientId]  = useState<string | null>(null);
   const [isAdmin,     setIsAdmin]   = useState(false);
   const [preview,     setPreview]   = useState(false);
+  const [showImagePicker, setShowImagePicker] = useState(false);
   const { selectedClientId } = useSelectedClient();
   const editorRef = useRef<HTMLDivElement>(null);
 
@@ -111,10 +114,6 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
   const addInlineImage = () => {
     const url = window.prompt('Paste the image URL');
     if (url) applyFormat('insertImage', url);
-  };
-  const setFeaturedImage = () => {
-    const url = window.prompt('Paste the featured image URL');
-    if (url) setForm((f) => ({ ...f, featuredImg: url }));
   };
   const addTag = () => {
     const t = tagInput.trim().toLowerCase();
@@ -402,16 +401,20 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
                 {form.featuredImg ? (
                   <div style={{ position: 'relative' }}>
                     <img src={form.featuredImg} alt="" style={{ width: '100%', borderRadius: 'var(--r-sm)', objectFit: 'cover', height: 140 }} />
+                    <button onClick={() => setShowImagePicker(true)}
+                      style={{ position: 'absolute', bottom: 6, left: 6, background: 'rgba(0,0,0,.6)', border: 'none', borderRadius: 'var(--r-sm)', padding: '4px 10px', cursor: 'pointer', color: '#fff', fontSize: 11, fontWeight: 600 }}>
+                      Change
+                    </button>
                     <button onClick={() => setForm({ ...form, featuredImg: '' })}
                       style={{ position: 'absolute', top: 6, right: 6, background: 'rgba(0,0,0,.6)', border: 'none', borderRadius: '50%', width: 22, height: 22, cursor: 'pointer', color: '#fff', display: 'grid', placeItems: 'center' }}>
                       <X size={11} />
                     </button>
                   </div>
                 ) : (
-                  <button type="button" onClick={setFeaturedImage} style={{ width: '100%', border: '2px dashed var(--border)', borderRadius: 'var(--r-sm)', padding: '28px 16px', textAlign: 'center', cursor: 'pointer', background: 'transparent' }}>
+                  <button type="button" onClick={() => setShowImagePicker(true)} style={{ width: '100%', border: '2px dashed var(--border)', borderRadius: 'var(--r-sm)', padding: '28px 16px', textAlign: 'center', cursor: 'pointer', background: 'transparent' }}>
                     <ImageIcon size={22} color="var(--fg3)" style={{ margin: '0 auto 8px' }} />
                     <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--fg2)', marginBottom: 4 }}>Add Featured Image</div>
-                    <div style={{ fontSize: 11, color: 'var(--fg3)' }}>Paste an image URL</div>
+                    <div style={{ fontSize: 11, color: 'var(--fg3)' }}>Choose from the media library</div>
                   </button>
                 )}
               </div>
@@ -449,6 +452,14 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
           </div>
         </div>
       </div>
+
+      <MediaPicker
+        open={showImagePicker}
+        onOpenChange={setShowImagePicker}
+        accept="image"
+        onSelect={(item: MediaItem) => setForm((f) => ({ ...f, featuredImg: item.url }))}
+      />
+
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </>
   );

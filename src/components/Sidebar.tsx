@@ -27,7 +27,7 @@ const NAV: NavGroup[] = [
       { label: 'Blog Posts',    href: '/cms/posts',      icon: FileText },
       { label: 'Properties',    href: '/cms/properties', icon: Home },
       { label: 'Pages',         href: '/cms/pages',      icon: FileEdit },
-      { label: 'Media Library', href: '/cms/media',      icon: Image,  soon: true },
+      { label: 'Media Library', href: '/cms/media',      icon: Image },
     ],
   },
   {
