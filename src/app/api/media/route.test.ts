@@ -386,7 +386,35 @@ describe('DELETE /api/media', () => {
     expect(res.status).toBe(404);
   });
 
-  it("rejects a non-admin caller deleting another client's media with 403, and never calls storage.remove", async () => {
+  // `mockSupabase` is a pure fixture filter — it doesn't model Postgres RLS.
+  // Against the real database, `media_authenticated` RLS (migration 001)
+  // makes a cross-tenant row invisible to the SELECT in the DELETE handler
+  // before the app-level `canAccess()` check ever runs, so the realistic
+  // outcome for "non-admin deletes another client's row" is 404 (not
+  // found), not 403. We simulate that here by omitting `OTHER_ROW` from
+  // the fixtures given to the *user-scoped* client (as RLS would), while
+  // the admin client still has it (proving the row genuinely exists —
+  // this is "hidden from this caller", not "doesn't exist").
+  it("returns 404 (not 403) for another client's media, matching what RLS hiding the row in production would produce", async () => {
+    setSupabase(supabaseFor(EDITOR, { profiles: [EDITOR], media: [] }));
+    const { supabase: admin, removeSpy } = adminMockFor({ media: [OTHER_ROW] });
+    setAdmin(admin);
+
+    const res = await DELETE(deleteReq('m2'));
+
+    expect(res.status).toBe(404);
+    expect(removeSpy).not.toHaveBeenCalled();
+  });
+
+  // Defense-in-depth: if the user-scoped SELECT ever returns a row despite
+  // it belonging to another client — e.g. this route being called with a
+  // client whose visibility is broader than intended, such as a
+  // service-role client that bypasses RLS entirely — the explicit
+  // `canAccess()` check still blocks the delete with 403. This does not
+  // reflect the normal RLS-enforced path (see the 404 test above); it
+  // exercises the second layer directly by handing the user-scoped mock
+  // a row real RLS would not have returned.
+  it("rejects the delete with 403 when a cross-tenant row is visible to canAccess() anyway (defense-in-depth, not the normal RLS path)", async () => {
     setSupabase(supabaseFor(EDITOR, { profiles: [EDITOR], media: [OTHER_ROW] }));
     const { supabase: admin, removeSpy } = adminMockFor({ media: [OTHER_ROW] });
     setAdmin(admin);

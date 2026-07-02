@@ -237,6 +237,18 @@ export async function DELETE(req: Request) {
   const id = new URL(req.url).searchParams.get('id');
   if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 });
 
+  // This SELECT runs on the user-scoped client, so `media_authenticated`
+  // RLS (migration 001: `client_id = my_client_id() OR is_ne_admin()`)
+  // already makes a cross-tenant row invisible at the database level —
+  // against the real database, a non-admin caller targeting another
+  // client's row gets `existing === null` here, i.e. 404, not 403. The
+  // `canAccess()` check below is a second layer, not the primary gate: it
+  // only fires when a row *was* returned despite belonging to another
+  // client, which shouldn't happen under RLS but guards against this
+  // route ever being called with a client whose visibility is broader
+  // than intended (e.g. a service-role client that bypasses RLS
+  // entirely). See route.test.ts for tests covering both the RLS-hidden
+  // (404) and defense-in-depth (403) cases.
   const { data: existing } = await supabase
     .from('media')
     .select('*')
