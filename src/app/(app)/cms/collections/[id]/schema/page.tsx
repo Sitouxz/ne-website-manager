@@ -41,9 +41,13 @@ const slugifyKey = (s: string) => s.toLowerCase().trim().replace(/[^a-z0-9]+/g, 
  * `ne_admin`-only, gated client-side by loading `profiles.role` the same
  * way `src/app/(app)/settings/page.tsx` and `src/app/(app)/cms/pages/[id]/page.tsx`
  * do. This is a UX nicety, not the real security boundary: RLS on
- * `collections` already requires `client_id = my_client_id() OR
- * is_ne_admin()` for writes, so a non-admin's actual DB writes are blocked
- * regardless of what this page renders.
+ * `collections` (see `supabase/migrations/008_restrict_collections_writes.sql`)
+ * restricts INSERT/UPDATE/DELETE to `is_ne_admin() OR (client_id =
+ * my_client_id() AND role = 'client_admin')`, explicitly excluding plain
+ * `editor` — so a non-admin's actual DB writes are blocked regardless of
+ * what this page renders. Reads remain open to any authenticated user of
+ * the client (`client_id = my_client_id() OR is_ne_admin()`), matching the
+ * collections list page's intentionally broader visibility.
  */
 export default function CollectionSchemaPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
