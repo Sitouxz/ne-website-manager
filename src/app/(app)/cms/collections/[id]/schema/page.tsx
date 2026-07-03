@@ -230,7 +230,7 @@ export default function CollectionSchemaPage({ params }: { params: Promise<{ id:
     );
   }
 
-  if (collection.storage !== 'generic') {
+  if (collection.storage !== 'generic' || collection.client_id === null) {
     return (
       <>
         <Topbar title={collection.name} subtitle="Collection Schema" />

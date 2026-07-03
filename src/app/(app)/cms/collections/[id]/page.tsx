@@ -179,7 +179,7 @@ export default function CollectionEntriesPage({ params }: { params: Promise<{ id
   // Defends against a stale/guessed URL the same way the schema page does —
   // native (posts/pages/properties-backed) and global collections have no
   // `collection_items` entry-editing flow; this route is generic-only.
-  if (collection.storage !== 'generic') {
+  if (collection.storage !== 'generic' || collection.client_id === null) {
     return (
       <>
         <Topbar title={collection.name} subtitle="Entries" />

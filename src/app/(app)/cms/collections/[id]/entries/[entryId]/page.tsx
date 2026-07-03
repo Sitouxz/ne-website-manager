@@ -243,7 +243,7 @@ export default function CollectionEntryEditor({
     );
   }
 
-  if (collection.storage !== 'generic') {
+  if (collection.storage !== 'generic' || collection.client_id === null) {
     return (
       <>
         <Topbar title={collection.name} subtitle="Entry" />
