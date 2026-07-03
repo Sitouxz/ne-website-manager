@@ -11,6 +11,7 @@
  *   supabase.from('clients').delete().eq('id', id)
  *   supabase.from('posts').select('*').eq(...).order(...).range(from, to)
  *   supabase.from('posts').select('id', { count: 'exact', head: true }).eq(...)
+ *   supabase.from('posts').update({...}).eq('status', 'scheduled').lte('scheduled_at', now).select()
  *
  * Fixtures are copied on the way in and mutated in place by insert/update/
  * delete, so successive queries against the same mock client observe each
@@ -95,6 +96,21 @@ class QueryBuilder<T = Row, Single extends boolean = false>
   in(column: string, values: unknown[]): this {
     const set = new Set(values);
     this.rows = this.rows.filter((row) => set.has(row[column]));
+    return this;
+  }
+
+  /**
+   * Postgrest-style `lte` (`<=`). `null`/`undefined` values never match —
+   * mirrors real Postgres, where `null <= x` is unknown (not true), and lets
+   * e.g. `.eq('status', 'scheduled').lte('scheduled_at', now)` correctly
+   * exclude rows whose `scheduled_at` has already been cleared to `null`.
+   */
+  lte(column: string, value: unknown): this {
+    this.rows = this.rows.filter((row) => {
+      const v = row[column];
+      if (v === null || v === undefined) return false;
+      return (v as never) <= (value as never);
+    });
     return this;
   }
 
