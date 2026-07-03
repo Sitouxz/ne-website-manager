@@ -6,7 +6,7 @@ import { createClient } from '@/lib/supabase/client';
 import {
   LayoutDashboard, FileText, FileEdit, Image, BarChart2,
   Search, Users, Settings, Megaphone, Mail,
-  ChevronDown, LogOut, Globe, ShieldCheck, Home,
+  ChevronDown, LogOut, Globe, ShieldCheck, Home, Boxes,
 } from 'lucide-react';
 import type { Client, Role } from '@/lib/supabase/types';
 
@@ -28,6 +28,7 @@ const NAV: NavGroup[] = [
       { label: 'Properties',    href: '/cms/properties', icon: Home },
       { label: 'Pages',         href: '/cms/pages',      icon: FileEdit },
       { label: 'Media Library', href: '/cms/media',      icon: Image },
+      { label: 'Collections',   href: '/cms/collections', icon: Boxes },
     ],
   },
   {
