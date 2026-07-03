@@ -239,53 +239,58 @@ CREATE POLICY "preview_tokens_all" ON public.preview_tokens FOR ALL USING (clien
 
 This is what makes the CMS fit *any* NE-built site. `properties` proved the pattern (real-estate vertical hardcoded as a table + editor + API). Collections generalize it: NE defines a content type per client in the dashboard; entry editor and public API are generated from the field schema. **Properties stays as-is** (live site) — new verticals use collections.
 
-### Task 4.1: Schema
+> **Reconciled 2026-07-03:** this schema already existed live (`collections`/`collection_items`/`menu_items`, applied via the Supabase dashboard as migration `003_collections`, predating and independent of this repo's tracking — see `supabase/migrations/007_document_existing_collections_schema.sql` and its README note). It is richer than originally drafted here (a `storage: 'generic'|'native'` split, `client_id IS NULL` global/system collections) — Phase 4 adopts it rather than building a parallel `collection_entries` design. The tasks below are rewritten against the real schema. Table is `collection_items`, not `collection_entries`; there is no `title` column — display title is derived from `data` via a designated title field (see Task 4.1).
+>
+> **Explicitly deferred, not part of Phase 4:** `storage: 'native'` collections (a collection backed by an existing `posts`/`pages`/`properties` table instead of `collection_items`) and `client_id IS NULL` global/system collection templates — both exist as schema hooks with zero rows and zero code today, and building for them now would be speculative. Phase 4 targets `storage: 'generic'`, per-client collections only. `menu_items` (sidebar/public nav, already schema-and-RLS-complete, zero code) is **also deferred** — its `location: 'public'` use case likely supersedes Phase 5.1's planned `site_globals.navigation` key, but that's a product decision to make when Phase 5 is reached, not now.
+
+### Task 4.1: Types + validation
 
 **Files:**
-- Create: `supabase/migrations/007_collections.sql`
-
-```sql
--- 007_collections.sql
-CREATE TABLE IF NOT EXISTS public.collections (
-  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  client_id   UUID REFERENCES public.clients(id) ON DELETE CASCADE NOT NULL,
-  name        TEXT NOT NULL,                 -- 'Sermons', 'Menu Items', 'Team'
-  slug        TEXT NOT NULL,                 -- 'sermons'
-  icon        TEXT DEFAULT 'database',       -- lucide icon name for sidebar
-  fields      JSONB NOT NULL DEFAULT '[]',   -- ordered field definitions, see FieldDef below
-  created_at  TIMESTAMPTZ DEFAULT now(),
-  updated_at  TIMESTAMPTZ DEFAULT now(),
-  UNIQUE(client_id, slug)
-);
-CREATE TABLE IF NOT EXISTS public.collection_entries (
-  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  collection_id UUID REFERENCES public.collections(id) ON DELETE CASCADE NOT NULL,
-  client_id     UUID REFERENCES public.clients(id) ON DELETE CASCADE NOT NULL,
-  slug          TEXT NOT NULL DEFAULT '',
-  title         TEXT NOT NULL DEFAULT '',    -- denormalized display field
-  data          JSONB NOT NULL DEFAULT '{}', -- keyed by field key
-  status        TEXT DEFAULT 'draft' CHECK (status IN ('draft','published','archived')),
-  sort_order    INTEGER DEFAULT 0,
-  published_at  TIMESTAMPTZ,
-  created_at    TIMESTAMPTZ DEFAULT now(),
-  updated_at    TIMESTAMPTZ DEFAULT now(),
-  UNIQUE(collection_id, slug)
-);
-CREATE INDEX IF NOT EXISTS collection_entries_lookup_idx ON public.collection_entries (collection_id, status, sort_order);
-CREATE OR REPLACE TRIGGER collections_updated_at BEFORE UPDATE ON public.collections FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
-CREATE OR REPLACE TRIGGER collection_entries_updated_at BEFORE UPDATE ON public.collection_entries FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
-ALTER TABLE public.collections ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.collection_entries ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "collections_auth" ON public.collections FOR ALL USING (client_id = my_client_id() OR is_ne_admin());
-CREATE POLICY "collections_public_read" ON public.collections FOR SELECT USING (true);
-CREATE POLICY "entries_auth" ON public.collection_entries FOR ALL USING (client_id = my_client_id() OR is_ne_admin());
-CREATE POLICY "entries_public_read" ON public.collection_entries FOR SELECT USING (status = 'published');
-```
-
-**Interfaces (locked for all of Phase 4 + SDK):**
+- Create: `src/lib/supabase/types.ts` additions — `Collection` and `CollectionItem` interfaces matching the live schema exactly:
 
 ```ts
-// src/lib/collections/types.ts
+export type CollectionStorage = 'generic' | 'native';
+export type CollectionItemStatus = 'draft' | 'published' | 'archived';
+
+export interface Collection {
+  id: string;
+  client_id: string | null;        // null = global/system template (out of scope for Phase 4 UI)
+  slug: string;
+  name: string;
+  name_singular: string;
+  icon: string | null;
+  description: string | null;
+  storage: CollectionStorage;      // Phase 4 only builds 'generic'
+  native_table: 'posts' | 'pages' | 'properties' | null;
+  fields: FieldDef[];              // see below — this repo's contract, schema column is JSONB
+  options: CollectionOptions;
+  is_system: boolean;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CollectionOptions {
+  title_field?: string;   // FieldDef.key whose value is shown as the item's display title (no denormalized title column exists)
+}
+
+export interface CollectionItem {
+  id: string;
+  collection_id: string;
+  client_id: string;
+  slug: string;
+  status: CollectionItemStatus;
+  data: Record<string, unknown>;   // keyed by FieldDef.key
+  sort_order: number;
+  published_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+```
+
+- Create: `src/lib/collections/types.ts`
+
+```ts
 export type FieldType =
   | 'text' | 'textarea' | 'richtext' | 'number' | 'boolean'
   | 'date' | 'select' | 'multiselect' | 'image' | 'gallery'
@@ -301,27 +306,28 @@ export interface FieldDef {
 }
 ```
 
-- [ ] Migration + types; commit `feat: collections schema`
-
-### Task 4.2: Validation + collection admin UI (ne_admin builds schemas)
-
-**Files:**
 - Create: `src/lib/collections/validate.ts` — `validateEntry(fields: FieldDef[], data: Record<string, unknown>)` → `{ ok: true } | { ok: false, errors: Record<string, string> }`; also `validateFieldDefs(fields)` (unique keys, snake_case, options present for selects)
 - Test: `src/lib/collections/validate.test.ts` (TDD — this is core logic)
-- Create: `src/app/(app)/cms/collections/page.tsx` — list collections for selected client + "New Collection" (ne_admin only)
-- Create: `src/app/(app)/cms/collections/[id]/schema/page.tsx` — field builder: add/remove/reorder fields, type picker, options editor
 
 - [ ] TDD both validators exhaustively (each field type, required, bad key)
+- [ ] Commit `feat: collections types and validation`
+
+### Task 4.2: Collection admin UI (ne_admin builds schemas)
+
+**Files:**
+- Create: `src/app/(app)/cms/collections/page.tsx` — list `storage='generic'` collections for the selected client (hide/badge `native`/global ones, don't build editors for them) + "New Collection" (ne_admin only, always creates with the selected client's `client_id`, never null)
+- Create: `src/app/(app)/cms/collections/[id]/schema/page.tsx` — field builder: add/remove/reorder fields, type picker, options editor, plus a "Title field" selector (populates `collections.options.title_field`) so the entry list/editor know which field to show as each item's display name
+
 - [ ] Build schema builder UI
 - [ ] Commit `feat: collection schema builder`
 
 ### Task 4.3: Generic entry editor + list
 
 **Files:**
-- Create: `src/app/(app)/cms/collections/[id]/page.tsx` — entries table (title, slug, status, updated), drag sort → `sort_order`
-- Create: `src/app/(app)/cms/collections/[id]/entries/[entryId]/page.tsx` — renders form from `FieldDef[]`: text→Input, richtext→RichTextEditor, image→MediaPicker, gallery→multi MediaPicker, select→Select, etc.; validates via `validateEntry` before save; revisions + activity log like posts
+- Create: `src/app/(app)/cms/collections/[id]/page.tsx` — entries table (derived title via `options.title_field` falling back to slug, status, updated), drag sort → `sort_order`
+- Create: `src/app/(app)/cms/collections/[id]/entries/[entryId]/page.tsx` — renders form from `FieldDef[]`: text→Input, richtext→RichTextEditor, image→MediaPicker, gallery→multi MediaPicker, select→Select, etc.; validates via `validateEntry` before save; revisions + activity log like posts (`entity_type: 'collection_entry'`, already in the `revisions`/`activity_log` vocabulary from Phases 1/3 — no schema change needed there)
 - Create: `src/components/collections/FieldInput.tsx` — `{ def: FieldDef, value: unknown, onChange: (v: unknown) => void }` switch component
-- Modify: `src/components/Sidebar.tsx` — under Content, render client's collections dynamically (fetch in `AppShell`/layout, pass down)
+- Modify: `src/components/Sidebar.tsx` — under Content, render client's `storage='generic'` collections dynamically (fetch in `AppShell`/layout, pass down)
 
 - [ ] Build FieldInput (unit test the switch renders right control per type)
 - [ ] Entry editor + list wired end-to-end
@@ -330,11 +336,11 @@ export interface FieldDef {
 ### Task 4.4: Public collections API
 
 **Files:**
-- Create: `src/app/api/client/[slug]/collections/[collection]/route.ts` — `GET` published entries `{ id, slug, title, data, published_at, updated_at }[]`, pagination from Task 1.3, `?sort=sort_order|published_at`; CORS + OPTIONS
-- Create: `src/app/api/client/[slug]/collections/[collection]/[entrySlug]/route.ts` — single entry; drafts visible only with valid API key (Task 1.3) or preview token
+- Create: `src/app/api/client/[slug]/collections/[collection]/route.ts` — `GET` published `collection_items` for `storage='generic'` collections only (404 for unknown slug or a `native`/global collection — not supported by this route), shape `{ id, slug, data, published_at, updated_at }[]`, pagination from Task 1.3, `?sort=sort_order|published_at`; CORS + OPTIONS
+- Create: `src/app/api/client/[slug]/collections/[collection]/[itemSlug]/route.ts` — single item; drafts visible only with valid API key (Task 1.3) or preview token (Task 3.1's `preview_tokens`, `entity_type: 'collection_entry'`)
 - Test: both routes
 
-- [ ] TDD: published only for anon; keyed access sees drafts; 404 unknown collection
+- [ ] TDD: published only for anon; keyed access sees drafts; 404 unknown collection; 404 (not 500) for a `native`/global collection slug
 - [ ] Commit `feat: public collections API`
 
 ---
