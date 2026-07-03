@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Image as ImageIcon, X, Plus, AlertCircle } from 'lucide-react';
 import RichTextEditor from '@/components/editor/RichTextEditor';
 import MediaPicker from '@/components/MediaPicker';
@@ -342,6 +342,10 @@ function GalleryFieldInput({
   );
 }
 
+function stringifyJsonValue(value: FieldInputValue): string {
+  return JSON.stringify(value ?? {}, null, 2);
+}
+
 function JsonFieldInput({
   value,
   onChange,
@@ -353,17 +357,43 @@ function JsonFieldInput({
   // in-progress, possibly-invalid JSON while typing — re-deriving the text
   // from `value` on every keystroke would either fight the user's cursor or
   // require parsing on every keystroke (which is exactly what "parse on
-  // blur, don't silently swallow invalid JSON" rules out). The initializer
-  // only runs once per mount; this component isn't expected to have its
-  // `value` prop changed externally after the entry editor's initial load
-  // (see the entry editor's loading gate), so no re-sync effect is needed.
-  const [text, setText] = useState(() => JSON.stringify(value ?? {}, null, 2));
+  // blur, don't silently swallow invalid JSON" rules out).
+  //
+  // `value` CAN change externally after mount: `FieldInput` instances use a
+  // stable `key={f.key}` in the entry editor and are never remounted, so the
+  // entry editor's revision-Restore flow (`applyItemToForm`/`setForm`) can
+  // update `form.data[key]` — and therefore this `value` prop — on an
+  // already-mounted instance. Without a resync, the textarea would keep
+  // showing the pre-restore text, and blurring it unedited would silently
+  // revert the just-restored value on the next save.
+  //
+  // Re-synced the same way `RichTextEditor` (Phase 3) handles the identical
+  // problem: `lastSyncedRef` remembers, as a JSON string, the value this
+  // component itself last knew about (whether from an incoming prop or its
+  // own `onChange`). The effect below only overwrites `text` when the
+  // incoming `value` serializes to something *different* from that ref —
+  // i.e. genuinely new external data, not this component's own `onChange`
+  // echoed straight back down. `handleBlur` updates the ref *before* calling
+  // `onChange`, so the echo is recognized and the effect no-ops instead of
+  // clobbering whatever the user has typed since.
+  const initialText = stringifyJsonValue(value);
+  const lastSyncedRef = useRef<string>(initialText);
+  const [text, setText] = useState(() => initialText);
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    const incoming = stringifyJsonValue(value);
+    if (incoming === lastSyncedRef.current) return;
+    lastSyncedRef.current = incoming;
+    setText(incoming);
+    setError('');
+  }, [value]);
 
   function handleBlur() {
     try {
       const parsed = JSON.parse(text);
       setError('');
+      lastSyncedRef.current = stringifyJsonValue(parsed);
       onChange(parsed);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Invalid JSON');

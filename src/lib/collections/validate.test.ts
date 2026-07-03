@@ -101,13 +101,13 @@ describe('validateEntry', () => {
     ];
     const data = {
       title: 'Hello',
-      body: '<p>Hi</p>',
+      body: { json: { type: 'doc', content: [] }, html: '<p>Hi</p>' },
       price: 10,
       in_stock: true,
       release_date: '2026-01-01',
       category: 'a',
       tags: ['x', 'y'],
-      cover: 'https://example.com/cover.jpg',
+      cover: { url: 'https://example.com/cover.jpg', alt: null },
       photos: ['https://example.com/1.jpg'],
       website: 'https://example.com',
       contact: 'test@example.com',
@@ -243,21 +243,17 @@ describe('validateEntry', () => {
     });
   });
 
-  describe('presence-only types (text, textarea, richtext, date, image, gallery)', () => {
+  describe('presence-only types (text, textarea, date, gallery)', () => {
     it('passes for string values', () => {
       const fields: FieldDef[] = [
         { key: 'title', label: 'Title', type: 'text' },
         { key: 'body', label: 'Body', type: 'textarea' },
-        { key: 'content', label: 'Content', type: 'richtext' },
         { key: 'release_date', label: 'Release date', type: 'date' },
-        { key: 'cover', label: 'Cover', type: 'image' },
       ];
       const data = {
         title: 'a',
         body: 'b',
-        content: 'c',
         release_date: '2026-01-01',
-        cover: 'https://example.com/x.jpg',
       };
       expect(validateEntry(fields, data)).toEqual({ ok: true });
     });
@@ -279,6 +275,67 @@ describe('validateEntry', () => {
       const result = validateEntry(fields, { title: 123 });
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.errors.title).toBeDefined();
+    });
+  });
+
+  describe('richtext type', () => {
+    const fields: FieldDef[] = [{ key: 'body', label: 'Body', type: 'richtext' }];
+
+    it('passes for a valid { json, html } value', () => {
+      const result = validateEntry(fields, {
+        body: { json: { type: 'doc', content: [] }, html: '<p>Hi</p>' },
+      });
+      expect(result).toEqual({ ok: true });
+    });
+
+    it('fails for a plain string (the old, no-longer-supported shape)', () => {
+      const result = validateEntry(fields, { body: '<p>Hi</p>' });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.errors.body).toBeDefined();
+    });
+
+    it('fails for an object missing html', () => {
+      const result = validateEntry(fields, { body: { json: { type: 'doc' } } });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.errors.body).toBeDefined();
+    });
+
+    it('fails for an object missing json', () => {
+      const result = validateEntry(fields, { body: { html: '<p>Hi</p>' } });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.errors.body).toBeDefined();
+    });
+  });
+
+  describe('image type', () => {
+    const fields: FieldDef[] = [{ key: 'cover', label: 'Cover', type: 'image' }];
+
+    it('passes for a valid { url, alt } value with a string alt', () => {
+      expect(validateEntry(fields, { cover: { url: 'https://example.com/x.jpg', alt: 'A cover' } }))
+        .toEqual({ ok: true });
+    });
+
+    it('passes for a valid { url, alt } value with a null alt', () => {
+      expect(validateEntry(fields, { cover: { url: 'https://example.com/x.jpg', alt: null } }))
+        .toEqual({ ok: true });
+    });
+
+    it('fails for a plain string (the old, no-longer-supported shape)', () => {
+      const result = validateEntry(fields, { cover: 'https://example.com/x.jpg' });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.errors.cover).toBeDefined();
+    });
+
+    it('fails when url is missing', () => {
+      const result = validateEntry(fields, { cover: { alt: null } });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.errors.cover).toBeDefined();
+    });
+
+    it('fails when url is not a string', () => {
+      const result = validateEntry(fields, { cover: { url: 123, alt: null } });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.errors.cover).toBeDefined();
     });
   });
 

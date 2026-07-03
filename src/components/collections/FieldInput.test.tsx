@@ -215,4 +215,27 @@ describe('FieldInput', () => {
     // Invalid JSON must not silently overwrite the last good value.
     expect(onChange).not.toHaveBeenCalledWith(undefined);
   });
+
+  it('json: resyncs its textarea when value changes externally (e.g. a revision Restore)', () => {
+    const onChange = vi.fn();
+    const { rerender } = render(
+      <FieldInput def={def({ type: 'json' })} value={{ a: 1 }} onChange={onChange} />
+    );
+
+    const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
+    expect(textarea.value).toContain('"a": 1');
+
+    // Simulate the entry editor's revision-Restore flow: the same mounted
+    // `FieldInput` instance (stable `key={f.key}`) receives a brand-new
+    // `value` prop from `setForm`, without the user ever touching the field.
+    rerender(<FieldInput def={def({ type: 'json' })} value={{ b: 2 }} onChange={onChange} />);
+
+    expect(textarea.value).toContain('"b": 2');
+    expect(textarea.value).not.toContain('"a": 1');
+
+    // Blurring the now-current (unedited) textarea must persist the
+    // restored value, not silently revert to the pre-restore one.
+    fireEvent.blur(textarea);
+    expect(onChange).toHaveBeenCalledWith({ b: 2 });
+  });
 });

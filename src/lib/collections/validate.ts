@@ -70,11 +70,19 @@ export function validateFieldDefs(fields: FieldDef[]): ValidateFieldDefsResult {
  *    - `url` -> must parse via `new URL(value)`
  *    - `gallery` -> must be an array
  *    - `json` -> must be a non-null object or an array (not a primitive)
- *  - For `text`, `textarea`, `richtext`, `date`, `image` — no cheap format
- *    check is meaningful (the brief explicitly calls these out), so we
- *    only check the value is a string when present. This is deliberately
- *    not exhaustive (e.g. we don't validate `date` is a real date, or that
- *    `image` is a real URL) — over-validating these was out of scope.
+ *    - `richtext` -> must be an object shaped `{ json, html }` per
+ *      `FieldInput.tsx`'s data-shape contract: `json` a non-null object,
+ *      `html` a string. This mirrors what `RichTextEditor.onChange` always
+ *      produces in lockstep, so any populated `richtext` value has both.
+ *    - `image` -> must be an object shaped `{ url, alt }` per the same
+ *      contract: `url` a non-empty string (cheap presence check only — not
+ *      validated as a real URL, keeping this check cheap per the brief),
+ *      `alt` either a string or `null` (both are valid per the contract).
+ *  - For `text`, `textarea`, `date` — no cheap format check is meaningful
+ *    (the brief explicitly calls these out), so we only check the value is
+ *    a string when present. This is deliberately not exhaustive (e.g. we
+ *    don't validate `date` is a real date) — over-validating these was out
+ *    of scope.
  *  - Fields absent from `data` and not `required` are fine (no error).
  *  - Keys present in `data` with no matching `FieldDef` are silently
  *    ignored — this function validates data against the schema, not the
@@ -126,11 +134,31 @@ function checkType(type: FieldType, value: unknown, options: string[] | undefine
       return Array.isArray(value) ? null : 'must be an array';
     case 'json':
       return typeof value === 'object' && value !== null ? null : 'must be an object or array';
+    case 'richtext': {
+      // Per FieldInput.tsx's data-shape contract: `{ json: Record<string,
+      // unknown>; html: string }`, produced in lockstep by
+      // RichTextEditor.onChange. Not a string (unlike text/textarea/date).
+      if (typeof value !== 'object' || value === null) return 'must be a rich text value with json and html';
+      const v = value as { json?: unknown; html?: unknown };
+      const jsonOk = typeof v.json === 'object' && v.json !== null;
+      const htmlOk = typeof v.html === 'string';
+      return jsonOk && htmlOk ? null : 'must be a rich text value with json and html';
+    }
+    case 'image': {
+      // Per FieldInput.tsx's data-shape contract: `{ url: string; alt: string
+      // | null }`. `url` is checked for non-empty presence only — validating
+      // it's a plausible URL shape would duplicate the `url` field type's
+      // `isValidUrl` check for marginal benefit and isn't required by the
+      // contract.
+      if (typeof value !== 'object' || value === null) return 'must be an image value with a url';
+      const v = value as { url?: unknown; alt?: unknown };
+      const urlOk = typeof v.url === 'string' && v.url.trim() !== '';
+      const altOk = v.alt === null || typeof v.alt === 'string';
+      return urlOk && altOk ? null : 'must be an image value with a url';
+    }
     case 'text':
     case 'textarea':
-    case 'richtext':
     case 'date':
-    case 'image':
       return typeof value === 'string' ? null : 'must be a string';
     default:
       return null;
