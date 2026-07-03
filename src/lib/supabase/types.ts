@@ -1,3 +1,5 @@
+import type { FieldDef } from '@/lib/collections/types';
+
 export type Role = 'ne_admin' | 'client_admin' | 'editor';
 export type PostStatus = 'draft' | 'in_review' | 'scheduled' | 'published' | 'archived';
 export type PageStatus = 'draft' | 'published';
@@ -123,4 +125,42 @@ export interface PreviewToken {
   token: string;
   expires_at: string;
   created_at: string;
+}
+
+export type CollectionStorage = 'generic' | 'native';
+export type CollectionItemStatus = 'draft' | 'published' | 'archived';
+
+export interface Collection {
+  id: string;
+  client_id: string | null; // null = global/system template (out of scope for Phase 4 UI)
+  slug: string;
+  name: string;
+  name_singular: string;
+  icon: string | null;
+  description: string | null;
+  storage: CollectionStorage; // Phase 4 only builds 'generic'
+  native_table: 'posts' | 'pages' | 'properties' | null;
+  fields: FieldDef[]; // this repo's contract, schema column is JSONB
+  options: CollectionOptions;
+  is_system: boolean;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CollectionOptions {
+  title_field?: string; // FieldDef.key whose value is shown as the item's display title (no denormalized title column exists)
+}
+
+export interface CollectionItem {
+  id: string;
+  collection_id: string;
+  client_id: string;
+  slug: string;
+  status: CollectionItemStatus;
+  data: Record<string, unknown>; // keyed by FieldDef.key
+  sort_order: number;
+  published_at: string | null;
+  created_at: string;
+  updated_at: string;
 }
