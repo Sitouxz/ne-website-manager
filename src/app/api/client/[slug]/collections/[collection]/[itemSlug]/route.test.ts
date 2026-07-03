@@ -187,6 +187,53 @@ describe('GET /api/client/[slug]/collections/[collection]/[itemSlug] — visibil
 
     expect(res.status).toBe(404);
   });
+
+  it('a preview token minted for a different client does not unlock a same-slugged draft item under this client', async () => {
+    // Client A ("acme") and Client B ("other") each have their own generic
+    // collection and their own draft item — Client B's item happens to share
+    // its slug/entity_id shape with what a real attacker might guess. The
+    // preview token here correctly names Client B's item as its entity_id,
+    // but was minted with Client A's client_id. It must NOT unlock Client
+    // B's item: that would mean a token minted for one client's draft could
+    // be replayed against a different client's URL.
+    const OTHER_CLIENT = { id: 'client-2', slug: 'other' };
+    const OTHER_COLLECTION = { ...GENERIC_COLLECTION, id: 'col-2', client_id: 'client-2' };
+    const OTHER_CLIENT_DRAFT_ITEM = {
+      id: 'item-other-draft',
+      collection_id: 'col-2',
+      client_id: 'client-2',
+      slug: 'draft-one',
+      status: 'draft',
+      data: { title: 'Other Client Draft' },
+      sort_order: 1,
+      published_at: null,
+      created_at: '2024-01-01',
+      updated_at: '2024-01-01',
+    };
+
+    setAdmin(fixtures({
+      clients: [CLIENT, OTHER_CLIENT],
+      collections: [GENERIC_COLLECTION, NATIVE_COLLECTION, GLOBAL_COLLECTION, OTHER_COLLECTION],
+      collection_items: [PUBLISHED_ITEM, DRAFT_ITEM, OTHER_CLIENT_DRAFT_ITEM],
+      preview_tokens: [{
+        id: 'pt-1',
+        client_id: 'client-1', // minted for Client A ("acme")
+        entity_type: 'collection_entry',
+        entity_id: 'item-other-draft', // correctly names Client B's draft item
+        token: 'cross-client-token',
+        expires_at: '2099-01-01T00:00:00Z',
+      }],
+    }));
+
+    // Request goes to Client B's ("other") URL for its own draft item, using
+    // the token minted for Client A ("acme").
+    const res = await GET(
+      new Request('https://example.com/api/client/other/collections/faq/draft-one?preview_token=cross-client-token'),
+      { params: Promise.resolve({ slug: 'other', collection: 'faq', itemSlug: 'draft-one' }) }
+    );
+
+    expect(res.status).toBe(404);
+  });
 });
 
 describe('GET /api/client/[slug]/collections/[collection]/[itemSlug] — 404s', () => {
