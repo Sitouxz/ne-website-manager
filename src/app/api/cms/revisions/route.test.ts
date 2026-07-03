@@ -103,7 +103,7 @@ describe('POST /api/cms/revisions', () => {
     setSupabase(supabaseFor(USER, { revisions: [], posts: [] }));
     setAdmin();
 
-    const res = await POST(postReq({ entity_type: 'page', entity_id: 'page-1', revision_id: 'r1' }));
+    const res = await POST(postReq({ entity_type: 'property', entity_id: 'property-1', revision_id: 'r1' }));
     const body = await res.json();
 
     expect(res.status).toBe(400);
@@ -152,5 +152,76 @@ describe('POST /api/cms/revisions', () => {
     // Live row was actually updated.
     const { data: postRows } = await supabase.from('posts').select('*').eq('id', 'post-1').single();
     expect(postRows?.title).toBe('Old Title');
+  });
+
+  it('returns 404 for a page when the revision_id does not resolve to a visible row', async () => {
+    setSupabase(supabaseFor(USER, { revisions: [], pages: [{ id: 'page-1', client_id: 'c1', title: 'Current' }] }));
+    setAdmin();
+
+    const res = await POST(postReq({ entity_type: 'page', entity_id: 'page-1', revision_id: 'missing' }));
+
+    expect(res.status).toBe(404);
+  });
+
+  it('returns 404 for a page when the page itself does not exist', async () => {
+    setSupabase(supabaseFor(USER, {
+      pages: [],
+      revisions: [{
+        id: 'r1', client_id: 'c1', entity_type: 'page', entity_id: 'page-1',
+        snapshot: { title: 'Old Title' }, author_id: 'user-1', created_at: '2026-01-01T00:00:00Z',
+      }],
+    }));
+    setAdmin();
+
+    const res = await POST(postReq({ entity_type: 'page', entity_id: 'page-1', revision_id: 'r1' }));
+
+    expect(res.status).toBe(404);
+  });
+
+  it('restores the snapshot onto the live page row (not the posts table), snapshots the pre-restore state first, and returns the restored row', async () => {
+    const supabase = supabaseFor(USER, {
+      pages: [{
+        id: 'page-1', client_id: 'c1', title: 'Current Title', path: '/current-title',
+        content: '<p>current</p>', content_json: null, status: 'draft', visibility: 'public',
+        seo_title: null, seo_description: null,
+      }],
+      posts: [{
+        id: 'post-1', client_id: 'c1', title: 'Unrelated post', slug: 'unrelated',
+      }],
+      revisions: [{
+        id: 'r1', client_id: 'c1', entity_type: 'page', entity_id: 'page-1',
+        snapshot: {
+          title: 'Old Title', path: '/old-title', content: '<p>old</p>', content_json: null,
+          status: 'draft', visibility: 'private', seo_title: null, seo_description: null,
+        },
+        author_id: 'user-1', created_at: '2026-01-01T00:00:00Z',
+      }],
+    });
+    setSupabase(supabase);
+    setAdmin();
+
+    const res = await POST(postReq({ entity_type: 'page', entity_id: 'page-1', revision_id: 'r1' }));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.title).toBe('Old Title');
+    expect(body.path).toBe('/old-title');
+    expect(body.visibility).toBe('private');
+
+    // Pre-restore snapshot of the CURRENT (pre-restore) page row was inserted.
+    const { data: revisionRows } = await supabase.from('revisions').select('*');
+    expect(revisionRows).toHaveLength(2);
+    const preRestoreSnapshot = (revisionRows as Array<{ id: string; entity_type: string; snapshot: { title: string } }>).find((r) => r.id !== 'r1');
+    expect(preRestoreSnapshot?.entity_type).toBe('page');
+    expect(preRestoreSnapshot?.snapshot.title).toBe('Current Title');
+
+    // Live page row was actually updated — via the `pages` table, not `posts`.
+    const { data: pageRows } = await supabase.from('pages').select('*').eq('id', 'page-1').single();
+    expect(pageRows?.title).toBe('Old Title');
+    expect(pageRows?.path).toBe('/old-title');
+
+    // The unrelated post row was untouched.
+    const { data: postRows } = await supabase.from('posts').select('*').eq('id', 'post-1').single();
+    expect(postRows?.title).toBe('Unrelated post');
   });
 });

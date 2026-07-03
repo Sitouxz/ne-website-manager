@@ -1,38 +1,55 @@
-import Topbar from '@/components/Topbar';
-import { cookies } from 'next/headers';
-import { createClient } from '@/lib/supabase/server';
-import { Globe, Lock } from 'lucide-react';
-import type { Page, Profile } from '@/lib/supabase/types';
+'use client';
 
-const SELECTED_CLIENT_COOKIE = 'ne_selected_client_id';
+import Topbar from '@/components/Topbar';
+import Link from 'next/link';
+import { useCallback, useEffect, useState } from 'react';
+import { Plus, Globe, Lock, MoreHorizontal, Edit, Trash2, Loader2 } from 'lucide-react';
+import { createClient } from '@/lib/supabase/client';
+import { useSelectedClient } from '@/components/AppShell';
+import type { Page } from '@/lib/supabase/types';
 
 function fmtDate(iso: string | null) {
   if (!iso) return 'Never';
   return new Date(iso).toLocaleDateString('en-SG', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
-export default async function PagesPage() {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+export default function PagesPage() {
+  const [pages,    setPages]    = useState<Page[]>([]);
+  const [loading,  setLoading]  = useState(true);
+  const [openMenu, setOpenMenu] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
+  const { selectedClientId } = useSelectedClient();
 
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('*, clients(*)')
-    .eq('id', user!.id)
-    .single() as { data: Profile | null };
+  const fetchPages = useCallback(async () => {
+    setLoading(true);
+    const supabase = createClient();
+    let query = supabase
+      .from('pages')
+      .select('*')
+      .order('path', { ascending: true });
+    if (selectedClientId) query = query.eq('client_id', selectedClientId);
+    const { data } = await query;
+    setPages((data ?? []) as Page[]);
+    setLoading(false);
+  }, [selectedClientId]);
 
-  const isAdmin = profile?.role === 'ne_admin';
-  const selectedClientId = isAdmin ? (await cookies()).get(SELECTED_CLIENT_COOKIE)?.value : null;
-  const clientId = selectedClientId ?? profile?.client_id;
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      fetchPages();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [fetchPages]);
 
-  let query = supabase
-    .from('pages')
-    .select('*')
-    .order('path', { ascending: true });
-  if (clientId) query = query.eq('client_id', clientId);
+  async function handleDelete(id: string) {
+    if (!confirm('Delete this page? This cannot be undone.')) return;
+    setDeleting(id);
+    const supabase = createClient();
+    await supabase.from('pages').delete().eq('id', id);
+    setPages((prev) => prev.filter((p) => p.id !== id));
+    setDeleting(null);
+    setOpenMenu(null);
+  }
 
-  const { data = [] } = await query;
-  const pages = (data ?? []) as Page[];
   const publicCount = pages.filter((page) => page.status === 'published' && page.visibility === 'public').length;
 
   return (
@@ -40,12 +57,17 @@ export default async function PagesPage() {
       <Topbar title="Pages" subtitle={`${pages.length} CMS-managed pages`} />
       <div className="page-body">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, gap: 12, flexWrap: 'wrap' }}>
-          <p style={{ fontSize: 13.5, color: 'var(--fg3)', margin: 0 }}>
-            These records come directly from Supabase and are exposed through the public pages API when published and public.
-          </p>
-          <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ne-blue)', background: 'var(--ne-blue-bg)', border: '1px solid var(--ne-blue-muted)', borderRadius: 99, padding: '6px 12px' }}>
-            {publicCount} public
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <p style={{ fontSize: 13.5, color: 'var(--fg3)', margin: 0 }}>
+              These records are exposed through the public pages API when published and public.
+            </p>
+            <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ne-blue)', background: 'var(--ne-blue-bg)', border: '1px solid var(--ne-blue-muted)', borderRadius: 99, padding: '6px 12px' }}>
+              {publicCount} public
+            </div>
           </div>
+          <Link href="/cms/pages/new" className="btn-ne">
+            <Plus size={15} /> New Page
+          </Link>
         </div>
 
         <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
@@ -58,19 +80,30 @@ export default async function PagesPage() {
                   <th>Status</th>
                   <th>Visibility</th>
                   <th>Last Updated</th>
+                  <th style={{ width: 40 }}></th>
                 </tr>
               </thead>
               <tbody>
-                {pages.length === 0 ? (
+                {loading ? (
                   <tr>
-                    <td colSpan={5} style={{ textAlign: 'center', padding: 48, color: 'var(--fg3)' }}>
-                      No CMS-managed pages found for this site.
+                    <td colSpan={6} style={{ textAlign: 'center', padding: 48, color: 'var(--fg3)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                        <Loader2 size={16} style={{ animation: 'spin .6s linear infinite' }} /> Loading pages...
+                      </div>
+                    </td>
+                  </tr>
+                ) : pages.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} style={{ textAlign: 'center', padding: 48, color: 'var(--fg3)' }}>
+                      No CMS-managed pages found for this site. Create your first page!
                     </td>
                   </tr>
                 ) : pages.map((page) => (
-                  <tr key={page.id}>
+                  <tr key={page.id} style={{ position: 'relative' }}>
                     <td style={{ paddingLeft: 20 }}>
-                      <div style={{ fontWeight: 600, fontSize: 13.5, color: 'var(--fg1)' }}>{page.title || '(Untitled)'}</div>
+                      <Link href={`/cms/pages/${page.id}`} style={{ color: 'var(--fg1)', textDecoration: 'none', fontWeight: 600, fontSize: 13.5 }}>
+                        {page.title || '(Untitled)'}
+                      </Link>
                     </td>
                     <td>
                       <code style={{ fontSize: 12, background: 'var(--surface-2)', padding: '2px 6px', borderRadius: 4, color: 'var(--fg2)' }}>{page.path}</code>
@@ -83,20 +116,43 @@ export default async function PagesPage() {
                       </span>
                     </td>
                     <td style={{ color: 'var(--fg3)', fontSize: 12 }}>{fmtDate(page.updated_at)}</td>
+                    <td style={{ position: 'relative' }}>
+                      <button
+                        onClick={() => setOpenMenu(openMenu === page.id ? null : page.id)}
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg3)', padding: 4, borderRadius: 4 }}
+                      >
+                        <MoreHorizontal size={16} />
+                      </button>
+                      {openMenu === page.id && (
+                        <div style={{ position: 'absolute', right: 12, top: 36, zIndex: 100, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', boxShadow: 'var(--shadow-md)', minWidth: 140, overflow: 'hidden' }}>
+                          <Link href={`/cms/pages/${page.id}`}
+                            style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '10px 14px', fontSize: 13, color: 'var(--fg1)', textDecoration: 'none' }}
+                            onClick={() => setOpenMenu(null)}>
+                            <Edit size={14} /> Edit
+                          </Link>
+                          <button
+                            style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '10px 14px', fontSize: 13, color: 'var(--ne-danger)', background: 'none', border: 'none', cursor: 'pointer', width: '100%' }}
+                            onClick={() => handleDelete(page.id)}
+                            disabled={deleting === page.id}
+                          >
+                            {deleting === page.id ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Trash2 size={14} />}
+                            Delete
+                          </button>
+                        </div>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-        </div>
 
-        <div style={{ marginTop: 20, background: 'var(--ne-blue-bg)', border: '1px solid var(--ne-blue-muted)', borderRadius: 'var(--r-md)', padding: '16px 20px', display: 'flex', gap: 12, alignItems: 'flex-start' }}>
-          <Globe size={18} color="var(--ne-blue)" style={{ flexShrink: 0, marginTop: 2 }} />
-          <p style={{ fontSize: 12.5, color: 'var(--fg2)', margin: 0 }}>
-            Page editing controls are hidden until a real page editor is implemented. For now this screen is a truthful inventory of pages currently managed by NE Website Manager.
-          </p>
+          <div style={{ padding: '12px 20px', borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: 12, color: 'var(--fg3)' }}>Showing {pages.length} pages</span>
+          </div>
         </div>
       </div>
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </>
   );
 }

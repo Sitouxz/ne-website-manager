@@ -10,11 +10,11 @@ import { parsePagination } from '@/lib/api/pagination';
  * `createClient()` — this route adds no further tenant checks beyond "is the
  * caller authenticated at all."
  *
- * Only `entity_type: 'post'` is wired end-to-end for Task 3.3 (the editor
- * this route serves). `page`/`property`/`collection_entry` are accepted by
- * the type (per the plan's forward-looking comment in migration 006) but
- * rejected with 400 here until a future phase actually restores them — YAGNI
- * beats speculative generalization.
+ * `entity_type: 'post'` (Task 3.3) and `'page'` (Task 3.5) are wired
+ * end-to-end. `property`/`collection_entry` are accepted by the type (per
+ * the plan's forward-looking comment in migration 006) but rejected with 400
+ * here until a future phase actually restores them — YAGNI beats speculative
+ * generalization.
  */
 
 type EntityType = 'post' | 'page' | 'property' | 'collection_entry';
@@ -35,13 +35,36 @@ const POST_SNAPSHOT_FIELDS = [
   'status', 'cover_url', 'seo_title', 'seo_description', 'scheduled_at', 'published_at',
 ] as const;
 
-function pickSnapshotFields(row: Record<string, unknown>): Record<string, unknown> {
+// The exact set of fields a revision `snapshot` carries for a `page` entity —
+// matches the `payload` the page editor
+// (`src/app/(app)/cms/pages/[id]/page.tsx`) writes to `pages` on every
+// save/autosave. Pages have no slug/excerpt/category/tags/cover/scheduling —
+// just a full route `path`, content, status (`draft`|`published` only),
+// visibility, and SEO fields.
+const PAGE_SNAPSHOT_FIELDS = [
+  'title', 'path', 'content', 'content_json', 'status', 'visibility',
+  'seo_title', 'seo_description',
+] as const;
+
+const SNAPSHOT_FIELDS_BY_ENTITY_TYPE: Record<string, readonly string[]> = {
+  post: POST_SNAPSHOT_FIELDS,
+  page: PAGE_SNAPSHOT_FIELDS,
+};
+
+function pickSnapshotFields(row: Record<string, unknown>, entityType: EntityType): Record<string, unknown> {
+  const fields = SNAPSHOT_FIELDS_BY_ENTITY_TYPE[entityType] ?? [];
   const snapshot: Record<string, unknown> = {};
-  for (const field of POST_SNAPSHOT_FIELDS) {
+  for (const field of fields) {
     if (field in row) snapshot[field] = row[field];
   }
   return snapshot;
 }
+
+/** Maps an `entity_type` to the table its live row lives in. */
+const TABLE_BY_ENTITY_TYPE: Record<string, string> = {
+  post: 'posts',
+  page: 'pages',
+};
 
 /**
  * Resolves `author_id -> full_name` via the service-role client for display
@@ -126,7 +149,8 @@ export async function POST(req: Request) {
     );
   }
 
-  if (entityType !== 'post') {
+  const table = TABLE_BY_ENTITY_TYPE[entityType];
+  if (!table) {
     return NextResponse.json(
       { error: `Restoring "${entityType}" revisions is not yet supported` },
       { status: 400 }
@@ -143,29 +167,29 @@ export async function POST(req: Request) {
 
   if (!revision) return NextResponse.json({ error: 'Revision not found' }, { status: 404 });
 
-  const { data: currentPost } = await supabase
-    .from('posts')
+  const { data: currentRow } = await supabase
+    .from(table)
     .select('*')
     .eq('id', entityId)
     .single();
 
-  if (!currentPost) return NextResponse.json({ error: 'Post not found' }, { status: 404 });
+  if (!currentRow) return NextResponse.json({ error: `${entityType === 'post' ? 'Post' : 'Page'} not found` }, { status: 404 });
 
   // Snapshot the pre-restore state first, so restoring is itself
   // non-destructively undoable (a second Restore click can always get back
   // to "right before this restore").
   await supabase.from('revisions').insert({
-    client_id: currentPost.client_id,
-    entity_type: 'post',
+    client_id: currentRow.client_id,
+    entity_type: entityType,
     entity_id: entityId,
-    snapshot: pickSnapshotFields(currentPost as Record<string, unknown>),
+    snapshot: pickSnapshotFields(currentRow as Record<string, unknown>, entityType),
     author_id: user.id,
   });
 
-  const restoreFields = pickSnapshotFields(revision.snapshot as Record<string, unknown>);
+  const restoreFields = pickSnapshotFields(revision.snapshot as Record<string, unknown>, entityType);
 
   const { data: restored, error: updateError } = await supabase
-    .from('posts')
+    .from(table)
     .update(restoreFields)
     .eq('id', entityId)
     .select()
