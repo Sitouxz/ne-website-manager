@@ -90,6 +90,38 @@ describe('RichTextEditor', () => {
     expect(screen.queryByText('Initial record')).toBeNull();
   });
 
+  it('does not call onChange when valueJson changes externally (no phantom autosave)', async () => {
+    // Regression test for the bug where the resync effect called
+    // `editor.commands.setContent(incoming)` with no options, which in this
+    // Tiptap version defaults `emitUpdate` to `true` — firing `onUpdate` (and
+    // therefore `onChange`) as if the user had typed, even though this was
+    // just an external prop change (e.g. async-loaded record data arriving,
+    // or a revision restore). That phantom onChange call is what triggers a
+    // real autosave write for content nobody actually edited.
+    const onChange = vi.fn();
+    const initial = {
+      type: 'doc',
+      content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Initial record' }] }],
+    };
+    const updated = {
+      type: 'doc',
+      content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Different record' }] }],
+    };
+
+    const { rerender } = render(
+      <RichTextEditor valueJson={initial} fallbackHtml="<p>fallback</p>" onChange={onChange} />
+    );
+    expect(await screen.findByText('Initial record')).toBeTruthy();
+    onChange.mockClear();
+
+    rerender(
+      <RichTextEditor valueJson={updated} fallbackHtml="<p>fallback</p>" onChange={onChange} />
+    );
+
+    expect(await screen.findByText('Different record')).toBeTruthy();
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   it('does not clobber an in-progress edit when onChange echoes back as valueJson', async () => {
     // Reproduces the realistic controlled-component pattern: the parent
     // stores whatever onChange reports and passes it straight back down as

@@ -162,7 +162,16 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(fun
       return;
     }
     lastSyncedContentRef.current = incomingKey;
-    editor.commands.setContent(incoming);
+    // `emitUpdate: false` because this is content this component is setting
+    // in response to an external prop change (new record loaded, revision
+    // restored, etc.) — not a user edit. Without this, Tiptap 3's default
+    // (`emitUpdate: true`) fires `onUpdate` -> `onChange` as if the user had
+    // typed, which downstream triggers a real (debounced) autosave write and
+    // revision snapshot for content nobody actually changed. `setContent`
+    // still updates the document/view either way; only the update event is
+    // suppressed, so `lastSyncedContentRef` (already updated above) keeps
+    // working for echo-detection.
+    editor.commands.setContent(incoming, { emitUpdate: false });
   }, [editor, valueJson, fallbackHtml]);
 
   useImperativeHandle<RichTextEditorHandle, RichTextEditorHandle>(
