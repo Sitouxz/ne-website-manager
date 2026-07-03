@@ -85,7 +85,7 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
   const [clientId,    setClientId]  = useState<string | null>(null);
   const [isAdmin,     setIsAdmin]   = useState(false);
   const [showImagePicker, setShowImagePicker] = useState(false);
-  const [autosaveState, setAutosaveState] = useState<'idle' | 'saving' | 'saved'>('idle');
+  const [autosaveState, setAutosaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [previewError, setPreviewError] = useState('');
   const [previewLoading, setPreviewLoading] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -220,9 +220,11 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
     if (isNew || loading || !clientId) return;
     if (skipNextAutosaveRef.current) { skipNextAutosaveRef.current = false; return; }
 
-    // Hide any stale "All changes saved" from a previous cycle the instant a
-    // new edit comes in — it shouldn't keep claiming "saved" for the 2s
-    // window before the next debounced write actually lands.
+    // Hide any stale "All changes saved" (or "Autosave failed") from a
+    // previous cycle the instant a new edit comes in — it shouldn't keep
+    // claiming "saved" for the 2s window before the next debounced write
+    // actually lands, and a fresh edit is the user's cue that we're about to
+    // try again (not an automatic retry — it only fires because they typed).
     setAutosaveState('idle');
 
     if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
@@ -230,11 +232,11 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
       setAutosaveState('saving');
       const supabase = createClient();
       const { data: { user } } = await supabase.auth.getUser();
-      if (!user) { setAutosaveState('idle'); return; }
+      if (!user) { setAutosaveState('error'); return; }
 
       const payload = buildContentPayload(form);
       const { error: err } = await supabase.from('posts').update(payload).eq('id', id);
-      if (err) { setAutosaveState('idle'); return; }
+      if (err) { setAutosaveState('error'); return; }
 
       setAutosaveState('saved');
       await maybeSnapshotRevision(supabase, user.id, id, clientId, payload, false);
@@ -413,7 +415,12 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
             {isAdmin && isNew && !clientId && <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ne-danger)', padding: '8px 14px', background: '#FEF2F2', borderRadius: 'var(--r-sm)' }}>Select a client in the sidebar first.</div>}
             {error && <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ne-danger)', padding: '8px 14px', background: '#FEF2F2', borderRadius: 'var(--r-sm)' }}>{error}</div>}
             {previewError && <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ne-danger)', padding: '8px 14px', background: '#FEF2F2', borderRadius: 'var(--r-sm)' }}>{previewError}</div>}
-            {!isNew && autosaveState !== 'idle' && (
+            {!isNew && autosaveState === 'error' && (
+              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ne-danger)', padding: '8px 14px', background: '#FEF2F2', borderRadius: 'var(--r-sm)' }}>
+                Autosave failed — your last change may not be saved. Use Save Draft to be sure.
+              </div>
+            )}
+            {!isNew && (autosaveState === 'saving' || autosaveState === 'saved') && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11.5, fontWeight: 600, color: 'var(--fg3)' }}>
                 {autosaveState === 'saving'
                   ? <><Loader2 size={12} style={{ animation: 'spin .6s linear infinite' }} /> Saving…</>

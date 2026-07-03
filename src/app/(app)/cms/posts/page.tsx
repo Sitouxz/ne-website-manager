@@ -148,7 +148,10 @@ export default function PostsPage() {
                   </td>
                   <td><span className={`status-pill ${p.status}`}>{p.status}</span></td>
                   <td style={{ color: 'var(--fg3)', fontSize: 12 }}>
-                    {p.published_at
+                    {/* Only trust published_at while the post is *currently* published — it can
+                        hold a stale timestamp from an earlier publish after an unpublish/reschedule,
+                        which would otherwise show a misleading date next to a non-"published" pill. */}
+                    {p.status === 'published' && p.published_at
                       ? new Date(p.published_at).toLocaleDateString('en-SG', { day: 'numeric', month: 'short', year: 'numeric' })
                       : new Date(p.created_at).toLocaleDateString('en-SG', { day: 'numeric', month: 'short', year: 'numeric' })}
                   </td>

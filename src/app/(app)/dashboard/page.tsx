@@ -168,7 +168,10 @@ export default async function DashboardPage() {
                       </Link>
                     </td>
                     <td><span className={`status-pill ${p.status}`}>{p.status}</span></td>
-                    <td style={{ color: 'var(--fg3)', fontSize: 12 }}>{fmtDate(p.published_at ?? p.created_at)}</td>
+                    {/* Only trust published_at while the post is *currently* published — it can
+                        hold a stale timestamp from an earlier publish after an unpublish/reschedule,
+                        which would otherwise show a misleading date next to a non-"published" pill. */}
+                    <td style={{ color: 'var(--fg3)', fontSize: 12 }}>{fmtDate(p.status === 'published' ? p.published_at ?? p.created_at : p.created_at)}</td>
                   </tr>
                 ))}
               </tbody>
