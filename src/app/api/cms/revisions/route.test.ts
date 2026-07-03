@@ -224,4 +224,48 @@ describe('POST /api/cms/revisions', () => {
     const { data: postRows } = await supabase.from('posts').select('*').eq('id', 'post-1').single();
     expect(postRows?.title).toBe('Unrelated post');
   });
+
+  it('returns 404 for a collection entry when the revision_id does not resolve to a visible row', async () => {
+    setSupabase(supabaseFor(USER, { revisions: [], collection_items: [{ id: 'entry-1', client_id: 'c1', slug: 'current' }] }));
+    setAdmin();
+
+    const res = await POST(postReq({ entity_type: 'collection_entry', entity_id: 'entry-1', revision_id: 'missing' }));
+
+    expect(res.status).toBe(404);
+  });
+
+  it('restores the snapshot onto the live collection_items row, snapshots the pre-restore state first, and returns the restored row', async () => {
+    const supabase = supabaseFor(USER, {
+      collection_items: [{
+        id: 'entry-1', client_id: 'c1', collection_id: 'coll-1', slug: 'current-slug',
+        status: 'draft', data: { title: 'Current' }, sort_order: 0, published_at: null,
+      }],
+      revisions: [{
+        id: 'r1', client_id: 'c1', entity_type: 'collection_entry', entity_id: 'entry-1',
+        snapshot: { slug: 'old-slug', status: 'published', data: { title: 'Old' }, published_at: '2026-01-01T00:00:00Z' },
+        author_id: 'user-1', created_at: '2026-01-01T00:00:00Z',
+      }],
+    });
+    setSupabase(supabase);
+    setAdmin();
+
+    const res = await POST(postReq({ entity_type: 'collection_entry', entity_id: 'entry-1', revision_id: 'r1' }));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.slug).toBe('old-slug');
+    expect(body.status).toBe('published');
+    expect(body.data).toEqual({ title: 'Old' });
+
+    // Pre-restore snapshot of the CURRENT (pre-restore) row was inserted.
+    const { data: revisionRows } = await supabase.from('revisions').select('*');
+    expect(revisionRows).toHaveLength(2);
+    const preRestoreSnapshot = (revisionRows as Array<{ id: string; entity_type: string; snapshot: { data: { title: string } } }>).find((r) => r.id !== 'r1');
+    expect(preRestoreSnapshot?.entity_type).toBe('collection_entry');
+    expect(preRestoreSnapshot?.snapshot.data.title).toBe('Current');
+
+    // Live row was actually updated.
+    const { data: entryRows } = await supabase.from('collection_items').select('*').eq('id', 'entry-1').single();
+    expect(entryRows?.data).toEqual({ title: 'Old' });
+  });
 });

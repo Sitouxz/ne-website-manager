@@ -8,11 +8,18 @@ import {
   Search, Users, Settings, Megaphone, Mail,
   ChevronDown, LogOut, Globe, ShieldCheck, Home, Boxes,
 } from 'lucide-react';
-import type { Client, Role } from '@/lib/supabase/types';
+import type { Client, Collection, Role } from '@/lib/supabase/types';
 
 type NavItem = { label: string; href: string; icon: React.ElementType; soon?: boolean };
 type NavGroup = { section: string; items: NavItem[] };
 
+// "All Collections" replaces the old static "Collections" link — it still
+// points at `/cms/collections` (the list/management page: create a
+// collection, edit a schema, see native/global ones read-only) so that path
+// is never lost. Each of the client's actual `storage='generic'` collections
+// is rendered as its own nav item right below it (see the `genericCollections`
+// prop below), so a client with "Sermons" and "Team" collections gets both
+// names directly in the sidebar instead of only a generic "Collections" label.
 const NAV: NavGroup[] = [
   {
     section: 'Main',
@@ -24,11 +31,11 @@ const NAV: NavGroup[] = [
   {
     section: 'Content',
     items: [
-      { label: 'Blog Posts',    href: '/cms/posts',      icon: FileText },
-      { label: 'Properties',    href: '/cms/properties', icon: Home },
-      { label: 'Pages',         href: '/cms/pages',      icon: FileEdit },
-      { label: 'Media Library', href: '/cms/media',      icon: Image },
-      { label: 'Collections',   href: '/cms/collections', icon: Boxes },
+      { label: 'Blog Posts',      href: '/cms/posts',       icon: FileText },
+      { label: 'Properties',      href: '/cms/properties',  icon: Home },
+      { label: 'Pages',           href: '/cms/pages',       icon: FileEdit },
+      { label: 'Media Library',   href: '/cms/media',       icon: Image },
+      { label: 'All Collections', href: '/cms/collections', icon: Boxes },
     ],
   },
   {
@@ -62,6 +69,7 @@ export default function Sidebar({
   role = 'editor',
   isOpen = false,
   onClose,
+  genericCollections = [],
 }: {
   clientName?: string;
   clients?: Client[];
@@ -69,6 +77,7 @@ export default function Sidebar({
   role?: Role;
   isOpen?: boolean;
   onClose?: () => void;
+  genericCollections?: Pick<Collection, 'id' | 'name'>[];
 }) {
   const path   = usePathname();
   const router = useRouter();
@@ -158,6 +167,30 @@ export default function Sidebar({
                   <Icon size={16} />
                   {item.label}
                   {'soon' in item && item.soon && <span className="badge-cs">Soon</span>}
+                </Link>
+              );
+            })}
+            {/* Dynamic per-client collections — rendered right after "All
+                Collections" within the same Content section, indented and
+                using a generic Boxes icon for all of them (this app has no
+                existing name->lucide-icon lookup for the arbitrary strings
+                `collections.icon` stores, and building one for a single
+                sidebar list isn't worth it — every dynamic collection link
+                using the same icon as their shared parent "All Collections"
+                entry is a reasonable, low-cost simplification). */}
+            {group.section === 'Content' && genericCollections.map((c) => {
+              const href = `/cms/collections/${c.id}`;
+              const active = path === href || path.startsWith(href + '/');
+              return (
+                <Link
+                  key={c.id}
+                  href={href}
+                  className={`sidebar-link${active ? ' active' : ''}`}
+                  style={{ paddingLeft: 40, fontSize: 12.5 }}
+                  onClick={() => onClose?.()}
+                >
+                  <Boxes size={14} />
+                  {c.name}
                 </Link>
               );
             })}

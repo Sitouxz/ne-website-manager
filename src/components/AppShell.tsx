@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import Sidebar from './Sidebar';
-import type { Client, Role } from '@/lib/supabase/types';
+import type { Client, Collection, Role } from '@/lib/supabase/types';
 
 export default function AppShell({
   children,
@@ -10,12 +10,14 @@ export default function AppShell({
   clients,
   selectedClientId,
   role,
+  genericCollections = [],
 }: {
   children: React.ReactNode;
   clientName: string;
   clients: Client[];
   selectedClientId: string | null;
   role: Role;
+  genericCollections?: Pick<Collection, 'id' | 'name'>[];
 }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
@@ -34,6 +36,7 @@ export default function AppShell({
         role={role}
         isOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
+        genericCollections={genericCollections}
       />
 
       <div className="app-layout">

@@ -10,11 +10,11 @@ import { parsePagination } from '@/lib/api/pagination';
  * `createClient()` — this route adds no further tenant checks beyond "is the
  * caller authenticated at all."
  *
- * `entity_type: 'post'` (Task 3.3) and `'page'` (Task 3.5) are wired
- * end-to-end. `property`/`collection_entry` are accepted by the type (per
- * the plan's forward-looking comment in migration 006) but rejected with 400
- * here until a future phase actually restores them — YAGNI beats speculative
- * generalization.
+ * `entity_type: 'post'` (Task 3.3), `'page'` (Task 3.5), and
+ * `'collection_entry'` (Task 4.3) are wired end-to-end. `property` is
+ * accepted by the type (per the plan's forward-looking comment in migration
+ * 006) but rejected with 400 here until a future phase actually restores it
+ * — YAGNI beats speculative generalization.
  */
 
 type EntityType = 'post' | 'page' | 'property' | 'collection_entry';
@@ -46,9 +46,21 @@ const PAGE_SNAPSHOT_FIELDS = [
   'seo_title', 'seo_description',
 ] as const;
 
+// The exact set of fields a revision `snapshot` carries for a
+// `collection_entry` — matches the payload the entry editor
+// (`src/app/(app)/cms/collections/[id]/entries/[entryId]/page.tsx`) writes
+// to `collection_items` on every save/autosave. Unlike posts/pages, a
+// generic collection's actual content fields are dynamic per-collection
+// (`FieldDef[]`), so there's no fixed list of "content column names" to
+// enumerate here — `data` (the single JSONB blob holding every `FieldDef`
+// value) is itself one opaque snapshot field, alongside the fixed columns
+// every `collection_items` row has regardless of schema.
+const COLLECTION_ENTRY_SNAPSHOT_FIELDS = ['slug', 'status', 'data', 'published_at'] as const;
+
 const SNAPSHOT_FIELDS_BY_ENTITY_TYPE: Record<string, readonly string[]> = {
   post: POST_SNAPSHOT_FIELDS,
   page: PAGE_SNAPSHOT_FIELDS,
+  collection_entry: COLLECTION_ENTRY_SNAPSHOT_FIELDS,
 };
 
 function pickSnapshotFields(row: Record<string, unknown>, entityType: EntityType): Record<string, unknown> {
@@ -64,6 +76,14 @@ function pickSnapshotFields(row: Record<string, unknown>, entityType: EntityType
 const TABLE_BY_ENTITY_TYPE: Record<string, string> = {
   post: 'posts',
   page: 'pages',
+  collection_entry: 'collection_items',
+};
+
+/** Human-readable label for `entity_type`, used only in 404 messages below. */
+const ENTITY_LABEL_BY_TYPE: Record<string, string> = {
+  post: 'Post',
+  page: 'Page',
+  collection_entry: 'Entry',
 };
 
 /**
@@ -173,7 +193,7 @@ export async function POST(req: Request) {
     .eq('id', entityId)
     .single();
 
-  if (!currentRow) return NextResponse.json({ error: `${entityType === 'post' ? 'Post' : 'Page'} not found` }, { status: 404 });
+  if (!currentRow) return NextResponse.json({ error: `${ENTITY_LABEL_BY_TYPE[entityType] ?? 'Entity'} not found` }, { status: 404 });
 
   // Snapshot the pre-restore state first, so restoring is itself
   // non-destructively undoable (a second Restore click can always get back
