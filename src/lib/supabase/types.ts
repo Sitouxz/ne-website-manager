@@ -199,3 +199,34 @@ export interface SiteGlobal {
   created_at: string;
   updated_at: string;
 }
+
+/**
+ * `public.forms` DB row — Task 5.2. `fields` reuses `FieldDef[]` exactly like
+ * `Collection.fields`, and is validated the same way via `validateEntry`
+ * (see src/lib/collections/validate.ts). `honeypot_field` names a field in
+ * `fields`-adjacent submission `data` (NOT a real `FieldDef`) that a client
+ * site renders hidden to real users but bots often fill in.
+ */
+export interface Form {
+  id: string;
+  client_id: string;
+  name: string;
+  slug: string;
+  fields: FieldDef[];
+  notify_emails: string[];
+  honeypot_field: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export type FormSubmissionStatus = 'new' | 'read' | 'archived' | 'spam';
+
+export interface FormSubmission {
+  id: string;
+  form_id: string;
+  client_id: string;
+  data: Record<string, unknown>;
+  status: FormSubmissionStatus;
+  referrer: string | null;
+  created_at: string;
+}

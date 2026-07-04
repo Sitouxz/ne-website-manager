@@ -43,7 +43,7 @@ const NAV: NavGroup[] = [
     section: 'Tools',
     items: [
       { label: 'SEO Manager',   href: '/seo',           icon: Search,    soon: true },
-      { label: 'Forms & Leads', href: '/forms',         icon: Mail,      soon: true },
+      { label: 'Forms & Leads', href: '/forms',         icon: Mail },
       { label: 'Announcements', href: '/announcements', icon: Megaphone },
     ],
   },
