@@ -230,3 +230,18 @@ export interface FormSubmission {
   referrer: string | null;
   created_at: string;
 }
+
+/**
+ * `public.redirects` DB row — Task 5.3. `permanent` maps to a 301 (true,
+ * default) vs. 302 (false) when a client site applies these — see
+ * `supabase/migrations/011_seo.sql` for the RLS write-scoping rationale.
+ */
+export interface Redirect {
+  id: string;
+  client_id: string;
+  from_path: string;
+  to_path: string;
+  permanent: boolean;
+  created_at: string;
+  updated_at: string;
+}
