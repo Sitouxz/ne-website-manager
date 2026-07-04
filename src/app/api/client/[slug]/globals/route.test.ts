@@ -1,15 +1,35 @@
 import { describe, expect, it, vi } from 'vitest';
 import { mockSupabase } from '@/test/supabase-mock';
 
-vi.mock('@/lib/supabase/server', () => ({
-  createClient: vi.fn(),
+// Regression coverage for the RLS-hidden-orphan-promotion finding (final
+// whole-branch review): this route's real caller is anonymous (no Supabase
+// auth cookies), so if it ever queried `menu_items` through the user-scoped
+// `createClient()` (`@/lib/supabase/server`) again, that would execute as
+// the `anon` Postgres role in production — and `menu_items_public_read`'s
+// RLS policy (`location = 'public' AND is_visible = true`) would silently
+// strip hidden rows before `buildNavigationTree` ever saw them, resurrecting
+// the exact orphan-promotion bug the tests below exist to catch.
+//
+// `mockSupabase` doesn't model RLS at all, so it can't literally reproduce
+// "the database filtered this row out" — feeding it hidden-item fixtures
+// exercises `buildNavigationTree`'s pruning logic, not RLS. What this test
+// file CAN and does assert, the same way `seo/route.test.ts` and
+// `collections/[collection]/route.test.ts` do for their own admin-client
+// routes: deliberately mock ONLY `@/lib/supabase/admin`'s `createAdminClient`
+// and leave `@/lib/supabase/server` unmocked. If `route.ts` ever regresses to
+// calling the real `createClient()` (which needs `next/headers` cookies()
+// and a request context this test suite doesn't provide), that call throws
+// and every test below fails loudly — proving the route is wired to the
+// admin client, not just that its output happens to look right.
+vi.mock('@/lib/supabase/admin', () => ({
+  createAdminClient: vi.fn(),
 }));
 
-import { createClient } from '@/lib/supabase/server';
+import { createAdminClient } from '@/lib/supabase/admin';
 import { GET, OPTIONS } from './route';
 
 function setSupabase(supabase: unknown) {
-  (createClient as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(supabase);
+  (createAdminClient as unknown as ReturnType<typeof vi.fn>).mockReturnValue(supabase);
 }
 
 function getReq(): Request {

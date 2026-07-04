@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@/lib/supabase/server';
+import { createAdminClient } from '@/lib/supabase/admin';
 import type { MenuItem } from '@/lib/supabase/types';
 import type { MenuItemNode } from '@/lib/globals/types';
 
@@ -10,17 +10,34 @@ import type { MenuItemNode } from '@/lib/globals/types';
  * contract) with the public `menu_items` nav tree into one JSON response a
  * client's website can fetch at build/runtime.
  *
- * Uses the user-scoped `createClient()` (`@/lib/supabase/server`), not the
- * admin/service-role client — matching `posts`/`pages`/`properties`'s
- * pattern (see `src/app/api/client/[slug]/posts/route.ts`) rather than
- * `collections/[collection]/route.ts`'s admin-client pattern. The
- * `collections` route needs the admin client specifically to look up
- * `api_keys` (no anon-read policy exists there at all). This route has no
- * such need: both `site_globals_public_read` (`USING (true)`) and
- * `menu_items_public_read` (`USING (location = 'public' AND is_visible =
- * true)`) already grant the `anon` role exactly the rows this route wants,
- * so relying on RLS directly is both simpler and keeps the visibility rule
- * in one place (the policy) instead of re-implementing it here.
+ * Uses the service-role `createAdminClient()` (`@/lib/supabase/admin`), NOT
+ * the user-scoped `createClient()` this route originally used — see Finding
+ * (final whole-branch review) for the bug that switch fixes:
+ *
+ * This route's real caller is an anonymous external client website with no
+ * Supabase auth cookies, so a user-scoped client always executes as the
+ * `anon` Postgres role. Under `anon`, the only applicable policy on
+ * `menu_items` is `menu_items_public_read` = `USING (location = 'public' AND
+ * is_visible = true)` — RLS itself strips every hidden row out of the query
+ * result, before this file's code ever runs. That defeats
+ * `buildNavigationTree`'s two-phase build-then-prune design below: the whole
+ * point of fetching hidden rows and pruning them here (instead of filtering
+ * `is_visible` in the query) is so a hidden parent's still-visible child gets
+ * excluded together with its parent, rather than promoted to top-level
+ * public nav because the tree-builder can't find its (never-fetched) parent.
+ * If RLS silently removes the hidden parent row first, the exact same
+ * orphan-promotion bug reappears — just one layer earlier (the query itself,
+ * not the tree-builder). The admin client bypasses RLS entirely so this
+ * route's own `location = 'public'` filter (deliberately NOT also filtering
+ * `is_visible`, see the query below) is the only filter applied, and
+ * `buildNavigationTree` performs 100% of the visibility pruning as designed.
+ *
+ * `site_globals_public_read` (`USING (true)`) grants `anon` unconditional
+ * SELECT already, so the anon client was never actually wrong for that half
+ * of this route — but this route uses ONE client (the admin client) for
+ * both queries anyway, for the same reason `seo/route.ts` (Task 5.3) settled
+ * on a single client once it needed one at all: simpler to reason about than
+ * two different clients with two different trust models in one file.
  */
 
 /**
@@ -76,9 +93,9 @@ export async function GET(
   { params }: { params: Promise<{ slug: string }> }
 ) {
   const { slug } = await params;
-  const supabase = await createClient();
+  const admin = createAdminClient();
 
-  const { data: client } = await supabase
+  const { data: client } = await admin
     .from('clients')
     .select('id')
     .eq('slug', slug)
@@ -89,11 +106,14 @@ export async function GET(
   }
 
   const [{ data: globalsRows, error: globalsError }, { data: menuRows, error: menuError }] = await Promise.all([
-    supabase.from('site_globals').select('key, value').eq('client_id', client.id),
+    admin.from('site_globals').select('key, value').eq('client_id', client.id),
     // Deliberately NOT filtering `is_visible=true` here — see buildNavigationTree's
     // doc comment for why the full (visible + hidden) set must be fetched
-    // before the tree is built and only pruned afterward.
-    supabase
+    // before the tree is built and only pruned afterward. Using the admin
+    // client (bypasses RLS) is what makes fetching hidden rows possible at
+    // all for this route's real (anonymous) caller — see the file-level
+    // comment above.
+    admin
       .from('menu_items')
       .select('*')
       .eq('client_id', client.id)
