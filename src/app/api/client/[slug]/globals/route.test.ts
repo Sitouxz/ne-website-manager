@@ -66,9 +66,48 @@ const OTHER_CLIENT_ITEM = {
   id: 'menu-other', client_id: 'client-2', location: 'public', label: 'Other client nav', icon: null,
   link_type: 'url', collection_slug: null, url: '/other', parent_id: null, sort_order: 0, is_visible: true,
 };
+// A hidden top-level parent whose child is still marked visible — the child
+// must NOT appear anywhere in the response (neither nested nor promoted to
+// top level). See Finding 1 (orphaned-children bug).
+const HIDDEN_PARENT = {
+  id: 'menu-hidden-parent', client_id: 'client-1', location: 'public', label: 'Hidden Parent', icon: null,
+  link_type: 'url', collection_slug: null, url: '/hidden-parent', parent_id: null, sort_order: 3, is_visible: false,
+};
+const CHILD_OF_HIDDEN_PARENT = {
+  id: 'menu-child-of-hidden-parent', client_id: 'client-1', location: 'public', label: 'Orphan Child', icon: null,
+  link_type: 'url', collection_slug: null, url: '/hidden-parent/child', parent_id: 'menu-hidden-parent', sort_order: 0, is_visible: true,
+};
+// A 3-level chain: visible grandparent -> hidden parent -> visible
+// grandchild. The grandchild must also be excluded, even though the
+// grandparent is visible, because its immediate parent is hidden.
+const CHAIN_GRANDPARENT = {
+  id: 'menu-chain-grandparent', client_id: 'client-1', location: 'public', label: 'Chain Grandparent', icon: null,
+  link_type: 'url', collection_slug: null, url: '/chain', parent_id: null, sort_order: 4, is_visible: true,
+};
+const CHAIN_HIDDEN_MIDDLE = {
+  id: 'menu-chain-hidden-middle', client_id: 'client-1', location: 'public', label: 'Chain Hidden Middle', icon: null,
+  link_type: 'url', collection_slug: null, url: '/chain/middle', parent_id: 'menu-chain-grandparent', sort_order: 0, is_visible: false,
+};
+const CHAIN_VISIBLE_GRANDCHILD = {
+  id: 'menu-chain-visible-grandchild', client_id: 'client-1', location: 'public', label: 'Chain Visible Grandchild', icon: null,
+  link_type: 'url', collection_slug: null, url: '/chain/middle/grandchild', parent_id: 'menu-chain-hidden-middle', sort_order: 0, is_visible: true,
+};
 
 function menuItemsFixtures() {
-  return [TOP_ABOUT, TOP_SERVICES, CHILD_CONSULTING, CHILD_DESIGN, HIDDEN_ITEM, SIDEBAR_ITEM, OTHER_CLIENT_ITEM];
+  return [
+    TOP_ABOUT, TOP_SERVICES, CHILD_CONSULTING, CHILD_DESIGN, HIDDEN_ITEM, SIDEBAR_ITEM, OTHER_CLIENT_ITEM,
+    HIDDEN_PARENT, CHILD_OF_HIDDEN_PARENT, CHAIN_GRANDPARENT, CHAIN_HIDDEN_MIDDLE, CHAIN_VISIBLE_GRANDCHILD,
+  ];
+}
+
+/** Recursively flattens a navigation tree's node ids (parents + all descendants). */
+function flattenIds(nodes: { id: string; children?: unknown[] }[]): string[] {
+  const ids: string[] = [];
+  for (const n of nodes) {
+    ids.push(n.id);
+    ids.push(...flattenIds((n.children ?? []) as { id: string; children?: unknown[] }[]));
+  }
+  return ids;
 }
 
 function fixtures() {
@@ -161,11 +200,7 @@ describe('GET /api/client/[slug]/globals — navigation tree', () => {
     const res = await GET(getReq(), { params });
     const body = await res.json();
 
-    const ids = body.navigation.map((n: { id: string }) => n.id);
-    const allIds = [
-      ...ids,
-      ...body.navigation.flatMap((n: { children: { id: string }[] }) => n.children.map((c) => c.id)),
-    ];
+    const allIds = flattenIds(body.navigation);
 
     expect(allIds).not.toContain('menu-hidden');
     expect(allIds).not.toContain('menu-sidebar');
@@ -178,7 +213,9 @@ describe('GET /api/client/[slug]/globals — navigation tree', () => {
     const res = await GET(getReq(), { params });
     const body = await res.json();
 
-    expect(body.navigation.map((n: { id: string }) => n.id)).toEqual(['menu-about', 'menu-services']);
+    expect(body.navigation.map((n: { id: string }) => n.id)).toEqual([
+      'menu-about', 'menu-services', 'menu-chain-grandparent',
+    ]);
   });
 
   it('returns an empty navigation array when the client has no public menu items', async () => {
@@ -188,5 +225,49 @@ describe('GET /api/client/[slug]/globals — navigation tree', () => {
     const body = await res.json();
 
     expect(body.navigation).toEqual([]);
+  });
+
+  it('Finding 1 regression: a hidden parent excludes its visible child entirely — not nested, not promoted to top level', async () => {
+    setSupabase(mockSupabase(fixtures()));
+
+    const res = await GET(getReq(), { params });
+    const body = await res.json();
+
+    const allIds = flattenIds(body.navigation);
+
+    // The hidden parent itself must not appear.
+    expect(allIds).not.toContain('menu-hidden-parent');
+    // Its visible child must not appear either — neither nested under the
+    // (excluded) parent, nor promoted to top-level navigation.
+    expect(allIds).not.toContain('menu-child-of-hidden-parent');
+    expect(body.navigation.some((n: { id: string }) => n.id === 'menu-child-of-hidden-parent')).toBe(false);
+  });
+
+  it('regression: a visible child of a visible parent still appears correctly nested', async () => {
+    setSupabase(mockSupabase(fixtures()));
+
+    const res = await GET(getReq(), { params });
+    const body = await res.json();
+
+    const services = body.navigation.find((n: { id: string }) => n.id === 'menu-services');
+    expect(services).toBeDefined();
+    expect(services.children.map((c: { id: string }) => c.id)).toEqual(['menu-consulting', 'menu-design']);
+  });
+
+  it('Finding 1: a 3-level chain (visible grandparent -> hidden parent -> visible grandchild) excludes the grandchild too', async () => {
+    setSupabase(mockSupabase(fixtures()));
+
+    const res = await GET(getReq(), { params });
+    const body = await res.json();
+
+    const grandparent = body.navigation.find((n: { id: string }) => n.id === 'menu-chain-grandparent');
+    // The grandparent itself is visible, so it appears...
+    expect(grandparent).toBeDefined();
+    // ...but its hidden child (and therefore that child's own visible child,
+    // the grandchild) must not appear anywhere in the tree.
+    const allIds = flattenIds(body.navigation);
+    expect(allIds).not.toContain('menu-chain-hidden-middle');
+    expect(allIds).not.toContain('menu-chain-visible-grandchild');
+    expect(grandparent.children).toEqual([]);
   });
 });

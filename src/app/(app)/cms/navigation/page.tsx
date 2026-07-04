@@ -68,6 +68,12 @@ export default function NavigationPage() {
   const [adding, setAdding] = useState(false);
   const [addError, setAddError] = useState('');
   const [busyId, setBusyId] = useState<string | null>(null);
+  // Surfaces failures from remove/toggle-visible/reorder writes — these three
+  // handlers previously applied their optimistic local-state update
+  // unconditionally, regardless of whether the Supabase write actually
+  // succeeded, letting the editor UI drift from the real DB (and therefore
+  // the live public nav) on a failed mutation. See Task 5.1 review Finding 2.
+  const [actionError, setActionError] = useState('');
 
   const load = useCallback(async () => {
     if (!selectedClientId) { setLoading(false); return; }
@@ -147,18 +153,33 @@ export default function NavigationPage() {
     if (!window.confirm(msg)) return;
 
     setBusyId(item.id);
+    setActionError('');
     const supabase = createClient();
-    await supabase.from('menu_items').delete().eq('id', item.id);
+    const { error: deleteError } = await supabase.from('menu_items').delete().eq('id', item.id);
     setBusyId(null);
+
+    if (deleteError) {
+      setActionError(`Failed to delete "${item.label}": ${deleteError.message}`);
+      return;
+    }
     load();
   }
 
   async function handleToggleVisible(item: MenuItem) {
     setBusyId(item.id);
+    setActionError('');
     const supabase = createClient();
-    await supabase.from('menu_items').update({ is_visible: !item.is_visible }).eq('id', item.id);
-    setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, is_visible: !i.is_visible } : i)));
+    const { error: updateError } = await supabase
+      .from('menu_items')
+      .update({ is_visible: !item.is_visible })
+      .eq('id', item.id);
     setBusyId(null);
+
+    if (updateError) {
+      setActionError(`Failed to update "${item.label}": ${updateError.message}`);
+      return;
+    }
+    setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, is_visible: !i.is_visible } : i)));
   }
 
   async function handleMove(item: MenuItem, dir: -1 | 1) {
@@ -169,17 +190,26 @@ export default function NavigationPage() {
     const other = siblings[targetIndex];
 
     setBusyId(item.id);
+    setActionError('');
     const supabase = createClient();
-    await Promise.all([
+    const [{ error: itemError }, { error: otherError }] = await Promise.all([
       supabase.from('menu_items').update({ sort_order: other.sort_order }).eq('id', item.id),
       supabase.from('menu_items').update({ sort_order: item.sort_order }).eq('id', other.id),
     ]);
+    setBusyId(null);
+
+    if (itemError || otherError) {
+      setActionError(`Failed to reorder "${item.label}": ${(itemError ?? otherError)!.message}`);
+      // Re-fetch so local state matches the DB — one of the two writes may
+      // have partially succeeded even though the pair failed as a whole.
+      load();
+      return;
+    }
     setItems((prev) => prev.map((i) => {
       if (i.id === item.id) return { ...i, sort_order: other.sort_order };
       if (i.id === other.id) return { ...i, sort_order: item.sort_order };
       return i;
     }));
-    setBusyId(null);
   }
 
   function describeLink(item: MenuItem): string {
@@ -279,6 +309,12 @@ export default function NavigationPage() {
             {error && (
               <div style={{ padding: '10px 14px', background: '#FEF2F2', color: 'var(--ne-danger)', borderRadius: 'var(--r-sm)', fontSize: 13, marginBottom: 16 }}>
                 {error}
+              </div>
+            )}
+
+            {actionError && (
+              <div style={{ padding: '10px 14px', background: '#FEF2F2', color: 'var(--ne-danger)', borderRadius: 'var(--r-sm)', fontSize: 13, marginBottom: 16 }}>
+                {actionError}
               </div>
             )}
 

@@ -23,6 +23,30 @@ import type { MenuItemNode } from '@/lib/globals/types';
  * in one place (the policy) instead of re-implementing it here.
  */
 
+/**
+ * Builds the public navigation tree from ALL `location='public'` menu items
+ * for a client (visible AND hidden — see caller), then prunes.
+ *
+ * Why the two-phase build-then-prune approach: if we filtered to
+ * `is_visible=true` at the query level (as this used to do) before building
+ * the tree, a hidden parent's row would never be fetched at all — so its
+ * still-visible children would find `nodes.get(item.parent_id)` undefined
+ * and fall into the `else roots.push(node)` branch, *promoting* an orphaned
+ * child to top-level public navigation instead of hiding it along with its
+ * parent. Editors can toggle a parent's visibility independently of its
+ * children (`cms/navigation/page.tsx`), so this is reachable in practice.
+ *
+ * Fix: fetch every `location='public'` item regardless of `is_visible`,
+ * build the FULL tree (hidden nodes included, correctly parented), then
+ * prune top-down: a node only survives if it is itself visible, and we only
+ * recurse into a node's children once that node has survived. This means a
+ * hidden node's entire subtree — regardless of depth, regardless of whether
+ * a deeper descendant is itself flagged visible — is dropped in one step,
+ * because pruning never visits the children of a node it just excluded.
+ * (Concretely: visible grandparent -> hidden parent -> visible child: the
+ * child is still excluded, because the walk stops at the hidden parent and
+ * never reaches the child.)
+ */
 function buildNavigationTree(items: MenuItem[]): MenuItemNode[] {
   const nodes = new Map<string, MenuItemNode>();
   for (const item of items) nodes.set(item.id, { ...item, children: [] });
@@ -34,7 +58,17 @@ function buildNavigationTree(items: MenuItem[]): MenuItemNode[] {
     if (parent) parent.children.push(node);
     else roots.push(node);
   }
-  return roots;
+
+  function pruneHidden(nodeList: MenuItemNode[]): MenuItemNode[] {
+    const visible: MenuItemNode[] = [];
+    for (const node of nodeList) {
+      if (!node.is_visible) continue; // drops this node AND its whole subtree
+      visible.push({ ...node, children: pruneHidden(node.children) });
+    }
+    return visible;
+  }
+
+  return pruneHidden(roots);
 }
 
 export async function GET(
@@ -56,12 +90,14 @@ export async function GET(
 
   const [{ data: globalsRows, error: globalsError }, { data: menuRows, error: menuError }] = await Promise.all([
     supabase.from('site_globals').select('key, value').eq('client_id', client.id),
+    // Deliberately NOT filtering `is_visible=true` here — see buildNavigationTree's
+    // doc comment for why the full (visible + hidden) set must be fetched
+    // before the tree is built and only pruned afterward.
     supabase
       .from('menu_items')
       .select('*')
       .eq('client_id', client.id)
       .eq('location', 'public')
-      .eq('is_visible', true)
       .order('sort_order', { ascending: true }),
   ]);
 
