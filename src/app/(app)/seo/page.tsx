@@ -9,6 +9,7 @@ import {
 import { createClient } from '@/lib/supabase/client';
 import { useSelectedClient } from '@/components/AppShell';
 import type { Redirect } from '@/lib/supabase/types';
+import { isSameOriginRedirectPath } from '@/lib/seo/redirects';
 
 /**
  * SEO Manager — Task 5.3. Two independent sections on one page (matching
@@ -54,6 +55,14 @@ const errorBoxStyle: React.CSSProperties = { padding: '10px 14px', background: '
 
 export default function SeoManagerPage() {
   const { selectedClientId } = useSelectedClient();
+
+  // ne_admin is the only role the RLS write policy (011_seo.sql /
+  // 012_restrict_cross_origin_redirects.sql) lets write a cross-origin
+  // `to_path` — fetched purely so the add/edit forms below can give an
+  // immediate, specific client-side error instead of a raw RLS-denial
+  // message after a round trip. The DB is the real enforcement point
+  // regardless of what this flag says.
+  const [isNeAdmin, setIsNeAdmin] = useState(false);
 
   const [redirects, setRedirects] = useState<Redirect[]>([]);
   const [audit, setAudit] = useState<AuditItem[]>([]);
@@ -122,6 +131,17 @@ export default function SeoManagerPage() {
     return () => window.clearTimeout(timer);
   }, [load]);
 
+  useEffect(() => {
+    const timer = window.setTimeout(async () => {
+      const supabase = createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      const { data: profile } = await supabase.from('profiles').select('role').eq('id', user.id).single();
+      setIsNeAdmin(profile?.role === 'ne_admin');
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
+
   function resetAddForm() {
     setAddForm(EMPTY_FORM);
     setAddError('');
@@ -134,6 +154,14 @@ export default function SeoManagerPage() {
     const toPath = addForm.toPath.trim();
     if (!fromPath.startsWith('/')) { setAddError('"From path" must start with /.'); return; }
     if (!toPath) { setAddError('"To path" is required.'); return; }
+    // Client-side pre-check mirroring the RLS `WITH CHECK` clause
+    // (012_restrict_cross_origin_redirects.sql) — a non-ne_admin write with
+    // a cross-origin `to_path` would be rejected by the DB anyway; this
+    // just surfaces a clear, specific message instead of a raw RLS error.
+    if (!isNeAdmin && !isSameOriginRedirectPath(toPath)) {
+      setAddError('Cross-domain redirects require admin approval.');
+      return;
+    }
 
     setAdding(true);
     setAddError('');
@@ -168,6 +196,11 @@ export default function SeoManagerPage() {
     const toPath = editForm.toPath.trim();
     if (!fromPath.startsWith('/')) { setEditError('"From path" must start with /.'); return; }
     if (!toPath) { setEditError('"To path" is required.'); return; }
+    // See handleAdd's identical pre-check comment.
+    if (!isNeAdmin && !isSameOriginRedirectPath(toPath)) {
+      setEditError('Cross-domain redirects require admin approval.');
+      return;
+    }
 
     setBusyId(id);
     setEditError('');
