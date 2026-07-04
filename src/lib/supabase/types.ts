@@ -164,3 +164,38 @@ export interface CollectionItem {
   created_at: string;
   updated_at: string;
 }
+
+export type MenuItemLocation = 'cms_sidebar' | 'public';
+export type MenuItemLinkType = 'collection' | 'url' | 'custom';
+
+export interface MenuItem {
+  id: string;
+  client_id: string;
+  location: MenuItemLocation;
+  label: string;
+  icon: string | null;
+  link_type: MenuItemLinkType;
+  collection_slug: string | null;
+  url: string | null;
+  parent_id: string | null;
+  sort_order: number;
+  is_visible: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * `public.site_globals` DB row. `key`/`value` are typed loosely here
+ * (`string` / `Record<string, unknown>`) since this is the raw row shape;
+ * the per-reserved-key `value` contract (`FooterGlobal`, `AnnouncementGlobal`,
+ * etc.) lives in `src/lib/globals/types.ts`, mirroring how `Collection.fields`
+ * is typed here as `FieldDef[]` from `src/lib/collections/types.ts`.
+ */
+export interface SiteGlobal {
+  id: string;
+  client_id: string;
+  key: string;
+  value: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}

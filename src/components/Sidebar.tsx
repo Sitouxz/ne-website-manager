@@ -6,7 +6,7 @@ import { createClient } from '@/lib/supabase/client';
 import {
   LayoutDashboard, FileText, FileEdit, Image, BarChart2,
   Search, Users, Settings, Megaphone, Mail,
-  ChevronDown, LogOut, Globe, ShieldCheck, Home, Boxes,
+  ChevronDown, LogOut, Globe, ShieldCheck, Home, Boxes, Navigation, Sliders,
 } from 'lucide-react';
 import type { Client, Collection, Role } from '@/lib/supabase/types';
 
@@ -36,6 +36,7 @@ const NAV: NavGroup[] = [
       { label: 'Pages',           href: '/cms/pages',       icon: FileEdit },
       { label: 'Media Library',   href: '/cms/media',       icon: Image },
       { label: 'All Collections', href: '/cms/collections', icon: Boxes },
+      { label: 'Navigation',      href: '/cms/navigation',  icon: Navigation },
     ],
   },
   {
@@ -43,14 +44,15 @@ const NAV: NavGroup[] = [
     items: [
       { label: 'SEO Manager',   href: '/seo',           icon: Search,    soon: true },
       { label: 'Forms & Leads', href: '/forms',         icon: Mail,      soon: true },
-      { label: 'Announcements', href: '/announcements', icon: Megaphone, soon: true },
+      { label: 'Announcements', href: '/announcements', icon: Megaphone },
     ],
   },
   {
     section: 'Settings',
     items: [
-      { label: 'Site Settings', href: '/settings', icon: Settings },
-      { label: 'Team Members',  href: '/team',     icon: Users,   soon: true },
+      { label: 'Site Settings', href: '/settings',         icon: Settings },
+      { label: 'Site Globals',  href: '/settings/globals', icon: Sliders },
+      { label: 'Team Members',  href: '/team',             icon: Users, soon: true },
     ],
   },
 ];
