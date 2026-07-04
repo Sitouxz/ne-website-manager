@@ -349,22 +349,25 @@ export interface FieldDef {
 
 Turns the CMS from "content" into "run the whole site."
 
-### Task 5.1: Site globals
+> **Reconciled 2026-07-04:** `navigation` is dropped from `site_globals` below. Phase 4's schema-discovery work found a live `menu_items` table (`location: 'public'|'cms_sidebar'`, `link_type: 'collection'|'url'|'custom'`, `parent_id` self-reference for nesting, `sort_order`, `is_visible`) already built and RLS-complete — a strictly more capable nav mechanism than a flat JSONB tree, and building both would be redundant. Task 5.1 now manages `menu_items` (`location='public'` only — `'cms_sidebar'` stays deferred, its intended use is unclear and out of scope) for site navigation, alongside `site_globals` for footer/announcement/theme/social/contact. Migration numbers shift by one throughout this phase (008 is taken by Phase 4's `008_restrict_collections_writes.sql`).
+
+### Task 5.1: Site globals + navigation
 
 **Files:**
-- Create: `supabase/migrations/008_site_globals.sql` — `site_globals` (id, client_id, key TEXT, value JSONB, updated_at, UNIQUE(client_id, key)); RLS auth-write/public-read. Reserved keys: `navigation` (`{ items: { label, href, children? }[] }`), `footer`, `announcement` (`{ enabled, message, href?, variant, starts_at?, ends_at? }`), `theme` (`{ tokens: Record<string,string> }`), `social`, `contact`
-- Create: `src/app/(app)/settings/globals/page.tsx` — structured editors: navigation tree editor, footer editor, theme token key/value list
+- Create: `supabase/migrations/009_site_globals.sql` — `site_globals` (id, client_id, key TEXT, value JSONB, updated_at, UNIQUE(client_id, key)); RLS auth-write/public-read. Reserved keys: `footer`, `announcement` (`{ enabled, message, href?, variant, starts_at?, ends_at? }`), `theme` (`{ tokens: Record<string,string> }`), `social`, `contact`
+- Create: `src/app/(app)/settings/globals/page.tsx` — structured editors: footer editor, theme token key/value list, announcement form
+- Create: `src/app/(app)/cms/navigation/page.tsx` — tree editor for `menu_items` (`location='public'`): add/remove/reorder/nest items, `link_type` picker (collection/url/custom), visibility toggle. Remove sidebar `soon` from wherever nav management is exposed.
 - Create: `src/app/(app)/announcements/page.tsx` — announcement banner form (remove sidebar `soon`)
-- Create: `src/app/api/client/[slug]/globals/route.ts` — `GET` all globals as `{ [key]: value }`; CORS
+- Create: `src/app/api/client/[slug]/globals/route.ts` — `GET` merges `site_globals` (as `{ [key]: value }`) with the public `menu_items` tree (as `navigation: MenuItem[]`, nested via `parent_id`) into one response; CORS
 - Test: globals route
 
 - [ ] Migration, route TDD, editors, sidebar update
-- [ ] Commit `feat: site globals (navigation, footer, theme, announcements)`
+- [ ] Commit `feat: site globals and navigation (footer, theme, announcements, menu tree)`
 
 ### Task 5.2: Forms & Leads
 
 **Files:**
-- Create: `supabase/migrations/009_forms.sql` — `forms` (id, client_id, name, slug, fields JSONB /* reuse FieldDef */, notify_emails TEXT[], honeypot_field TEXT DEFAULT 'website', UNIQUE(client_id, slug)); `form_submissions` (id, form_id, client_id, data JSONB, status TEXT DEFAULT 'new' CHECK (status IN ('new','read','archived','spam')), referrer TEXT, created_at); RLS: forms public-read, submissions auth-read/public-insert-via-route-only (insert through service client, not anon RLS)
+- Create: `supabase/migrations/010_forms.sql` — `forms` (id, client_id, name, slug, fields JSONB /* reuse FieldDef */, notify_emails TEXT[], honeypot_field TEXT DEFAULT 'website', UNIQUE(client_id, slug)); `form_submissions` (id, form_id, client_id, data JSONB, status TEXT DEFAULT 'new' CHECK (status IN ('new','read','archived','spam')), referrer TEXT, created_at); RLS: forms public-read, submissions auth-read/public-insert-via-route-only (insert through service client, not anon RLS)
 - Create: `src/app/api/client/[slug]/forms/[formSlug]/route.ts` — `POST` submission: honeypot check (filled honeypot → 200 but status `spam`), per-IP rate limit 10/min (in-memory Map keyed by IP+form, good enough on Fluid Compute), `validateEntry` against form fields, insert via admin client; CORS
 - Create: `src/app/(app)/forms/page.tsx` — forms list + builder (reuse `FieldInput` schema builder pieces) ; `src/app/(app)/forms/[id]/page.tsx` — submissions inbox (new/read/archive, CSV export)
 - Modify: `src/components/Sidebar.tsx` — remove `soon` from Forms & Leads
@@ -376,7 +379,7 @@ Turns the CMS from "content" into "run the whole site."
 ### Task 5.3: SEO Manager
 
 **Files:**
-- Create: `supabase/migrations/010_seo.sql` — `redirects` (id, client_id, from_path, to_path, permanent BOOLEAN DEFAULT true, UNIQUE(client_id, from_path)); RLS auth-write/public-read
+- Create: `supabase/migrations/011_seo.sql` — `redirects` (id, client_id, from_path, to_path, permanent BOOLEAN DEFAULT true, UNIQUE(client_id, from_path)); RLS auth-write/public-read
 - Create: `src/app/api/client/[slug]/seo/route.ts` — `GET` → `{ redirects: [...], sitemap: [{ path, updated_at }] }` (sitemap = published pages + posts `/blog/{slug}` + collection entries; path templates configurable later — YAGNI)
 - Create: `src/app/(app)/seo/page.tsx` — redirects table CRUD + content SEO audit list (all published posts/pages flagging missing `seo_title`/`seo_description`, links to editor)
 - Modify: `src/components/Sidebar.tsx` — remove `soon` from SEO Manager
