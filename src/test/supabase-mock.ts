@@ -12,6 +12,8 @@
  *   supabase.from('posts').select('*').eq(...).order(...).range(from, to)
  *   supabase.from('posts').select('id', { count: 'exact', head: true }).eq(...)
  *   supabase.from('posts').update({...}).eq('status', 'scheduled').lte('scheduled_at', now).select()
+ *   supabase.from('analytics_events').select(...).eq('event_name', 'page_view').gte('created_at', since)
+ *   supabase.from('analytics_daily').upsert(rows, { onConflict: 'client_id,day,path' })
  *
  * Fixtures are copied on the way in and mutated in place by insert/update/
  * delete, so successive queries against the same mock client observe each
@@ -114,6 +116,16 @@ class QueryBuilder<T = Row, Single extends boolean = false>
     return this;
   }
 
+  /** Postgrest-style `gte` (`>=`) — same null-never-matches rule as `lte`. */
+  gte(column: string, value: unknown): this {
+    this.rows = this.rows.filter((row) => {
+      const v = row[column];
+      if (v === null || v === undefined) return false;
+      return (v as never) >= (value as never);
+    });
+    return this;
+  }
+
   /**
    * Minimal Postgrest-style `LIKE` (case-sensitive; `%` = any run of chars,
    * `_` = any single char). Only what callers in this codebase need
@@ -178,6 +190,39 @@ class QueryBuilder<T = Row, Single extends boolean = false>
     this.mutationKind = 'update';
     this.mutationPayload = payload;
     this.dataRequested = false;
+    return this;
+  }
+
+  /**
+   * Postgrest-style `upsert(rows, { onConflict })`: for each incoming row,
+   * finds an existing row in the table matching every `onConflict` column
+   * (comma-separated, e.g. `'client_id,day,path'`) and merges the payload
+   * into it in place; otherwise inserts a new row. Defaults `onConflict` to
+   * `['id']` to mirror Postgrest's own default conflict target.
+   */
+  upsert(payload: Row | Row[], options?: { onConflict?: string }): this {
+    this.mutationKind = 'insert';
+    this.dataRequested = false;
+
+    const table = this.store[this.table] ?? (this.store[this.table] = []);
+    const incoming = Array.isArray(payload) ? payload : [payload];
+    const conflictColumns = options?.onConflict?.split(',').map((c) => c.trim()) ?? ['id'];
+
+    const result: Row[] = [];
+    for (const row of incoming) {
+      const existing = table.find((candidate) =>
+        conflictColumns.every((column) => candidate[column] === row[column])
+      );
+      if (existing) {
+        Object.assign(existing, row);
+        result.push(existing);
+      } else {
+        const inserted = { id: generateId(), ...row };
+        table.push(inserted);
+        result.push(inserted);
+      }
+    }
+    this.rows = result;
     return this;
   }
 
