@@ -7,14 +7,31 @@ import { parsePagination } from '@/lib/api/pagination';
  * Revision history: list + restore, backed by `public.revisions` (migration
  * 006). RLS (`client_id = my_client_id() OR is_ne_admin()`) already scopes
  * both GET and the lookups inside POST correctly through the user-scoped
- * `createClient()` — this route adds no further tenant checks beyond "is the
- * caller authenticated at all."
+ * `createClient()`.
  *
  * `entity_type: 'post'` (Task 3.3), `'page'` (Task 3.5), and
  * `'collection_entry'` (Task 4.3) are wired end-to-end. `property` is
  * accepted by the type (per the plan's forward-looking comment in migration
  * 006) but rejected with 400 here until a future phase actually restores it
  * — YAGNI beats speculative generalization.
+ *
+ * **Restore authorization (Task 6.2 fix-round-2):** migration
+ * `015_publish_rls.sql`'s `WITH CHECK` only gates a write when the row's
+ * *new* status would itself be elevated (`published`/`scheduled`) — it
+ * cannot see the row's *old* status, by design (see that migration's
+ * comments). A revision snapshot's `status` is very often `'draft'` (every
+ * explicit save force-snapshots a revision, including the save that
+ * transitioned an item TO published), so restoring an old snapshot onto a
+ * currently-published row would trivially satisfy RLS for a plain `editor`
+ * — silently unpublishing live content through this endpoint, the exact
+ * outcome the rest of Task 6.2 was built to prevent. Since the restore
+ * write goes through this server route rather than a direct client-side
+ * PostgREST call, this route can (and must) apply the OLD-vs-NEW comparison
+ * RLS structurally can't: below, a plain `editor` is rejected with 403
+ * before the write happens if the row's *current* status is elevated for
+ * its table and the snapshot being restored would set a non-elevated one.
+ * `client_admin`/`ne_admin` are exempt (they have legitimate authority to
+ * downgrade published content, same as the editors' UI already allows).
  */
 
 type EntityType = 'post' | 'page' | 'property' | 'collection_entry';
@@ -62,6 +79,23 @@ const SNAPSHOT_FIELDS_BY_ENTITY_TYPE: Record<string, readonly string[]> = {
   page: PAGE_SNAPSHOT_FIELDS,
   collection_entry: COLLECTION_ENTRY_SNAPSHOT_FIELDS,
 };
+
+// The "publicly live" status values per entity type — matches migration
+// 015_publish_rls.sql's WITH CHECK gating condition exactly (posts:
+// published|scheduled; pages/collection_items: published only — archived is
+// deliberately excluded there too, since archiving takes content down rather
+// than putting it live).
+const ELEVATED_STATUSES_BY_ENTITY_TYPE: Record<string, readonly string[]> = {
+  post: ['published', 'scheduled'],
+  page: ['published'],
+  collection_entry: ['published'],
+};
+
+/** Whether `status` is an "elevated" (publicly-live) value for `entityType`. */
+function isElevatedStatus(entityType: EntityType, status: unknown): boolean {
+  const elevated = ELEVATED_STATUSES_BY_ENTITY_TYPE[entityType] ?? [];
+  return typeof status === 'string' && elevated.includes(status);
+}
 
 function pickSnapshotFields(row: Record<string, unknown>, entityType: EntityType): Record<string, unknown> {
   const fields = SNAPSHOT_FIELDS_BY_ENTITY_TYPE[entityType] ?? [];
@@ -194,6 +228,37 @@ export async function POST(req: Request) {
     .single();
 
   if (!currentRow) return NextResponse.json({ error: `${ENTITY_LABEL_BY_TYPE[entityType] ?? 'Entity'} not found` }, { status: 404 });
+
+  // Resolve the caller's role — RLS already lets a user read their own
+  // `profiles` row (migration 001), so this is a plain user-scoped lookup,
+  // same pattern as `src/app/api/team/members/route.ts`'s `loadCaller`.
+  const { data: callerProfile } = await supabase
+    .from('profiles')
+    .select('role, client_id')
+    .eq('id', user.id)
+    .single();
+  const isAdmin = callerProfile?.role === 'ne_admin' || callerProfile?.role === 'client_admin';
+
+  // Authorization gate (see file-header comment): a plain `editor` cannot
+  // use restore to unpublish content RLS would otherwise stop them from
+  // unpublishing directly. Checked — and rejected, before any write happens
+  // — against the row's CURRENT (pre-restore) status, which `WITH CHECK`
+  // structurally cannot see. `client_admin`/`ne_admin` are exempt: RLS
+  // already permits them broadly (`is_ne_admin()` / the `role IN
+  // ('ne_admin','client_admin')` EXISTS clause), so their write proceeds
+  // through the same user-scoped client as before — no admin-client
+  // escalation needed here, and using one would needlessly bypass the
+  // tenant (`client_id`) scoping RLS's `USING` clause still enforces.
+  if (!isAdmin) {
+    const currentStatus = (currentRow as Record<string, unknown>).status;
+    const restoreStatus = (revision.snapshot as Record<string, unknown> | null)?.status;
+    if (isElevatedStatus(entityType, currentStatus) && !isElevatedStatus(entityType, restoreStatus)) {
+      return NextResponse.json(
+        { error: 'Only an admin can restore a revision that would unpublish this content' },
+        { status: 403 }
+      );
+    }
+  }
 
   // Snapshot the pre-restore state first, so restoring is itself
   // non-destructively undoable (a second Restore click can always get back

@@ -269,3 +269,209 @@ describe('POST /api/cms/revisions', () => {
     expect(entryRows?.data).toEqual({ title: 'Old' });
   });
 });
+
+describe('POST /api/cms/revisions — restore authorization (Task 6.2 fix-round-2)', () => {
+  it('rejects a plain editor restoring a draft snapshot onto a currently-published post (403), row unchanged', async () => {
+    const supabase = supabaseFor(USER, {
+      profiles: [{ id: 'user-1', role: 'editor', client_id: 'c1' }],
+      posts: [{
+        id: 'post-1', client_id: 'c1', title: 'Live Published Post', slug: 'live-post',
+        excerpt: null, content: '<p>live</p>', content_json: null, category: null,
+        tags: [], status: 'published', cover_url: null, seo_title: null,
+        seo_description: null, scheduled_at: null, published_at: '2026-01-01T00:00:00Z',
+      }],
+      revisions: [{
+        id: 'r1', client_id: 'c1', entity_type: 'post', entity_id: 'post-1',
+        snapshot: {
+          title: 'Old Draft Title', slug: 'old-draft-title', excerpt: null,
+          content: '<p>old</p>', content_json: null, category: null, tags: [],
+          status: 'draft', cover_url: null, seo_title: null, seo_description: null,
+          scheduled_at: null, published_at: null,
+        },
+        author_id: 'user-1', created_at: '2026-01-01T00:00:00Z',
+      }],
+    });
+    setSupabase(supabase);
+    setAdmin();
+
+    const res = await POST(postReq({ entity_type: 'post', entity_id: 'post-1', revision_id: 'r1' }));
+    const body = await res.json();
+
+    expect(res.status).toBe(403);
+    expect(body.error).toMatch(/only an admin/i);
+
+    // The live row was never touched.
+    const { data: postRow } = await supabase.from('posts').select('*').eq('id', 'post-1').single();
+    expect(postRow?.status).toBe('published');
+    expect(postRow?.title).toBe('Live Published Post');
+
+    // No spurious pre-restore snapshot was inserted either — the write
+    // never happened at all, so there's nothing to make undoable.
+    const { data: revisionRows } = await supabase.from('revisions').select('*');
+    expect(revisionRows).toHaveLength(1);
+  });
+
+  it('rejects a plain editor restoring a draft snapshot onto a currently-published page (403), row unchanged', async () => {
+    const supabase = supabaseFor(USER, {
+      profiles: [{ id: 'user-1', role: 'editor', client_id: 'c1' }],
+      pages: [{
+        id: 'page-1', client_id: 'c1', title: 'Live Page', path: '/live-page',
+        content: '<p>live</p>', content_json: null, status: 'published',
+        visibility: 'public', seo_title: null, seo_description: null,
+      }],
+      revisions: [{
+        id: 'r1', client_id: 'c1', entity_type: 'page', entity_id: 'page-1',
+        snapshot: {
+          title: 'Old Page', path: '/old-page', content: '<p>old</p>',
+          content_json: null, status: 'draft', visibility: 'private',
+          seo_title: null, seo_description: null,
+        },
+        author_id: 'user-1', created_at: '2026-01-01T00:00:00Z',
+      }],
+    });
+    setSupabase(supabase);
+    setAdmin();
+
+    const res = await POST(postReq({ entity_type: 'page', entity_id: 'page-1', revision_id: 'r1' }));
+    const body = await res.json();
+
+    expect(res.status).toBe(403);
+    expect(body.error).toMatch(/only an admin/i);
+
+    const { data: pageRow } = await supabase.from('pages').select('*').eq('id', 'page-1').single();
+    expect(pageRow?.status).toBe('published');
+    expect(pageRow?.title).toBe('Live Page');
+  });
+
+  it('rejects a plain editor restoring a draft snapshot onto a currently-published collection entry (403), row unchanged', async () => {
+    const supabase = supabaseFor(USER, {
+      profiles: [{ id: 'user-1', role: 'editor', client_id: 'c1' }],
+      collection_items: [{
+        id: 'entry-1', client_id: 'c1', collection_id: 'coll-1', slug: 'live-slug',
+        status: 'published', data: { title: 'Live' }, sort_order: 0,
+        published_at: '2026-01-01T00:00:00Z',
+      }],
+      revisions: [{
+        id: 'r1', client_id: 'c1', entity_type: 'collection_entry', entity_id: 'entry-1',
+        snapshot: { slug: 'old-slug', status: 'draft', data: { title: 'Old' }, published_at: null },
+        author_id: 'user-1', created_at: '2026-01-01T00:00:00Z',
+      }],
+    });
+    setSupabase(supabase);
+    setAdmin();
+
+    const res = await POST(postReq({ entity_type: 'collection_entry', entity_id: 'entry-1', revision_id: 'r1' }));
+    const body = await res.json();
+
+    expect(res.status).toBe(403);
+    expect(body.error).toMatch(/only an admin/i);
+
+    const { data: entryRow } = await supabase.from('collection_items').select('*').eq('id', 'entry-1').single();
+    expect(entryRow?.status).toBe('published');
+    expect(entryRow?.data).toEqual({ title: 'Live' });
+  });
+
+  it('allows a client_admin to perform the same restore that would be rejected for an editor (200, row updated)', async () => {
+    const supabase = supabaseFor(USER, {
+      profiles: [{ id: 'user-1', role: 'client_admin', client_id: 'c1' }],
+      posts: [{
+        id: 'post-1', client_id: 'c1', title: 'Live Published Post', slug: 'live-post',
+        excerpt: null, content: '<p>live</p>', content_json: null, category: null,
+        tags: [], status: 'published', cover_url: null, seo_title: null,
+        seo_description: null, scheduled_at: null, published_at: '2026-01-01T00:00:00Z',
+      }],
+      revisions: [{
+        id: 'r1', client_id: 'c1', entity_type: 'post', entity_id: 'post-1',
+        snapshot: {
+          title: 'Old Draft Title', slug: 'old-draft-title', excerpt: null,
+          content: '<p>old</p>', content_json: null, category: null, tags: [],
+          status: 'draft', cover_url: null, seo_title: null, seo_description: null,
+          scheduled_at: null, published_at: null,
+        },
+        author_id: 'user-1', created_at: '2026-01-01T00:00:00Z',
+      }],
+    });
+    setSupabase(supabase);
+    setAdmin();
+
+    const res = await POST(postReq({ entity_type: 'post', entity_id: 'post-1', revision_id: 'r1' }));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.status).toBe('draft');
+    expect(body.title).toBe('Old Draft Title');
+
+    const { data: postRow } = await supabase.from('posts').select('*').eq('id', 'post-1').single();
+    expect(postRow?.status).toBe('draft');
+
+    // The pre-restore snapshot of the (still-published) row was recorded.
+    const { data: revisionRows } = await supabase.from('revisions').select('*');
+    expect(revisionRows).toHaveLength(2);
+  });
+
+  it('allows a ne_admin to perform the same restore that would be rejected for an editor (200, row updated)', async () => {
+    const supabase = supabaseFor(USER, {
+      profiles: [{ id: 'user-1', role: 'ne_admin', client_id: null }],
+      posts: [{
+        id: 'post-1', client_id: 'c1', title: 'Live Published Post', slug: 'live-post',
+        excerpt: null, content: '<p>live</p>', content_json: null, category: null,
+        tags: [], status: 'published', cover_url: null, seo_title: null,
+        seo_description: null, scheduled_at: null, published_at: '2026-01-01T00:00:00Z',
+      }],
+      revisions: [{
+        id: 'r1', client_id: 'c1', entity_type: 'post', entity_id: 'post-1',
+        snapshot: {
+          title: 'Old Draft Title', slug: 'old-draft-title', excerpt: null,
+          content: '<p>old</p>', content_json: null, category: null, tags: [],
+          status: 'draft', cover_url: null, seo_title: null, seo_description: null,
+          scheduled_at: null, published_at: null,
+        },
+        author_id: 'user-1', created_at: '2026-01-01T00:00:00Z',
+      }],
+    });
+    setSupabase(supabase);
+    setAdmin();
+
+    const res = await POST(postReq({ entity_type: 'post', entity_id: 'post-1', revision_id: 'r1' }));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.status).toBe('draft');
+
+    const { data: postRow } = await supabase.from('posts').select('*').eq('id', 'post-1').single();
+    expect(postRow?.status).toBe('draft');
+  });
+
+  it('allows a plain editor to restore a revision onto a row that is currently draft (non-elevated), unaffected by the fix', async () => {
+    const supabase = supabaseFor(USER, {
+      profiles: [{ id: 'user-1', role: 'editor', client_id: 'c1' }],
+      posts: [{
+        id: 'post-1', client_id: 'c1', title: 'Current Draft', slug: 'current-draft',
+        excerpt: null, content: '<p>current</p>', content_json: null, category: null,
+        tags: [], status: 'draft', cover_url: null, seo_title: null,
+        seo_description: null, scheduled_at: null, published_at: null,
+      }],
+      revisions: [{
+        id: 'r1', client_id: 'c1', entity_type: 'post', entity_id: 'post-1',
+        snapshot: {
+          title: 'Old Draft', slug: 'old-draft', excerpt: null, content: '<p>old</p>',
+          content_json: null, category: null, tags: [], status: 'draft', cover_url: null,
+          seo_title: null, seo_description: null, scheduled_at: null, published_at: null,
+        },
+        author_id: 'user-1', created_at: '2026-01-01T00:00:00Z',
+      }],
+    });
+    setSupabase(supabase);
+    setAdmin();
+
+    const res = await POST(postReq({ entity_type: 'post', entity_id: 'post-1', revision_id: 'r1' }));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.title).toBe('Old Draft');
+
+    const { data: postRow } = await supabase.from('posts').select('*').eq('id', 'post-1').single();
+    expect(postRow?.title).toBe('Old Draft');
+    expect(postRow?.status).toBe('draft');
+  });
+});
