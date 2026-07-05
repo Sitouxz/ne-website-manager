@@ -10,6 +10,7 @@ import {
 import { createClient } from '@/lib/supabase/client';
 import { useSelectedClient } from '@/components/AppShell';
 import { logActivity } from '@/lib/activity';
+import { firePublishNotify } from '@/lib/publish-client';
 import MediaPicker from '@/components/MediaPicker';
 import type { MediaItem } from '@/app/api/media/route';
 import RichTextEditor from '@/components/editor/RichTextEditor';
@@ -314,7 +315,11 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
 
       if (err) { setError(err.message); setSaving(false); return; }
 
-      if (status === 'published') await triggerDeploy(supabase, clientId);
+      if (status === 'published') {
+        // A brand-new post transitioning straight to published is always a
+        // fresh publish (there's no prior live version to merely update).
+        firePublishNotify({ clientId, event: 'content.published', entityType: 'post', entityId: newPost.id, slug: payload.slug });
+      }
 
       const action = status === 'published' ? 'published' : status === 'scheduled' ? 'scheduled' : 'created';
       await logActivity(supabase, {
@@ -339,7 +344,18 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
 
       if (err) { setError(err.message); setSaving(false); return; }
 
-      if (status === 'published') await triggerDeploy(supabase, clientId);
+      if (status === 'published') {
+        // Fresh publish (draft/scheduled -> published) vs. an edit to
+        // already-published content — mirrors the `action` mapping for
+        // logActivity just below.
+        firePublishNotify({
+          clientId,
+          event: previousStatus === 'published' ? 'content.updated' : 'content.published',
+          entityType: 'post',
+          entityId: id,
+          slug: payload.slug,
+        });
+      }
 
       const action =
         previousStatus !== status
@@ -369,17 +385,6 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
       setSaving(false);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
-    }
-  }
-
-  async function triggerDeploy(supabase: ReturnType<typeof createClient>, cid: string) {
-    const { data: client } = await supabase
-      .from('clients')
-      .select('deploy_hook')
-      .eq('id', cid)
-      .single();
-    if (client?.deploy_hook) {
-      await fetch(client.deploy_hook, { method: 'POST' }).catch(() => null);
     }
   }
 

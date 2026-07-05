@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { useSelectedClient } from '@/components/AppShell';
+import { firePublishNotify } from '@/lib/publish-client';
 import type { MenuItem, MenuItemLinkType, Collection } from '@/lib/supabase/types';
 
 /**
@@ -127,20 +128,29 @@ export default function NavigationPage() {
     setAdding(true);
     setAddError('');
     const supabase = createClient();
-    const { error: insertError } = await supabase.from('menu_items').insert({
-      client_id: selectedClientId,
-      location: 'public',
-      label,
-      link_type: form.linkType,
-      collection_slug: form.linkType === 'collection' ? form.collectionSlug : null,
-      url: form.linkType === 'collection' ? null : form.url.trim(),
-      parent_id: form.parentId || null,
-      sort_order: nextSortOrder,
-      is_visible: true,
-    });
+    const { data: inserted, error: insertError } = await supabase
+      .from('menu_items')
+      .insert({
+        client_id: selectedClientId,
+        location: 'public',
+        label,
+        link_type: form.linkType,
+        collection_slug: form.linkType === 'collection' ? form.collectionSlug : null,
+        url: form.linkType === 'collection' ? null : form.url.trim(),
+        parent_id: form.parentId || null,
+        sort_order: nextSortOrder,
+        is_visible: true,
+      })
+      .select()
+      .single();
     setAdding(false);
 
     if (insertError) { setAddError(insertError.message); return; }
+    // Navigation has no "Save" button of its own — every successful direct
+    // write here IS the save point (see the file-level comment above), so
+    // each one fires `content.updated` (there's no publish/unpublish
+    // transition concept for a nav item).
+    firePublishNotify({ clientId: selectedClientId, event: 'content.updated', entityType: 'menu_item', entityId: inserted?.id ?? '', slug: label });
     resetAddForm();
     load();
   }
@@ -162,6 +172,12 @@ export default function NavigationPage() {
       setActionError(`Failed to delete "${item.label}": ${deleteError.message}`);
       return;
     }
+    // `content.deleted` — a client site should treat this the same as
+    // removing published content, since a nav item disappearing is itself
+    // a visible change to the live site.
+    if (selectedClientId) {
+      firePublishNotify({ clientId: selectedClientId, event: 'content.deleted', entityType: 'menu_item', entityId: item.id, slug: item.label });
+    }
     load();
   }
 
@@ -178,6 +194,9 @@ export default function NavigationPage() {
     if (updateError) {
       setActionError(`Failed to update "${item.label}": ${updateError.message}`);
       return;
+    }
+    if (selectedClientId) {
+      firePublishNotify({ clientId: selectedClientId, event: 'content.updated', entityType: 'menu_item', entityId: item.id, slug: item.label });
     }
     setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, is_visible: !i.is_visible } : i)));
   }
@@ -204,6 +223,9 @@ export default function NavigationPage() {
       // have partially succeeded even though the pair failed as a whole.
       load();
       return;
+    }
+    if (selectedClientId) {
+      firePublishNotify({ clientId: selectedClientId, event: 'content.updated', entityType: 'menu_item', entityId: item.id, slug: item.label });
     }
     setItems((prev) => prev.map((i) => {
       if (i.id === item.id) return { ...i, sort_order: other.sort_order };

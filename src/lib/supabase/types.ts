@@ -7,12 +7,28 @@ export type PropertyStatus = 'active' | 'archived';
 export type ListingType = 'sale' | 'rent';
 export type Segment = 'Prime' | 'City fringe' | 'Suburban';
 
+/** Task 7.1 — one row per outbound webhook attempt (`webhook_deliveries`). */
+export interface WebhookDelivery {
+  id: string;
+  client_id: string;
+  url: string;
+  event: string;
+  payload: Record<string, unknown>;
+  status_code: number | null;
+  ok: boolean;
+  created_at: string;
+}
+
 export interface Client {
   id: string;
   name: string;
   slug: string;
   website_url: string | null;
   deploy_hook: string | null;
+  /** Task 7.1 — client site's revalidate endpoint (Phase 7.2's `createRevalidateHandler`). */
+  revalidate_url: string | null;
+  /** Task 7.1 — HMAC signing key for the `x-ne-signature` header on `revalidate_url` POSTs. Never sent to the browser. */
+  revalidate_secret: string | null;
   github_repo: string | null;
   plan: string;
   is_active: boolean;

@@ -6,6 +6,7 @@ import { use, useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowLeft, Save, Send, Loader2, History, X, AlertCircle } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { logActivity } from '@/lib/activity';
+import { firePublishNotify } from '@/lib/publish-client';
 import FieldInput from '@/components/collections/FieldInput';
 import { validateEntry } from '@/lib/collections/validate';
 import type { Collection, CollectionItem, CollectionItemStatus } from '@/lib/supabase/types';
@@ -236,6 +237,18 @@ export default function CollectionEntryEditor({
 
     const { error: err } = await supabase.from('collection_items').update(payload).eq('id', entryId);
     if (err) { setError(err.message); setSaving(false); return; }
+
+    if (status === 'published') {
+      // Fresh publish (draft -> published) vs. an edit to already-published
+      // content — mirrors the `action` mapping for logActivity just below.
+      firePublishNotify({
+        clientId: clientId!,
+        event: previousStatus === 'published' ? 'content.updated' : 'content.published',
+        entityType: 'collection_entry',
+        entityId: entryId,
+        slug: payload.slug as string,
+      });
+    }
 
     const action = previousStatus !== status
       ? (status === 'published' ? 'published' : status === 'archived' ? 'archived' : 'updated')

@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { useSelectedClient } from '@/components/AppShell';
 import { loadGlobal, saveGlobal } from '@/lib/globals/client';
+import { firePublishNotify } from '@/lib/publish-client';
 import {
   DEFAULT_FOOTER, DEFAULT_THEME, DEFAULT_SOCIAL, DEFAULT_CONTACT,
   type FooterGlobal, type ThemeGlobal, type SocialGlobal, type ContactGlobal,
@@ -74,6 +75,13 @@ export default function SiteGlobalsPage() {
     const err = await saveGlobal(selectedClientId, tab, value);
     setSaving(false);
     if (err) { setError(err); return; }
+    // No publish/unpublish transition exists for globals (there's no
+    // draft state to promote from) — every successful save here is
+    // `content.updated`. `entityId`/`slug` use the `site_globals` key
+    // (footer/theme/social/contact) since there's no separate row id
+    // tracked in this component — `(client_id, key)` is the natural
+    // identity for a globals row.
+    firePublishNotify({ clientId: selectedClientId, event: 'content.updated', entityType: 'site_globals', entityId: tab, slug: tab });
     setSaved(true);
     setTimeout(() => setSaved(false), 2500);
   }

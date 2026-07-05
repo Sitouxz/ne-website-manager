@@ -8,7 +8,7 @@ import {
   KeyRound, Plus, Trash2, X, AlertTriangle,
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
-import type { Client } from '@/lib/supabase/types';
+import type { Client, WebhookDelivery } from '@/lib/supabase/types';
 
 type Tab = 'general' | 'deploy' | 'integration' | 'api';
 
@@ -43,8 +43,22 @@ export default function SettingsPage() {
   const [saving,   setSaving]   = useState(false);
   const [saved,    setSaved]    = useState(false);
   const [tab,      setTab]      = useState<Tab>('general');
-  const [form,     setForm]     = useState({ name: '', website_url: '', deploy_hook: '', github_repo: '' });
+  const [form,     setForm]     = useState({
+    name: '', website_url: '', deploy_hook: '', github_repo: '',
+    revalidate_url: '', revalidate_secret: '',
+  });
   const [cmsBase,  setCmsBase]  = useState('');
+
+  // Publishing tab — delivery log (Task 7.1). Extends the existing "Deploy
+  // Hook" tab (relabeled "Publishing") rather than adding a brand-new tab:
+  // revalidate URL/secret and the delivery log are both about the same
+  // underlying question ("what happens when I publish?") that the deploy
+  // hook fields already answer, so folding them into one tab keeps related
+  // settings together instead of splitting "how content reaches the live
+  // site" across two separate tabs.
+  const [deliveries,        setDeliveries]        = useState<WebhookDelivery[]>([]);
+  const [deliveriesLoading, setDeliveriesLoading]  = useState(false);
+  const [deliveriesErr,     setDeliveriesErr]      = useState('');
 
   // Integration state
   const [ghToken,   setGhToken]   = useState('');
@@ -71,6 +85,8 @@ export default function SettingsPage() {
       website_url: c?.website_url ?? '',
       deploy_hook: c?.deploy_hook ?? '',
       github_repo: c?.github_repo ?? '',
+      revalidate_url: c?.revalidate_url ?? '',
+      revalidate_secret: c?.revalidate_secret ?? '',
     });
   }
 
@@ -108,10 +124,12 @@ export default function SettingsPage() {
     setSaving(true);
     const supabase = createClient();
     await supabase.from('clients').update({
-      name:        form.name,
-      website_url: form.website_url || null,
-      deploy_hook: form.deploy_hook || null,
-      github_repo: form.github_repo || null,
+      name:              form.name,
+      website_url:       form.website_url || null,
+      deploy_hook:       form.deploy_hook || null,
+      github_repo:       form.github_repo || null,
+      revalidate_url:    form.revalidate_url || null,
+      revalidate_secret: form.revalidate_secret || null,
     }).eq('id', client.id);
     setSaving(false);
     setSaved(true);
@@ -129,6 +147,50 @@ export default function SettingsPage() {
     if (!form.deploy_hook) return;
     await fetch(form.deploy_hook, { method: 'POST' });
     alert('Deploy hook triggered! Check Vercel dashboard.');
+  }
+
+  const loadDeliveries = useCallback(async (clientId: string) => {
+    setDeliveriesLoading(true);
+    setDeliveriesErr('');
+    const supabase = createClient();
+    const { data, error } = await supabase
+      .from('webhook_deliveries')
+      .select('*')
+      .eq('client_id', clientId)
+      .order('created_at', { ascending: false })
+      .limit(20);
+    if (error) setDeliveriesErr(error.message);
+    setDeliveries((data ?? []) as WebhookDelivery[]);
+    setDeliveriesLoading(false);
+  }, []);
+
+  useEffect(() => {
+    if (!(tab === 'deploy' && client?.id)) return;
+    const clientId = client.id;
+    const timer = window.setTimeout(() => loadDeliveries(clientId), 0);
+    return () => window.clearTimeout(timer);
+  }, [tab, client?.id, loadDeliveries]);
+
+  // Fires a real `content.updated` test event through the actual
+  // notifyPublish pipeline (not a raw unsigned POST) — so this genuinely
+  // exercises the HMAC-signing + delivery-logging path, and the row shows
+  // up in the delivery log below a moment later, matching the established
+  // "Test Deploy Hook" button's spirit but for the signed revalidate path.
+  async function testRevalidate() {
+    if (!client || !form.revalidate_url) return;
+    await fetch('/api/publish/notify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        clientId: client.id,
+        event: 'content.updated',
+        entityType: 'test',
+        entityId: 'settings-test-ping',
+        slug: null,
+      }),
+    });
+    alert('Revalidate webhook queued! Check the delivery log below in a few seconds.');
+    window.setTimeout(() => loadDeliveries(client.id), 1500);
   }
 
   async function handlePushToGitHub() {
@@ -371,7 +433,7 @@ const pages = await fetch('${pagesUrl}').then(r => r.json());`,
         <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', marginBottom: 24, gap: 0, overflowX: 'auto' }}>
           {([
             ['general',     'General',     Globe],
-            ['deploy',      'Deploy Hook', Webhook],
+            ['deploy',      'Publishing',  Webhook],
             ['integration', 'Integration', GitBranch],
             ['api',         'API Access',  Terminal],
           ] as [Tab, string, React.ElementType][]).map(([key, label, Icon]) => (
@@ -406,37 +468,127 @@ const pages = await fetch('${pagesUrl}').then(r => r.json());`,
           </div>
         )}
 
-        {/* ── Deploy Hook ── */}
+        {/* ── Publishing (Deploy Hook + Revalidate + delivery log) ── */}
         {tab === 'deploy' && (
-          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
-            <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 10 }}>
-              <Webhook size={16} color="var(--ne-blue)" />
-              <div>
-                <div style={{ fontWeight: 700, fontSize: 14 }}>Vercel Deploy Hook</div>
-                <div style={{ fontSize: 11.5, color: 'var(--fg3)' }}>Triggers a site rebuild when you publish content</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+
+            {/* Vercel Deploy Hook */}
+            <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
+              <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 10 }}>
+                <Webhook size={16} color="var(--ne-blue)" />
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: 14 }}>Vercel Deploy Hook</div>
+                  <div style={{ fontSize: 11.5, color: 'var(--fg3)' }}>Triggers a full site rebuild when you publish content</div>
+                </div>
+              </div>
+              <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: 12.5, fontWeight: 600, color: 'var(--fg2)', marginBottom: 6 }}>Deploy Hook URL</label>
+                  <input value={form.deploy_hook} onChange={(e) => setForm({ ...form, deploy_hook: e.target.value })}
+                    placeholder="https://api.vercel.com/v1/integrations/deploy/..."
+                    style={{ width: '100%', padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', fontSize: 12.5, outline: 'none', color: 'var(--fg1)', fontFamily: 'monospace' }} />
+                </div>
+                <div style={{ background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '14px 16px' }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--fg2)', marginBottom: 8 }}>How to get your deploy hook:</div>
+                  <ol style={{ fontSize: 12, color: 'var(--fg3)', margin: 0, paddingLeft: 16, lineHeight: 2 }}>
+                    <li>Go to <b style={{ color: 'var(--fg2)' }}>vercel.com</b> and open your website project</li>
+                    <li>Settings &rarr; Git &rarr; Deploy Hooks</li>
+                    <li>Create hook — name: &ldquo;NE Website Manager&rdquo;, branch: main</li>
+                    <li>Copy the URL and paste above</li>
+                  </ol>
+                </div>
+                {form.deploy_hook && (
+                  <button onClick={testDeploy} className="btn-outline-ne" style={{ alignSelf: 'flex-start' }}>
+                    <Zap size={13} /> Test Deploy Hook
+                  </button>
+                )}
               </div>
             </div>
-            <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
-              <div>
-                <label style={{ display: 'block', fontSize: 12.5, fontWeight: 600, color: 'var(--fg2)', marginBottom: 6 }}>Deploy Hook URL</label>
-                <input value={form.deploy_hook} onChange={(e) => setForm({ ...form, deploy_hook: e.target.value })}
-                  placeholder="https://api.vercel.com/v1/integrations/deploy/..."
-                  style={{ width: '100%', padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', fontSize: 12.5, outline: 'none', color: 'var(--fg1)', fontFamily: 'monospace' }} />
+
+            {/* Revalidate URL (Task 7.1) */}
+            <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
+              <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 10 }}>
+                <Webhook size={16} color="var(--ne-blue)" />
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: 14 }}>Revalidate Webhook</div>
+                  <div style={{ fontSize: 11.5, color: 'var(--fg3)' }}>Signed POST sent to your site on every publish/update — lets it revalidate just the affected page instead of a full rebuild</div>
+                </div>
               </div>
-              <div style={{ background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '14px 16px' }}>
-                <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--fg2)', marginBottom: 8 }}>How to get your deploy hook:</div>
-                <ol style={{ fontSize: 12, color: 'var(--fg3)', margin: 0, paddingLeft: 16, lineHeight: 2 }}>
-                  <li>Go to <b style={{ color: 'var(--fg2)' }}>vercel.com</b> and open your website project</li>
-                  <li>Settings &rarr; Git &rarr; Deploy Hooks</li>
-                  <li>Create hook — name: &ldquo;NE Website Manager&rdquo;, branch: main</li>
-                  <li>Copy the URL and paste above</li>
-                </ol>
+              <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: 12.5, fontWeight: 600, color: 'var(--fg2)', marginBottom: 6 }}>Revalidate URL</label>
+                  <input value={form.revalidate_url} onChange={(e) => setForm({ ...form, revalidate_url: e.target.value })}
+                    placeholder="https://your-site.com/api/revalidate"
+                    style={{ width: '100%', padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', fontSize: 12.5, outline: 'none', color: 'var(--fg1)', fontFamily: 'monospace' }} />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: 12.5, fontWeight: 600, color: 'var(--fg2)', marginBottom: 6 }}>Signing Secret</label>
+                  <input
+                    type="password"
+                    value={form.revalidate_secret}
+                    onChange={(e) => setForm({ ...form, revalidate_secret: e.target.value })}
+                    placeholder="a long random string, shared with your site's revalidate handler"
+                    style={{ width: '100%', padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', fontSize: 13, outline: 'none', color: 'var(--fg1)', fontFamily: 'monospace' }}
+                  />
+                  <p style={{ fontSize: 11.5, color: 'var(--fg3)', margin: '5px 0 0' }}>
+                    Every request to the Revalidate URL is signed with this secret via an <code>x-ne-signature</code> header
+                    (hex HMAC-SHA256 of the request body). Set the same value as your site&apos;s <code>createRevalidateHandler</code> secret.
+                  </p>
+                </div>
+                {form.revalidate_url && (
+                  <button onClick={testRevalidate} className="btn-outline-ne" style={{ alignSelf: 'flex-start' }}>
+                    <Zap size={13} /> Test Revalidate Webhook
+                  </button>
+                )}
               </div>
-              {form.deploy_hook && (
-                <button onClick={testDeploy} className="btn-outline-ne" style={{ alignSelf: 'flex-start' }}>
-                  <Zap size={13} /> Test Deploy Hook
-                </button>
-              )}
+            </div>
+
+            {/* Delivery log (Task 7.1) */}
+            <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
+              <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', fontWeight: 700, fontSize: 14 }}>
+                Recent Deliveries
+                <span style={{ fontWeight: 500, fontSize: 11.5, color: 'var(--fg3)', marginLeft: 8 }}>Last 20 webhook attempts for this client</span>
+              </div>
+              <div style={{ padding: deliveries.length === 0 && !deliveriesLoading ? 20 : 0 }}>
+                {deliveriesErr && (
+                  <div style={{ margin: 20, padding: '10px 14px', background: '#FEF2F2', color: 'var(--ne-danger)', borderRadius: 'var(--r-sm)', fontSize: 13 }}>
+                    {deliveriesErr}
+                  </div>
+                )}
+                {deliveriesLoading ? (
+                  <div style={{ padding: 20, fontSize: 12.5, color: 'var(--fg3)' }}>Loading deliveries...</div>
+                ) : deliveries.length === 0 ? (
+                  <div style={{ fontSize: 12.5, color: 'var(--fg3)' }}>No webhook deliveries yet — they&apos;ll show up here after your next publish/update.</div>
+                ) : (
+                  deliveries.map((d) => (
+                    <div
+                      key={d.id}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 12, padding: '10px 20px',
+                        borderTop: '1px solid var(--border)', flexWrap: 'wrap',
+                      }}
+                    >
+                      <span
+                        title={d.ok ? 'Delivered' : 'Failed'}
+                        style={{
+                          width: 8, height: 8, borderRadius: 99, flexShrink: 0,
+                          background: d.ok ? 'var(--ne-success)' : 'var(--ne-danger)',
+                        }}
+                      />
+                      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--fg1)', minWidth: 130 }}>{d.event}</span>
+                      <code style={{ flex: 1, minWidth: 160, fontSize: 11, color: 'var(--fg3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {d.url}
+                      </code>
+                      <span style={{ fontSize: 11, fontWeight: 600, color: d.ok ? 'var(--ne-success)' : 'var(--ne-danger)', flexShrink: 0 }}>
+                        {d.status_code ?? 'no response'}
+                      </span>
+                      <span style={{ fontSize: 11, color: 'var(--fg3)', flexShrink: 0 }}>
+                        {new Date(d.created_at).toLocaleString()}
+                      </span>
+                    </div>
+                  ))
+                )}
+              </div>
             </div>
           </div>
         )}
