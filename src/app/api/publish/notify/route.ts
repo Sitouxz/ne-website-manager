@@ -32,6 +32,15 @@ import { notifyPublish, type PublishEvent } from '@/lib/publish';
  * This is the actual "fire-and-forget" boundary; the browser-side callers
  * (see `src/lib/publish-client.ts`) additionally don't await this fetch at
  * all, so both layers agree this must never block a save.
+ *
+ * Post-Task-7.1 fix: `deploy_hook`/`revalidate_url`/`revalidate_secret` now
+ * live on `public.client_publish_config` (migration 018), not `clients` —
+ * `clients` has a public-read RLS policy, which used to expose
+ * `revalidate_secret` in plaintext to any unauthenticated caller with the
+ * anon key. This route now reads `client_publish_config` by `client_id`
+ * instead; `notifyPublish`'s own signature is unchanged since it only ever
+ * needed a `{ id, revalidate_url?, revalidate_secret?, deploy_hook? }` shape,
+ * not literally a `clients` row.
  */
 
 const VALID_EVENTS: PublishEvent[] = ['content.published', 'content.updated', 'content.deleted'];
@@ -87,13 +96,17 @@ export async function POST(req: Request) {
   // (see migration 017_webhooks.sql).
   after(async () => {
     const admin = createAdminClient();
-    const { data: client } = await admin
-      .from('clients')
-      .select('id, revalidate_url, revalidate_secret, deploy_hook')
-      .eq('id', clientId)
+    const { data: config } = await admin
+      .from('client_publish_config')
+      .select('revalidate_url, revalidate_secret, deploy_hook')
+      .eq('client_id', clientId)
       .single();
-    if (!client) return;
-    await notifyPublish(client, { event, entityType, entityId, slug }, admin);
+    if (!config) return;
+    await notifyPublish(
+      { id: clientId, revalidate_url: config.revalidate_url, revalidate_secret: config.revalidate_secret, deploy_hook: config.deploy_hook },
+      { event, entityType, entityId, slug },
+      admin
+    );
   });
 
   return NextResponse.json({ ok: true });

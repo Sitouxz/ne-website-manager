@@ -8,7 +8,7 @@ import {
   KeyRound, Plus, Trash2, X, AlertTriangle,
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
-import type { Client, WebhookDelivery } from '@/lib/supabase/types';
+import type { Client, ClientPublishConfig, WebhookDelivery } from '@/lib/supabase/types';
 
 type Tab = 'general' | 'deploy' | 'integration' | 'api';
 
@@ -78,17 +78,48 @@ export default function SettingsPage() {
   const [newPlaintext,  setNewPlaintext]  = useState<string | null>(null);
   const [revokingId,    setRevokingId]    = useState<string | null>(null);
 
+  // deploy_hook/revalidate_url/revalidate_secret live on `client_publish_config`
+  // (migration 018), not `clients` — `clients` has a public-read RLS policy,
+  // which used to expose `revalidate_secret` in plaintext to any
+  // unauthenticated caller with the anon key. `applyClient` only ever sets
+  // the plain `clients` fields; `loadPublishConfig` (below) is a separate
+  // fetch, run whenever the selected client changes.
   function applyClient(c: Client | null) {
     setClient(c);
-    setForm({
+    setForm((f) => ({
+      ...f,
       name: c?.name ?? '',
       website_url: c?.website_url ?? '',
-      deploy_hook: c?.deploy_hook ?? '',
       github_repo: c?.github_repo ?? '',
-      revalidate_url: c?.revalidate_url ?? '',
-      revalidate_secret: c?.revalidate_secret ?? '',
-    });
+      // Reset to blank immediately on client switch so stale values from the
+      // previously-selected client never flash while the new client's
+      // publish-config fetch is in flight.
+      deploy_hook: '',
+      revalidate_url: '',
+      revalidate_secret: '',
+    }));
   }
+
+  const loadPublishConfig = useCallback(async (clientId: string) => {
+    const supabase = createClient();
+    const { data } = await supabase
+      .from('client_publish_config')
+      .select('deploy_hook, revalidate_url, revalidate_secret')
+      .eq('client_id', clientId)
+      .maybeSingle();
+    const config = data as Pick<ClientPublishConfig, 'deploy_hook' | 'revalidate_url' | 'revalidate_secret'> | null;
+    setForm((f) => ({
+      ...f,
+      deploy_hook: config?.deploy_hook ?? '',
+      revalidate_url: config?.revalidate_url ?? '',
+      revalidate_secret: config?.revalidate_secret ?? '',
+    }));
+  }, []);
+
+  useEffect(() => {
+    if (!client?.id) return;
+    loadPublishConfig(client.id);
+  }, [client?.id, loadPublishConfig]);
 
   useEffect(() => {
     const originTimer = window.setTimeout(() => {
@@ -124,13 +155,19 @@ export default function SettingsPage() {
     setSaving(true);
     const supabase = createClient();
     await supabase.from('clients').update({
-      name:              form.name,
-      website_url:       form.website_url || null,
+      name:        form.name,
+      website_url: form.website_url || null,
+      github_repo: form.github_repo || null,
+    }).eq('id', client.id);
+    // Upsert (rather than update) since a client with no publish config set
+    // yet has no `client_publish_config` row at all — only rows with at
+    // least one value set are ever created (see migration 018).
+    await supabase.from('client_publish_config').upsert({
+      client_id:         client.id,
       deploy_hook:       form.deploy_hook || null,
-      github_repo:       form.github_repo || null,
       revalidate_url:    form.revalidate_url || null,
       revalidate_secret: form.revalidate_secret || null,
-    }).eq('id', client.id);
+    }, { onConflict: 'client_id' });
     setSaving(false);
     setSaved(true);
     setTimeout(() => setSaved(false), 2500);

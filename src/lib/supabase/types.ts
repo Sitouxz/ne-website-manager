@@ -24,14 +24,31 @@ export interface Client {
   name: string;
   slug: string;
   website_url: string | null;
-  deploy_hook: string | null;
-  /** Task 7.1 — client site's revalidate endpoint (Phase 7.2's `createRevalidateHandler`). */
-  revalidate_url: string | null;
-  /** Task 7.1 — HMAC signing key for the `x-ne-signature` header on `revalidate_url` POSTs. Never sent to the browser. */
-  revalidate_secret: string | null;
   github_repo: string | null;
   plan: string;
   is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * `public.client_publish_config` DB row (migration 018) — one row per client,
+ * holding the deploy/revalidate secrets that used to live directly on
+ * `clients` (`deploy_hook` since migration 001; `revalidate_url`/
+ * `revalidate_secret` since migration 017/Task 7.1). Moved off `clients`
+ * because that table has a public-read RLS policy (`clients_public_read_active`)
+ * — this table has no public/anon read policy at all, matching `api_keys`'s
+ * precedent (migration 004). Read/write is scoped to `client_admin`/`ne_admin`
+ * only; a plain `editor` cannot read this table either.
+ */
+export interface ClientPublishConfig {
+  id: string;
+  client_id: string;
+  deploy_hook: string | null;
+  /** Client site's revalidate endpoint (Phase 7.2's `createRevalidateHandler`). */
+  revalidate_url: string | null;
+  /** HMAC signing key for the `x-ne-signature` header on `revalidate_url` POSTs. Never sent to the browser except back to the admin who set it (see settings page). */
+  revalidate_secret: string | null;
   created_at: string;
   updated_at: string;
 }

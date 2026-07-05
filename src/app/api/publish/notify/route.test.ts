@@ -47,8 +47,12 @@ const EDITOR = { id: 'user-editor', role: 'editor', client_id: 'client-1' };
 const CLIENT_ADMIN = { id: 'user-ca', role: 'client_admin', client_id: 'client-1' };
 const NE_ADMIN = { id: 'user-ne', role: 'ne_admin', client_id: null };
 
-const CLIENT_ROW = {
-  id: 'client-1',
+// `client_publish_config` (migration 018) — deploy_hook/revalidate_url/
+// revalidate_secret no longer live on `clients` (which has a public-read RLS
+// policy); this route now reads them from `client_publish_config`, keyed by
+// `client_id` rather than `id`.
+const PUBLISH_CONFIG_ROW = {
+  client_id: 'client-1',
   revalidate_url: 'https://example.com/api/revalidate',
   revalidate_secret: 'shh',
   deploy_hook: null,
@@ -114,8 +118,8 @@ describe('POST /api/publish/notify', () => {
     expect(capturedAfter).not.toBeNull();
   });
 
-  it('the deferred callback loads the client row via the admin client and calls notifyPublish with it', async () => {
-    const admin = mockSupabase({ clients: [CLIENT_ROW] });
+  it('the deferred callback loads client_publish_config via the admin client and calls notifyPublish with it', async () => {
+    const admin = mockSupabase({ client_publish_config: [PUBLISH_CONFIG_ROW] });
     (createAdminClient as unknown as ReturnType<typeof vi.fn>).mockReturnValue(admin);
     setSupabase(supabaseFor(CLIENT_ADMIN, { profiles: [CLIENT_ADMIN] }));
 
@@ -129,13 +133,13 @@ describe('POST /api/publish/notify', () => {
 
     expect(notifyPublish).toHaveBeenCalledTimes(1);
     const [clientArg, paramsArg, supabaseArg] = (notifyPublish as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(clientArg).toMatchObject({ id: 'client-1', revalidate_url: CLIENT_ROW.revalidate_url });
+    expect(clientArg).toMatchObject({ id: 'client-1', revalidate_url: PUBLISH_CONFIG_ROW.revalidate_url });
     expect(paramsArg).toMatchObject({ event: 'content.published', entityType: 'post', entityId: 'p1', slug: 'hello' });
     expect(supabaseArg).toBe(admin);
   });
 
-  it('the deferred callback is a no-op (never calls notifyPublish) when the client row cannot be found', async () => {
-    const admin = mockSupabase({ clients: [] });
+  it('the deferred callback is a no-op (never calls notifyPublish) when no client_publish_config row exists', async () => {
+    const admin = mockSupabase({ client_publish_config: [] });
     (createAdminClient as unknown as ReturnType<typeof vi.fn>).mockReturnValue(admin);
     setSupabase(supabaseFor(CLIENT_ADMIN, { profiles: [CLIENT_ADMIN] }));
 

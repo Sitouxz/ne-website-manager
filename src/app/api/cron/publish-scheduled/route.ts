@@ -21,6 +21,13 @@ import { notifyPublish } from '@/lib/publish';
  * rows are batch-fetched once (by distinct `client_id`) rather than per
  * post, since this admin client already bypasses RLS and a scheduled batch
  * can publish several posts for the same client in one run.
+ *
+ * Post-Task-7.1 fix: `deploy_hook`/`revalidate_url`/`revalidate_secret`
+ * moved off `clients` onto `client_publish_config` (migration 018) — the
+ * former has a public-read RLS policy, which used to leak
+ * `revalidate_secret` in plaintext to any unauthenticated caller. This route
+ * now batch-fetches `client_publish_config` (keyed by `client_id`) instead
+ * of `clients` for those columns.
  */
 export async function GET(req: Request) {
   const cronSecret = process.env.CRON_SECRET;
@@ -60,14 +67,14 @@ export async function GET(req: Request) {
   // once per row — small win, avoids N+1 when a run publishes several posts
   // for the same client.
   const clientIds = Array.from(new Set(rows.map((row) => row.client_id as string)));
-  const clientsById = new Map<string, Record<string, unknown>>();
+  const publishConfigByClientId = new Map<string, Record<string, unknown>>();
   if (clientIds.length > 0) {
-    const { data: clientRows } = await supabase
-      .from('clients')
-      .select('id, revalidate_url, revalidate_secret, deploy_hook')
-      .in('id', clientIds);
-    for (const c of (clientRows ?? []) as Array<Record<string, unknown>>) {
-      clientsById.set(c.id as string, c);
+    const { data: configRows } = await supabase
+      .from('client_publish_config')
+      .select('client_id, revalidate_url, revalidate_secret, deploy_hook')
+      .in('client_id', clientIds);
+    for (const c of (configRows ?? []) as Array<Record<string, unknown>>) {
+      publishConfigByClientId.set(c.client_id as string, c);
     }
   }
 
@@ -85,10 +92,10 @@ export async function GET(req: Request) {
       summary: `Published "${row.title as string}" (scheduled)`,
     });
 
-    const client = clientsById.get(row.client_id as string);
-    if (client) {
+    const config = publishConfigByClientId.get(row.client_id as string);
+    if (config) {
       await notifyPublish(
-        { id: client.id as string, revalidate_url: client.revalidate_url as string | null, revalidate_secret: client.revalidate_secret as string | null, deploy_hook: client.deploy_hook as string | null },
+        { id: row.client_id as string, revalidate_url: config.revalidate_url as string | null, revalidate_secret: config.revalidate_secret as string | null, deploy_hook: config.deploy_hook as string | null },
         { event: 'content.published', entityType: 'post', entityId: row.id as string, slug: row.slug as string | undefined },
         supabase
       );

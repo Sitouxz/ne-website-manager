@@ -8,6 +8,13 @@ import type { Client } from '@/lib/supabase/types';
 
 export default function AdminPage() {
   const [clients,   setClients]   = useState<Client[]>([]);
+  // deploy_hook moved off `clients` onto `client_publish_config` (migration
+  // 018) — `clients` has a public-read RLS policy, so the deploy hook can no
+  // longer live there. Fetched separately here (this page is only reachable
+  // by `ne_admin`, who can read every client's publish config per
+  // `client_publish_config_manage`'s policy) and joined client-side by id,
+  // purely to drive the "Configured" / "Not set" badge below.
+  const [deployHookByClientId, setDeployHookByClientId] = useState<Record<string, boolean>>({});
   const [loading,   setLoading]   = useState(true);
   const [showNew,   setShowNew]   = useState(false);
   const [newClient, setNewClient] = useState({ name: '', slug: '', website_url: '', email: '', password: '' });
@@ -20,6 +27,14 @@ export default function AdminPage() {
     const supabase = createClient();
     const { data } = await supabase.from('clients').select('*').order('created_at', { ascending: false });
     setClients(data ?? []);
+
+    const { data: configs } = await supabase.from('client_publish_config').select('client_id, deploy_hook');
+    const configured: Record<string, boolean> = {};
+    for (const row of (configs ?? []) as Array<{ client_id: string; deploy_hook: string | null }>) {
+      configured[row.client_id] = !!row.deploy_hook;
+    }
+    setDeployHookByClientId(configured);
+
     setLoading(false);
   }
 
@@ -143,8 +158,8 @@ export default function AdminPage() {
                   </td>
                   <td><span style={{ fontSize: 12, background: 'var(--ne-blue-muted)', color: 'var(--ne-blue)', padding: '3px 8px', borderRadius: 99, fontWeight: 600 }}>{c.plan}</span></td>
                   <td>
-                    <span style={{ fontSize: 12, color: c.deploy_hook ? 'var(--ne-success)' : 'var(--fg3)' }}>
-                      {c.deploy_hook ? 'Configured' : 'Not set'}
+                    <span style={{ fontSize: 12, color: deployHookByClientId[c.id] ? 'var(--ne-success)' : 'var(--fg3)' }}>
+                      {deployHookByClientId[c.id] ? 'Configured' : 'Not set'}
                     </span>
                   </td>
                   <td style={{ fontSize: 12, color: 'var(--fg3)' }}>
