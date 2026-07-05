@@ -2,12 +2,16 @@ import Topbar from '@/components/Topbar';
 import { cookies } from 'next/headers';
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
-import { FileText, Eye, Clock, TrendingUp, ArrowUpRight, History } from 'lucide-react';
+import { FileText, Eye, Clock, TrendingUp, ArrowUpRight, History, AlertTriangle, CalendarClock, Search, Activity } from 'lucide-react';
 import Link from 'next/link';
 import ReviewQueue from '@/components/dashboard/ReviewQueue';
 import type { Profile } from '@/lib/supabase/types';
+import { countMissingSeo } from '@/lib/seo/audit';
 
 const SELECTED_CLIENT_COOKIE = 'ne_selected_client_id';
+const DAY_MS = 86_400_000;
+const DRAFT_AGE_DAYS = 14;
+const SPARKLINE_DAYS = 30;
 
 // Task 6.2: SEO Manager, Media Library, Forms & Leads, Announcements, and
 // Team Members have all shipped (Phases 2, 5, and 6.1) — the "Coming Soon"
@@ -29,6 +33,11 @@ function timeAgo(iso: string | null) {
   if (hrs < 24) return `${hrs}h ago`;
   const days = Math.floor(hrs / 24);
   return `${days}d ago`;
+}
+
+function fmtDateTime(iso: string | null) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleString('en-SG', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
 
 export default async function DashboardPage() {
@@ -54,8 +63,10 @@ export default async function DashboardPage() {
     clientName = selectedClient?.name ?? 'Website Manager';
   }
 
-  // Fetch posts scoped to client (or all posts for admin)
-  let postsQuery = supabase.from('posts').select('id, title, slug, status, published_at, updated_at, created_at');
+  // Fetch posts scoped to client (or all posts for admin). `scheduled_at`
+  // added for Task 8.2's scheduled-posts queue (aging-drafts + status stats
+  // already had everything else they need from this same query).
+  let postsQuery = supabase.from('posts').select('id, title, slug, status, published_at, scheduled_at, updated_at, created_at');
   if (clientId) postsQuery = postsQuery.eq('client_id', clientId);
   const { data: allPosts = [] } = await postsQuery.order('updated_at', { ascending: false });
 
@@ -63,6 +74,27 @@ export default async function DashboardPage() {
   let pagesQuery = supabase.from('pages').select('id, status, updated_at');
   if (clientId) pagesQuery = pagesQuery.eq('client_id', clientId);
   const { data: allPages = [] } = await pagesQuery;
+
+  // Task 8.2: Content Health card — missing-SEO count. Same query shape
+  // `seo/page.tsx`'s Content SEO Audit section uses (published posts/pages,
+  // `id, title, seo_title, seo_description`), scoped the same
+  // conditional-`clientId` way as every other query on this page. The
+  // filter/count logic itself is shared via `countMissingSeo`
+  // (`src/lib/seo/audit.ts`) rather than re-derived here.
+  let seoPostsQuery = supabase.from('posts').select('id, title, seo_title, seo_description').eq('status', 'published');
+  if (clientId) seoPostsQuery = seoPostsQuery.eq('client_id', clientId);
+  let seoPagesQuery = supabase.from('pages').select('id, title, seo_title, seo_description').eq('status', 'published');
+  if (clientId) seoPagesQuery = seoPagesQuery.eq('client_id', clientId);
+  const [{ data: seoPosts = [] }, { data: seoPages = [] }] = await Promise.all([seoPostsQuery, seoPagesQuery]);
+  const missingSeoCount = countMissingSeo(seoPosts ?? [], seoPages ?? []);
+
+  // Task 8.2: 30-day pageview sparkline — reads the Task 8.1 rollup table
+  // (`analytics_daily`, one row per client_id/day/path) rather than raw
+  // `analytics_events`, same as the analytics page's 30/90-day views.
+  const sparklineSinceDay = new Date(Date.now() - (SPARKLINE_DAYS - 1) * DAY_MS).toISOString().slice(0, 10);
+  let dailyQuery = supabase.from('analytics_daily').select('day, views').gte('day', sparklineSinceDay);
+  if (clientId) dailyQuery = dailyQuery.eq('client_id', clientId);
+  const { data: dailyRows = [] } = await dailyQuery;
 
   // `client_admin`/`ne_admin` only — an `editor` has no use for a queue of
   // things awaiting someone else's review (see ReviewQueue's own comment
@@ -115,6 +147,50 @@ export default async function DashboardPage() {
     { label: 'Total Pages', value: String(totalPages), icon: Eye, delta: totalPages === 0 ? 'None yet' : 'Across site', color: 'var(--ne-success)' },
     { label: 'Last Updated', value: lastUpdated ? timeAgo(lastUpdated) : '—', icon: TrendingUp, delta: lastUpdated ? fmtDate(lastUpdated) : 'No activity yet', color: '#6366f1' },
   ];
+
+  // Task 8.2 — Content Health card, part 1: drafts aging >14 days. Posts
+  // only (pages/collection-entries are out of scope — see brief: expanding
+  // to collection_items would mean querying an arbitrary number of
+  // collections per client, a meaningfully bigger query than this task
+  // implies). `updated_at` is the "last touched" column per the
+  // `handle_updated_at()` trigger convention (migration 001) — falls back to
+  // `created_at` only for a row where `updated_at` somehow isn't set.
+  const nowMs = Date.now();
+  const agingDrafts = (allPosts ?? [])
+    .filter((p) => p.status === 'draft')
+    .map((p) => ({ ...p, ageDays: Math.floor((nowMs - new Date(p.updated_at ?? p.created_at).getTime()) / DAY_MS) }))
+    .filter((p) => p.ageDays > DRAFT_AGE_DAYS)
+    .sort((a, b) => b.ageDays - a.ageDays);
+
+  // Part 2: the scheduled-posts queue. Same "status = 'scheduled'" set the
+  // publish-scheduled cron acts on (`src/app/api/cron/publish-scheduled/route.ts`),
+  // ordered soonest-first by `scheduled_at` — the ones nearest to actually
+  // being published by that cron surface at the top.
+  const scheduledQueue = (allPosts ?? [])
+    .filter((p) => p.status === 'scheduled')
+    .sort((a, b) => new Date(a.scheduled_at ?? 0).getTime() - new Date(b.scheduled_at ?? 0).getTime());
+
+  // Part 3 (missingSeoCount) already computed above via `countMissingSeo`.
+
+  // Task 8.2 — 30-day pageview sparkline: sum `views` across all paths per
+  // `day`, filling every day in the window (including zero-view days) so the
+  // sparkline's bar count always matches the day count. Mirrors
+  // `dailyBucketsFromRollup` in `analytics/page.tsx`, at day-only granularity
+  // (no per-bucket date label needed for this compact a visualization).
+  const sparklineStart = new Date();
+  sparklineStart.setHours(0, 0, 0, 0);
+  sparklineStart.setDate(sparklineStart.getDate() - (SPARKLINE_DAYS - 1));
+  const sparklineBuckets = Array.from({ length: SPARKLINE_DAYS }, (_, i) => {
+    const date = new Date(sparklineStart.getTime() + i * DAY_MS);
+    return { key: date.toISOString().slice(0, 10), views: 0 };
+  });
+  const sparklineByDay = new Map(sparklineBuckets.map((b) => [b.key, b]));
+  for (const row of dailyRows ?? []) {
+    const bucket = sparklineByDay.get(row.day);
+    if (bucket) bucket.views += row.views;
+  }
+  const sparklineTotal = sparklineBuckets.reduce((sum, b) => sum + b.views, 0);
+  const sparklineMax = Math.max(1, ...sparklineBuckets.map((b) => b.views));
 
   return (
     <>
@@ -284,6 +360,115 @@ export default async function DashboardPage() {
               an `editor` has no use for it, so it's simply not rendered
               for them (see ReviewQueue's own comment on why it's posts-only). */}
           {canReviewQueue && <ReviewQueue clientId={clientId ?? null} />}
+        </div>
+
+        {/* Task 8.2: content health + 30-day pageview sparkline */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1.4fr .6fr', gap: 20, marginTop: 24 }}>
+          {/* Content Health */}
+          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
+            <div style={{ padding: '18px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <AlertTriangle size={16} color="var(--fg3)" />
+              <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--fg1)' }}>Content Health</div>
+            </div>
+            <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 18 }}>
+
+              {/* Drafts aging >14 days */}
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <Clock size={14} color="var(--ne-warning)" />
+                    <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg1)' }}>Drafts aging &gt;14 days</span>
+                  </div>
+                  <Link href="/cms/posts" style={{ fontSize: 11.5, color: 'var(--ne-blue)', fontWeight: 600, textDecoration: 'none' }}>View all →</Link>
+                </div>
+                <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--fg1)' }}>{agingDrafts.length}</div>
+                {agingDrafts.length === 0 ? (
+                  <div style={{ fontSize: 12, color: 'var(--fg3)', marginTop: 4 }}>None — every draft has been touched recently.</div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginTop: 8 }}>
+                    {agingDrafts.slice(0, 3).map((p) => (
+                      <Link key={p.id} href={`/cms/posts/${p.id}`} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 12.5, color: 'var(--fg2)', textDecoration: 'none' }}>
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.title}</span>
+                        <span style={{ color: 'var(--fg3)', flexShrink: 0 }}>{p.ageDays}d old</span>
+                      </Link>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div style={{ borderTop: '1px solid var(--border)' }} />
+
+              {/* Scheduled queue */}
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <CalendarClock size={14} color="var(--ne-blue)" />
+                    <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg1)' }}>Scheduled queue</span>
+                  </div>
+                  <Link href="/cms/posts" style={{ fontSize: 11.5, color: 'var(--ne-blue)', fontWeight: 600, textDecoration: 'none' }}>View all →</Link>
+                </div>
+                <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--fg1)' }}>{scheduledQueue.length}</div>
+                {scheduledQueue.length === 0 ? (
+                  <div style={{ fontSize: 12, color: 'var(--fg3)', marginTop: 4 }}>Nothing scheduled right now.</div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginTop: 8 }}>
+                    {scheduledQueue.slice(0, 3).map((p) => (
+                      <Link key={p.id} href={`/cms/posts/${p.id}`} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 12.5, color: 'var(--fg2)', textDecoration: 'none' }}>
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.title}</span>
+                        <span style={{ color: 'var(--fg3)', flexShrink: 0 }}>{fmtDateTime(p.scheduled_at)}</span>
+                      </Link>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div style={{ borderTop: '1px solid var(--border)' }} />
+
+              {/* Missing SEO metadata */}
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <Search size={14} color="var(--ne-success)" />
+                    <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg1)' }}>Missing SEO metadata</span>
+                  </div>
+                  <Link href="/seo" style={{ fontSize: 11.5, color: 'var(--ne-blue)', fontWeight: 600, textDecoration: 'none' }}>Review →</Link>
+                </div>
+                <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--fg1)' }}>{missingSeoCount}</div>
+                <div style={{ fontSize: 12, color: 'var(--fg3)', marginTop: 4 }}>
+                  {missingSeoCount === 0 ? 'Every published post and page has an SEO title and description.' : 'Published posts/pages missing an SEO title or description.'}
+                </div>
+              </div>
+
+            </div>
+          </div>
+
+          {/* 30-day pageview sparkline (Task 8.1's analytics_daily rollup) */}
+          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
+            <div style={{ padding: '18px 20px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Activity size={16} color="var(--fg3)" />
+                <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--fg1)' }}>Traffic</div>
+              </div>
+              <Link href="/analytics" style={{ fontSize: 12, color: 'var(--ne-blue)', fontWeight: 600, textDecoration: 'none' }}>Details →</Link>
+            </div>
+            <div style={{ padding: 20 }}>
+              <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--fg1)' }}>{sparklineTotal}</div>
+              <div style={{ fontSize: 11.5, color: 'var(--fg3)', marginBottom: 16 }}>page views · last {SPARKLINE_DAYS} days</div>
+              {sparklineTotal === 0 ? (
+                <div style={{ color: 'var(--fg3)', fontSize: 12.5, padding: '18px 0', textAlign: 'center' }}>No page views recorded yet.</div>
+              ) : (
+                <div style={{ display: 'flex', alignItems: 'flex-end', gap: 2, height: 56 }}>
+                  {sparklineBuckets.map((b) => (
+                    <div
+                      key={b.key}
+                      title={`${b.key}: ${b.views} view${b.views === 1 ? '' : 's'}`}
+                      style={{ flex: 1, height: Math.max(2, Math.round((b.views / sparklineMax) * 56)), background: 'var(--ne-blue)', borderRadius: '2px 2px 0 0' }}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
         </div>
 
       </div>

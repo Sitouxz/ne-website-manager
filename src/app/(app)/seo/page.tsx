@@ -10,6 +10,7 @@ import { createClient } from '@/lib/supabase/client';
 import { useSelectedClient } from '@/components/AppShell';
 import type { Redirect } from '@/lib/supabase/types';
 import { isSameOriginRedirectPath } from '@/lib/seo/redirects';
+import { isMissingSeo } from '@/lib/seo/audit';
 
 /**
  * SEO Manager — Task 5.3. Two independent sections on one page (matching
@@ -107,16 +108,18 @@ export default function SeoManagerPage() {
     setRedirects((redirectRows ?? []) as Redirect[]);
 
     type SeoRow = { id: string; title: string; seo_title: string | null; seo_description: string | null };
-    const missing = (row: SeoRow) => !row.seo_title?.trim() || !row.seo_description?.trim();
 
+    // Task 8.2: `isMissingSeo` is shared with the dashboard's Content Health
+    // card (`src/lib/seo/audit.ts`) rather than re-derived here — same rule,
+    // same behavior as before the extraction.
     const postAudit: AuditItem[] = ((postRows ?? []) as SeoRow[])
-      .filter(missing)
+      .filter(isMissingSeo)
       .map((row) => ({
         id: row.id, type: 'post', title: row.title || '(Untitled)', href: `/cms/posts/${row.id}`,
         missingTitle: !row.seo_title?.trim(), missingDescription: !row.seo_description?.trim(),
       }));
     const pageAudit: AuditItem[] = ((pageRows ?? []) as SeoRow[])
-      .filter(missing)
+      .filter(isMissingSeo)
       .map((row) => ({
         id: row.id, type: 'page', title: row.title || '(Untitled)', href: `/cms/pages/${row.id}`,
         missingTitle: !row.seo_title?.trim(), missingDescription: !row.seo_description?.trim(),
