@@ -467,20 +467,22 @@ Ties CMS actions to live client sites. NE controls the client repos, so the cont
 
 ## Phase 8 — Analytics Pro & Dashboard Polish
 
+> **Reconciled 2026-07-06:** migration renumbered `020_analytics_rollup.sql` (013 taken by Phase 6's team.sql; 017-019 by Phase 7). Task 8.2's original list ("content health, quick actions, activity feed, 30-day sparkline") mostly already shipped in Task 6.2's dashboard rebuild: `ReviewQueue` (posts in `in_review`) and a Recent Activity feed (`activity_log`, admin-client author resolution) both already live on `dashboard/page.tsx`, and a Quick Actions card has existed since the original dashboard. Task 8.2 below is scoped down to what's actually still missing: a content-health card (drafts aging >14d, scheduled queue, missing-SEO count — reusing Task 5.3's SEO-audit query rather than duplicating it) and a 30-day sparkline. Don't rebuild what Task 6.2 already shipped.
+
 ### Task 8.1: Analytics aggregation
 
 **Files:**
-- Create: `supabase/migrations/013_analytics_rollup.sql` — materialized daily rollup table `analytics_daily` (client_id, day, path, views, visitors) + cron refresh (reuse cron route pattern: `src/app/api/cron/rollup-analytics/route.ts`, daily)
+- Create: `supabase/migrations/020_analytics_rollup.sql` — materialized daily rollup table `analytics_daily` (client_id, day, path, views, visitors) + cron refresh (reuse cron route pattern: `src/app/api/cron/rollup-analytics/route.ts`, daily)
 - Modify: `src/app/(app)/analytics/page.tsx` — date-range picker (7/30/90d), top pages, referrers, devices, custom events table, per-post performance; query rollups for ranges > 7 days, raw events otherwise
 
 - [ ] Migration + cron + UI; commit `feat: analytics rollups and expanded dashboard`
 
-### Task 8.2: Dashboard home v2
+### Task 8.2: Dashboard content health + sparkline
 
 **Files:**
-- Modify: `src/app/(app)/dashboard/page.tsx` — content health (drafts aging >14d, scheduled queue, missing SEO count), quick actions, activity feed, 30-day sparkline
+- Modify: `src/app/(app)/dashboard/page.tsx` — add a content-health card (drafts aging >14 days, the scheduled-posts queue, count of published posts/pages missing `seo_title`/`seo_description` — reuse Task 5.3's `seo/page.tsx` audit query rather than re-deriving it) and a 30-day pageview sparkline (from `analytics_daily`, Task 8.1). Leave the existing `ReviewQueue`/activity feed/quick-actions (Task 6.2) as-is.
 
-- [ ] Build; commit `feat: dashboard v2`
+- [ ] Build; commit `feat: dashboard content health and sparkline`
 
 ---
 
