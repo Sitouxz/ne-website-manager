@@ -428,12 +428,15 @@ Turns the CMS from "content" into "run the whole site."
 
 Ties CMS actions to live client sites. NE controls the client repos, so the contract can be exact.
 
-> **Reconciled 2026-07-05:** migration renumbered to `017_webhooks.sql` (012 taken by Phase 5's cross-origin-redirect fix). Wiring list corrected: the original draft named "post editor save-publish, cron, entry editor, globals save" but omitted the **pages editor** — pages have their own public feed (`pages_public_read`) and the same publish/unpublish transitions as posts/entries, so `notifyPublish` must be wired there too. `clients.deploy_hook` already exists (migration 001) — only `revalidate_url`/`revalidate_secret` are new columns.
+> **Reconciled 2026-07-05:** migration renumbered to `017_webhooks.sql` (012 taken by Phase 5's cross-origin-redirect fix). Wiring list corrected: the original draft named "post editor save-publish, cron, entry editor, globals save" but omitted the **pages editor** — pages have their own public feed (`pages_public_read`) and the same publish/unpublish transitions as posts/entries, so `notifyPublish` must be wired there too.
+>
+> **Reconciled 2026-07-05 (post-review):** `deploy_hook`/`revalidate_url`/`revalidate_secret` do NOT live on `clients` — that table has a public-read policy (`clients_public_read_active`, anon-readable), and Task 7.1's own review found this made a genuine HMAC secret trivially exfiltrable. Moved to a new table `client_publish_config` (migration `018`, no public-read policy, `client_admin`/`ne_admin`-only, mirroring `api_keys`'s established secret-isolation pattern) — see `src/lib/supabase/types.ts`'s `ClientPublishConfig`. The same review found and fixed an unrelated pre-existing drift bug: the live `clients_public_read` policy had degraded to `USING (true)` (unconditional) instead of the migration file's documented `USING (is_active = true)` — restored via migration `019`.
 
 ### Task 7.1: Publish webhooks + deploy triggers
 
 **Files:**
-- Create: `supabase/migrations/017_webhooks.sql` — `webhook_deliveries` (id, client_id, url, event TEXT, payload JSONB, status_code INT, ok BOOLEAN, created_at). Add `clients.revalidate_url TEXT`, `clients.revalidate_secret TEXT`
+- Create: `supabase/migrations/017_webhooks.sql` — `webhook_deliveries` (id, client_id, url, event TEXT, payload JSONB, status_code INT, ok BOOLEAN, created_at)
+- Create: `supabase/migrations/018_client_publish_config.sql` — `client_publish_config` (id, client_id UNIQUE, deploy_hook, revalidate_url, revalidate_secret) — no public-read policy, `client_admin`/`ne_admin`-only, replaces the originally-planned `clients.revalidate_url`/`revalidate_secret` columns (and relocates the pre-existing `deploy_hook`)
 - Create: `src/lib/publish.ts` — `notifyPublish(client, { event: 'content.published' | 'content.updated' | 'content.deleted', entityType, entityId, slug })`: (1) POST `revalidate_url` with HMAC-SHA256 signature header `x-ne-signature` over body using `revalidate_secret`; (2) if `deploy_hook` set, POST it (static rebuild); log delivery row. Fire-and-forget with 5s timeout.
 - Modify: publish points (post editor save-publish, **pages editor save-publish**, cron, entry editor, globals save) → call `notifyPublish`
 - Modify: `src/app/(app)/settings/page.tsx` — Publishing card: revalidate URL/secret, deploy hook, delivery log (last 20)
