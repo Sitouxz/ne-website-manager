@@ -392,10 +392,14 @@ Turns the CMS from "content" into "run the whole site."
 
 ## Phase 6 — Team & Workflow
 
+> **RLS posture rule (written down per Phase 5's final review recommendation):** default to broad authenticated write (`client_id = my_client_id() OR is_ne_admin()`) for content a human must visibly act on before anything happens (nav links, footer, form fields, draft content). Tighten to `ne_admin`/`client_admin`-only for anything that acts silently/automatically once saved (a redirect that fires on page load; a schema change that reshapes every entry; **publishing content live**, below) — the tell is "does saving this row alone, with no further human action, change what the public sees or does."
+>
+> **Reconciled 2026-07-05:** migration renumbered to `013_team.sql` (011/012 taken by Phase 5's SEO/redirects work). Post/page/collection-entry saves have no server route or action anywhere in this codebase (confirmed across every phase's reviews) — they're direct client-side Supabase writes, RLS-enforced. So "gate publish server-side, not just UI" in Task 6.2 means **RLS **`WITH CHECK`, not an application route — there is no server layer to add a check to. The RLS approach: require `client_admin`/`ne_admin` whenever a write's resulting row has `status IN ('published','scheduled')` on `posts`/`pages`/`collection_items`. Postgres RLS can't compare OLD vs NEW status within one policy (no trigger), so this has a real, deliberate consequence per the posture rule above: once a post/page/entry is published or scheduled, **only `client_admin`/`ne_admin` can save ANY further edit to that row** (not just re-toggle its status) — an `editor` must ask an admin to make changes to already-live content, or the row must be moved back to draft by an admin first. This is a standard, defensible CMS pattern (published content needs sign-off to touch), not an accidental side effect — but it's a real behavior change from today (editors can currently freely edit already-published posts), so it's called out explicitly here rather than discovered mid-implementation.
+
 ### Task 6.1: Invitations + team page
 
 **Files:**
-- Create: `supabase/migrations/011_team.sql` — `invitations` (id, client_id, email, role CHECK (role IN ('client_admin','editor')), invited_by, token TEXT UNIQUE, expires_at, accepted_at); RLS: client_admin/ne_admin of that client. Add RLS so client_admin can update profiles of same client: `CREATE POLICY "profiles_client_admin_manage" ON public.profiles FOR UPDATE USING (client_id = my_client_id() AND EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = auth.uid() AND p.role = 'client_admin'));`
+- Create: `supabase/migrations/013_team.sql` — `invitations` (id, client_id, email, role CHECK (role IN ('client_admin','editor')), invited_by, token TEXT UNIQUE, expires_at, accepted_at); RLS: client_admin/ne_admin of that client. Add RLS so client_admin can update profiles of same client: `CREATE POLICY "profiles_client_admin_manage" ON public.profiles FOR UPDATE USING (client_id = my_client_id() AND EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = auth.uid() AND p.role = 'client_admin'));`
 - Create: `src/app/api/team/invite/route.ts` — POST: create invitation + `supabase.auth.admin.inviteUserByEmail(email, { redirectTo: '/accept-invite?token=…' })` via service client; on accept, set profile `client_id` + `role`
 - Create: `src/app/(auth)/accept-invite/page.tsx` — set password, consume token
 - Create: `src/app/(app)/team/page.tsx` — members list (name, role, last sign-in), invite dialog, change role, remove (clears client_id); editors can't see it, sidebar gates by role
@@ -408,11 +412,12 @@ Turns the CMS from "content" into "run the whole site."
 ### Task 6.2: Review workflow
 
 **Files:**
-- Modify: post/page/entry editors — `editor` role can set Draft/In review only; Publish button gated to `client_admin`/`ne_admin`; "Submit for review" action
+- Create: `supabase/migrations/014_publish_rls.sql` — tighten `posts`/`pages`/`collection_items` write RLS: `WITH CHECK` requires `is_ne_admin() OR (client_id = my_client_id() AND (status NOT IN ('published','scheduled') OR EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role IN ('ne_admin','client_admin'))))` — pages have no `'scheduled'` status, use `status <> 'published'` for that table's condition instead.
+- Modify: post/page/entry editors — `editor` role can set Draft/In review only in the UI (Publish/Schedule buttons hidden or disabled for `editor`, matching the RLS reality above so an editor never hits a confusing RLS-denial error); "Submit for review" action sets `status:'in_review'`.
 - Create: `src/components/dashboard/ReviewQueue.tsx` on dashboard — items with status `in_review` for admins
 - Modify: `src/app/(app)/dashboard/page.tsx` — add ReviewQueue + recent activity feed (reads `activity_log`)
 
-- [ ] Role-gate publish server-side too (check in save route/action, not just UI)
+- [ ] Migration (RLS is the actual server-side gate — no route/action exists to check in), UI hides publish controls for `editor` to match
 - [ ] Commit `feat: editorial review workflow`
 
 ---
