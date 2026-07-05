@@ -19,10 +19,49 @@ import type { FieldDef, FieldType } from '@/lib/collections/types';
  *
  * `generateV1Sdk` reproduces that live output BYTE-FOR-BYTE — this is a
  * hard backward-compatibility constraint (`sdk/route.ts` still serves v1 by
- * default; see that file). `generateV2Sdk` builds on top of it: the v2
- * output contains the *entire* v1 output unchanged (imports are prepended
- * ahead of it, additional exports are appended after it), so nothing that
- * worked for a v1 integration stops working if a client later upgrades.
+ * default; see that file). `generateV2Sdk` builds on top of it: its output
+ * contains the *entire* v1 output unchanged (additional exports are appended
+ * after it), so nothing that worked for a v1 integration stops working if a
+ * client later upgrades.
+ *
+ * ## Two files for v2: `lib/cms.ts` (middleware-safe) vs `lib/cms-server.ts` (Node-only)
+ *
+ * v2 is split across TWO generated files/functions, not one, because of a
+ * real Edge Runtime incompatibility:
+ *
+ *   - `generateV2Sdk` -> `lib/cms.ts`. Contains v1 unchanged plus every v2
+ *     addition that does NOT require Node.js or App-Router-only APIs:
+ *     `getCollection`/`getEntry`/per-collection helpers, `getGlobals`/
+ *     `getNavigation`/`getAnnouncement`, `submitForm`, `getRedirects` +
+ *     `PROXY_MIDDLEWARE_SNIPPET`. This file has NO top-level imports beyond
+ *     what v1 already needs (none), so it is safe to `import` from a client
+ *     repo's own `middleware.ts` — exactly what `PROXY_MIDDLEWARE_SNIPPET`
+ *     itself recommends via `import { getRedirects } from './lib/cms'`.
+ *     Next.js Middleware runs in the Edge Runtime by default on most
+ *     Next.js versions client repos actually run, which does not support
+ *     Node.js APIs (`crypto`) or App-Router server-only APIs (`next/headers`,
+ *     `next/navigation`). If those imports lived in this file, a client
+ *     following the generator's own middleware snippet would very likely
+ *     hit a build failure the moment they imported anything from it.
+ *   - `generateV2ServerSdk` -> `lib/cms-server.ts`. Contains ONLY
+ *     `createPreviewHandler`/`createRevalidateHandler` and the Node/App-
+ *     Router-only imports those two factories need (`crypto`'s
+ *     `createHmac`/`timingSafeEqual`, `next/cache`, `next/headers`,
+ *     `next/navigation`). Both handlers are meant to be wired into Route
+ *     Handlers (`app/api/preview/route.ts`, `app/api/revalidate/route.ts`),
+ *     which run in the Node.js runtime by default — never into
+ *     `middleware.ts`. The file name and its own leading comment both say
+ *     so explicitly, so a client integrator doesn't have to infer it.
+ *
+ * `lib/cms-server.ts` does not `import` anything from `lib/cms.ts` — it
+ * declares its own local `CMS_BASE`/`CLIENT_SLUG` consts (interpolated the
+ * same way v1's are) rather than importing them, since v1's own
+ * `CMS_BASE`/`CLIENT_SLUG` are intentionally NOT exported (exporting them
+ * would change `generateV1Sdk`'s byte-identical output, which is a hard
+ * constraint — see above). Keeping `lib/cms-server.ts` self-contained this
+ * way also means it never breaks if `lib/cms.ts` is missing or edited by
+ * hand; the only relationship between the two files is that a client
+ * usually has both.
  *
  * ## Collection helper naming convention
  *
@@ -180,7 +219,8 @@ export function installAnalytics() {
 }
 
 // ---------------------------------------------------------------------------
-// v2 — collections, globals, forms, redirects, preview + revalidate handlers.
+// v2 — collections, globals, forms, redirects (generateV2Sdk / lib/cms.ts),
+// plus preview + revalidate handlers (generateV2ServerSdk / lib/cms-server.ts).
 // ---------------------------------------------------------------------------
 
 /** Minimal shape `generateV2Sdk` needs from a `collections` row (migration 007). */
@@ -266,15 +306,17 @@ export function get${pascal}Entry(itemSlug: string): Promise<CmsCollectionItem<$
 `;
 }
 
-// Imports needed only by v2's additions (createHmac/timingSafeEqual for
-// createRevalidateHandler; revalidatePath/revalidateTag for the same;
-// draftMode/redirect for createPreviewHandler). Placed at the very top of
-// the generated file — ahead of even v1's own leading comment — because ES
-// module import declarations are conventionally expected to lead a file
-// (most lint configs flag "import after statement"), and this generated
-// file will be dropped into a THIRD-PARTY repo whose lint rules this
-// generator doesn't control.
-const V2_IMPORTS = `import { createHmac, timingSafeEqual } from 'crypto';
+// Imports needed only by `lib/cms-server.ts`'s two handler factories
+// (createHmac/timingSafeEqual for createRevalidateHandler;
+// revalidatePath/revalidateTag for the same; draftMode/redirect for
+// createPreviewHandler). Deliberately NOT part of `generateV2Sdk`'s
+// `lib/cms.ts` output — see the file header's "Two files for v2" section for
+// why these must stay out of the middleware-safe file. Placed at the very
+// top of `lib/cms-server.ts` because ES module import declarations are
+// conventionally expected to lead a file (most lint configs flag "import
+// after statement"), and this generated file will be dropped into a
+// THIRD-PARTY repo whose lint rules this generator doesn't control.
+const V2_SERVER_IMPORTS = `import { createHmac, timingSafeEqual } from 'crypto';
 import { revalidatePath, revalidateTag } from 'next/cache';
 import { draftMode } from 'next/headers';
 import { redirect } from 'next/navigation';
@@ -319,51 +361,10 @@ const PROXY_SNIPPET = `// Example middleware.ts snippet for CMS-managed redirect
 /**
  * The v2 "core" additions that don't depend on any particular client's
  * collections — generic collection helpers, globals/navigation/announcement,
- * form submission, redirects + the proxy snippet, and the preview/revalidate
- * handler factories.
- *
- * ## Preview flow design (createPreviewHandler)
- *
- * `handlePreview` (CMS `posts/[id]/page.tsx`, Task 3.3) mints a
- * `preview_tokens` row and opens `{website_url}/api/preview?token=...` in a
- * new tab — a URL on the CLIENT'S OWN site. Nothing before this task
- * resolved that token into content, so `createPreviewHandler(secret)` here
- * is the generated CLIENT-SIDE half of that flow, paired with the new
- * CMS-side `GET /api/client/[slug]/preview?token=` endpoint
- * (`src/app/api/client/[slug]/preview/route.ts`).
- *
- * Flow: the client site's own `app/api/preview/route.ts` does
- * `export const GET = createPreviewHandler(process.env.CMS_PREVIEW_SECRET)`.
- * The returned handler:
- *   1. Reads `?token=` off its OWN incoming request (the URL the CMS opened).
- *   2. Calls back to the CMS's `/api/client/[slug]/preview?token=...`,
- *      passing `secret` as an `x-ne-preview-secret` header.
- *   3. On success, gets back `{ entityType, path, data }` for the draft/
- *      scheduled/in-review entity the token names.
- *   4. Enables Next's Draft Mode (`(await draftMode()).enable()`) and
- *      redirects the browser to `path` — the site's own normal rendering
- *      then picks up Draft Mode and (in code this generator does NOT write)
- *      fetches draft content instead of published.
- *   5. A non-OK callback (expired/invalid/wrong-client token) 404s here too,
- *      rather than silently enabling Draft Mode with no real content.
- *
- * `secret`'s role — reusing `client_publish_config.revalidate_secret`:
- * The task brief leaves `secret`'s exact value to this task's judgment. This
- * generator reuses the SAME `revalidate_secret` already stored in
- * `client_publish_config` (Task 7.1) rather than introducing a second,
- * preview-specific secret column: it is already the one shared value known
- * only to the CMS and that one client's site, provisioning a new column (and
- * migration) purely to hold a second copy of the same trust relationship
- * would be speculative for what this task needs. The CMS-side preview route
- * validates the `x-ne-preview-secret` header against that same value —
- * see that route's file for why the check is skipped (not required) when a
- * client hasn't configured Publishing yet, so a client on the v2 SDK who
- * hasn't set up `client_publish_config` isn't unable to preview at all.
- * This raises the bar over "possession of the token alone": a preview token
- * can leak via browser history, a referrer header, or analytics; requiring
- * a second, server-side-only secret the token itself never appears in means
- * a leaked token alone can't be replayed by a third party who doesn't also
- * hold the client site's own environment secret.
+ * form submission, and redirects + the proxy snippet. Deliberately does NOT
+ * include `createPreviewHandler`/`createRevalidateHandler` — see
+ * `buildV2ServerCore` below and the file header's "Two files for v2" section
+ * for why those two live in the separate `lib/cms-server.ts` output instead.
  */
 function buildV2Core(): string {
   return `export interface CmsCollectionItem<T = Record<string, unknown>> {
@@ -483,6 +484,110 @@ export async function getRedirects(): Promise<CmsRedirect[]> {
 
 ${PROXY_SNIPPET.trimEnd()}
 export const PROXY_MIDDLEWARE_SNIPPET = ${JSON.stringify(PROXY_SNIPPET)};
+`;
+}
+
+/**
+ * Generates the v2 `lib/cms.ts` source for one client — the middleware-safe
+ * file. Contains the ENTIRE v1 output unchanged (see file header) plus every
+ * v2 addition that doesn't require Node.js/App-Router-only APIs:
+ * `getCollection`/`getEntry`/per-collection helpers, `getGlobals`/
+ * `getNavigation`/`getAnnouncement`, `submitForm`, `getRedirects` +
+ * `PROXY_MIDDLEWARE_SNIPPET`. `collections` should be the client's own
+ * `storage = 'generic'` collections (native/global collections excluded by
+ * the caller — see `sdk/route.ts`).
+ *
+ * Deliberately does NOT include `createPreviewHandler`/
+ * `createRevalidateHandler` or any Node-only import — those live in the
+ * separate `lib/cms-server.ts` output (`generateV2ServerSdk` below) so that
+ * this file remains safe to `import` from a client repo's own
+ * `middleware.ts` (see the file header's "Two files for v2" section).
+ */
+export function generateV2Sdk(slug: string, cmsBase: string, collections: SdkCollectionInput[]): string {
+  const v1 = generateV1Sdk(slug, cmsBase);
+  const core = buildV2Core();
+  const collectionSections = collections.map(generateCollectionSection).join('\n');
+
+  return `${v1}
+// ---------------------------------------------------------------------------
+// v2 additions — collections, globals, forms, redirects
+// (preview + revalidate handlers are in the separate lib/cms-server.ts —
+// see generateV2ServerSdk)
+// ---------------------------------------------------------------------------
+
+${core}
+${collectionSections}`;
+}
+
+/**
+ * Generates the v2 `lib/cms-server.ts` source for one client — the
+ * server/Node-only companion file to `lib/cms.ts`. Contains
+ * `createPreviewHandler`/`createRevalidateHandler` plus the Node.js
+ * (`crypto`) and App-Router-only (`next/cache`, `next/headers`,
+ * `next/navigation`) imports those two factories need. Meant to be imported
+ * from Route Handlers (`app/api/preview/route.ts`, `app/api/revalidate/
+ * route.ts`) — never from `middleware.ts` (see the file header's "Two files
+ * for v2" section for why).
+ *
+ * Declares its own local `CMS_BASE`/`CLIENT_SLUG` consts rather than
+ * importing them from `lib/cms.ts` — v1's own `CMS_BASE`/`CLIENT_SLUG` are
+ * intentionally not exported (exporting them would change `generateV1Sdk`'s
+ * byte-identical output), and keeping this file self-contained means it
+ * never breaks if `lib/cms.ts` is missing, edited, or generated separately.
+ *
+ * ## Preview flow design (createPreviewHandler)
+ *
+ * `handlePreview` (CMS `posts/[id]/page.tsx`, Task 3.3) mints a
+ * `preview_tokens` row and opens `{website_url}/api/preview?token=...` in a
+ * new tab — a URL on the CLIENT'S OWN site. Nothing before this task
+ * resolved that token into content, so `createPreviewHandler(secret)` here
+ * is the generated CLIENT-SIDE half of that flow, paired with the new
+ * CMS-side `GET /api/client/[slug]/preview?token=` endpoint
+ * (`src/app/api/client/[slug]/preview/route.ts`).
+ *
+ * Flow: the client site's own `app/api/preview/route.ts` does
+ * `export const GET = createPreviewHandler(process.env.CMS_PREVIEW_SECRET)`.
+ * The returned handler:
+ *   1. Reads `?token=` off its OWN incoming request (the URL the CMS opened).
+ *   2. Calls back to the CMS's `/api/client/[slug]/preview?token=...`,
+ *      passing `secret` as an `x-ne-preview-secret` header.
+ *   3. On success, gets back `{ entityType, path, data }` for the draft/
+ *      scheduled/in-review entity the token names.
+ *   4. Enables Next's Draft Mode (`(await draftMode()).enable()`) and
+ *      redirects the browser to `path` — the site's own normal rendering
+ *      then picks up Draft Mode and (in code this generator does NOT write)
+ *      fetches draft content instead of published.
+ *   5. A non-OK callback (expired/invalid/wrong-client token) 404s here too,
+ *      rather than silently enabling Draft Mode with no real content.
+ *
+ * `secret`'s role — reusing `client_publish_config.revalidate_secret`:
+ * The task brief leaves `secret`'s exact value to this task's judgment. This
+ * generator reuses the SAME `revalidate_secret` already stored in
+ * `client_publish_config` (Task 7.1) rather than introducing a second,
+ * preview-specific secret column: it is already the one shared value known
+ * only to the CMS and that one client's site, provisioning a new column (and
+ * migration) purely to hold a second copy of the same trust relationship
+ * would be speculative for what this task needs. The CMS-side preview route
+ * validates the `x-ne-preview-secret` header against that same value —
+ * see that route's file for why the check is skipped (not required) when a
+ * client hasn't configured Publishing yet, so a client on the v2 SDK who
+ * hasn't set up `client_publish_config` isn't unable to preview at all.
+ * This raises the bar over "possession of the token alone": a preview token
+ * can leak via browser history, a referrer header, or analytics; requiring
+ * a second, server-side-only secret the token itself never appears in means
+ * a leaked token alone can't be replayed by a third party who doesn't also
+ * hold the client site's own environment secret.
+ */
+export function generateV2ServerSdk(slug: string, cmsBase: string): string {
+  return `// lib/cms-server.ts - generated by NE Website Manager
+// Server/Node-only companion to lib/cms.ts. Do NOT import this file from
+// middleware.ts — it uses Node.js APIs (crypto) and App-Router server-only
+// APIs (next/headers, next/navigation) that are unsupported in the Edge
+// Runtime, which Next.js Middleware uses by default. Safe to import from
+// Route Handlers (app/api/.../route.ts) and other server-only code.
+${V2_SERVER_IMPORTS}
+const CMS_BASE = '${cmsBase}';
+const CLIENT_SLUG = '${slug}';
 
 export interface CmsPreviewEntity {
   entityType: 'post' | 'page' | 'collection_entry';
@@ -564,26 +669,4 @@ export function createRevalidateHandler(secret: string) {
   };
 }
 `;
-}
-
-/**
- * Generates the v2 `lib/cms.ts` source for one client. Contains the ENTIRE
- * v1 output unchanged (see file header) plus every v2 addition described in
- * the task brief. `collections` should be the client's own
- * `storage = 'generic'` collections (native/global collections excluded by
- * the caller — see `sdk/route.ts`).
- */
-export function generateV2Sdk(slug: string, cmsBase: string, collections: SdkCollectionInput[]): string {
-  const v1 = generateV1Sdk(slug, cmsBase);
-  const core = buildV2Core();
-  const collectionSections = collections.map(generateCollectionSection).join('\n');
-
-  return `${V2_IMPORTS}
-${v1}
-// ---------------------------------------------------------------------------
-// v2 additions — collections, globals, forms, redirects, preview + revalidate
-// ---------------------------------------------------------------------------
-
-${core}
-${collectionSections}`;
 }

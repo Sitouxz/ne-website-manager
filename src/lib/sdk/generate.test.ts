@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { generateV1Sdk, generateV2Sdk, toPascalCase, type SdkCollectionInput } from './generate';
+import { generateV1Sdk, generateV2Sdk, generateV2ServerSdk, toPascalCase, type SdkCollectionInput } from './generate';
 import type { FieldDef } from '@/lib/collections/types';
 
 const TEST_SLUG = 'acme';
@@ -206,42 +206,117 @@ describe('generateV2Sdk — core v2 additions', () => {
     expect(v2).toContain('getRedirects');
   });
 
-  it('includes createPreviewHandler and createRevalidateHandler, syntactically plausible', () => {
-    expect(v2).toContain('export function createPreviewHandler(secret: string)');
-    expect(v2).toContain('export function createRevalidateHandler(secret: string)');
-
-    // createPreviewHandler calls back to the CMS preview-resolution
-    // endpoint with the shared secret as a header, then enables draft mode
-    // and redirects to the resolved entity's path.
-    expect(v2).toContain('/api/client/${CLIENT_SLUG}/preview?token=');
-    expect(v2).toContain(`'x-ne-preview-secret': secret`);
-    expect(v2).toContain('draftMode()');
-    expect(v2).toContain('redirect(entity.path)');
-
-    // createRevalidateHandler verifies x-ne-signature via HMAC-SHA256 and
-    // calls revalidatePath/revalidateTag.
-    expect(v2).toContain(`req.headers.get('x-ne-signature')`);
-    expect(v2).toContain(`createHmac('sha256', secret)`);
-    expect(v2).toContain('timingSafeEqual(');
-    expect(v2).toContain('revalidatePath(');
-    expect(v2).toContain('revalidateTag(');
-
-    // Lightweight syntactic sanity check: braces/parens balance across the
-    // whole generated file (a real unbalanced-brace bug would show up here
-    // without needing a full TS parse).
+  it('lightweight syntactic sanity check: braces balance across the whole generated file', () => {
+    // A real unbalanced-brace bug would show up here without needing a full
+    // TS parse.
     const openBraces = (v2.match(/{/g) ?? []).length;
     const closeBraces = (v2.match(/}/g) ?? []).length;
     expect(openBraces).toBe(closeBraces);
   });
+});
 
-  it('prepends the v2-only imports (crypto, next/cache, next/headers, next/navigation) ahead of v1', () => {
-    expect(v2).toContain(`import { createHmac, timingSafeEqual } from 'crypto';`);
-    expect(v2).toContain(`import { revalidatePath, revalidateTag } from 'next/cache';`);
-    expect(v2).toContain(`import { draftMode } from 'next/headers';`);
-    expect(v2).toContain(`import { redirect } from 'next/navigation';`);
-    // Imports must lead the file (ES module convention) — before even v1's
-    // own leading comment.
-    expect(v2.indexOf(`import { createHmac`)).toBeLessThan(v2.indexOf('// lib/cms.ts'));
+describe('generateV2Sdk — middleware-safe: no Edge-incompatible imports (Finding 1 regression guard)', () => {
+  // `lib/cms.ts` (generateV2Sdk's output) is documented (PROXY_MIDDLEWARE_SNIPPET)
+  // as safe to `import` from a client repo's own `middleware.ts`. Next.js
+  // Middleware runs in the Edge Runtime by default on most Next.js versions
+  // client repos actually run, which does not support Node.js APIs or
+  // App-Router server-only APIs. If any of these ever leak back into this
+  // file's output (e.g. a future edit accidentally moves a handler back into
+  // buildV2Core), a client following the generator's own middleware snippet
+  // would hit a build failure the moment they imported anything from it. This
+  // test is cheap insurance against that regression.
+  const v2 = generateV2Sdk(TEST_SLUG, TEST_ORIGIN, [
+    { slug: 'sermons', name: 'Sermons', name_singular: 'Sermon', fields: [] },
+  ]);
+
+  it('does not import from crypto / node:crypto', () => {
+    expect(v2).not.toMatch(/from ['"]crypto['"]/);
+    expect(v2).not.toMatch(/from ['"]node:crypto['"]/);
+    expect(v2).not.toContain('createHmac');
+    expect(v2).not.toContain('timingSafeEqual');
+  });
+
+  it('does not import from next/headers', () => {
+    expect(v2).not.toMatch(/from ['"]next\/headers['"]/);
+    expect(v2).not.toContain('draftMode');
+  });
+
+  it('does not import from next/navigation', () => {
+    expect(v2).not.toMatch(/from ['"]next\/navigation['"]/);
+    // `redirect(entity.path)` is specific enough not to collide with any
+    // legitimate v2-core string (no `redirect(` call exists in the
+    // middleware-safe surface).
+    expect(v2).not.toContain('redirect(entity.path)');
+  });
+
+  it('does not import from next/cache (handler-only: revalidatePath/revalidateTag)', () => {
+    expect(v2).not.toMatch(/from ['"]next\/cache['"]/);
+    expect(v2).not.toContain('revalidatePath(');
+    expect(v2).not.toContain('revalidateTag(');
+  });
+
+  it('does not contain createPreviewHandler/createRevalidateHandler at all — they live in lib/cms-server.ts', () => {
+    expect(v2).not.toContain('createPreviewHandler');
+    expect(v2).not.toContain('createRevalidateHandler');
+    expect(v2).not.toContain('CmsPreviewEntity');
+  });
+});
+
+describe('generateV2ServerSdk — lib/cms-server.ts (server/Node-only companion file)', () => {
+  const serverSdk = generateV2ServerSdk(TEST_SLUG, TEST_ORIGIN);
+
+  it('leads with a comment warning not to import this file from middleware.ts', () => {
+    expect(serverSdk).toContain('// lib/cms-server.ts - generated by NE Website Manager');
+    expect(serverSdk).toMatch(/Do NOT import this file from\s*\n?\/\/ middleware\.ts/);
+  });
+
+  it('declares its own local CMS_BASE/CLIENT_SLUG consts (self-contained, no import from ./cms)', () => {
+    expect(serverSdk).toContain(`const CMS_BASE = '${TEST_ORIGIN}';`);
+    expect(serverSdk).toContain(`const CLIENT_SLUG = '${TEST_SLUG}';`);
+    expect(serverSdk).not.toMatch(/from ['"]\.\/cms['"]/);
+  });
+
+  it('includes createPreviewHandler and createRevalidateHandler, syntactically plausible', () => {
+    expect(serverSdk).toContain('export function createPreviewHandler(secret: string)');
+    expect(serverSdk).toContain('export function createRevalidateHandler(secret: string)');
+
+    // createPreviewHandler calls back to the CMS preview-resolution
+    // endpoint with the shared secret as a header, then enables draft mode
+    // and redirects to the resolved entity's path.
+    expect(serverSdk).toContain('/api/client/${CLIENT_SLUG}/preview?token=');
+    expect(serverSdk).toContain(`'x-ne-preview-secret': secret`);
+    expect(serverSdk).toContain('draftMode()');
+    expect(serverSdk).toContain('redirect(entity.path)');
+
+    // createRevalidateHandler verifies x-ne-signature via HMAC-SHA256 and
+    // calls revalidatePath/revalidateTag.
+    expect(serverSdk).toContain(`req.headers.get('x-ne-signature')`);
+    expect(serverSdk).toContain(`createHmac('sha256', secret)`);
+    expect(serverSdk).toContain('timingSafeEqual(');
+    expect(serverSdk).toContain('revalidatePath(');
+    expect(serverSdk).toContain('revalidateTag(');
+
+    // Lightweight syntactic sanity check: braces balance across the whole
+    // generated file.
+    const openBraces = (serverSdk.match(/{/g) ?? []).length;
+    const closeBraces = (serverSdk.match(/}/g) ?? []).length;
+    expect(openBraces).toBe(closeBraces);
+  });
+
+  it('leads with its Node/App-Router-only imports (crypto, next/cache, next/headers, next/navigation)', () => {
+    expect(serverSdk).toContain(`import { createHmac, timingSafeEqual } from 'crypto';`);
+    expect(serverSdk).toContain(`import { revalidatePath, revalidateTag } from 'next/cache';`);
+    expect(serverSdk).toContain(`import { draftMode } from 'next/headers';`);
+    expect(serverSdk).toContain(`import { redirect } from 'next/navigation';`);
+    // Imports must lead the file (ES module convention) — before the
+    // CMS_BASE/CLIENT_SLUG consts and the handler functions.
+    expect(serverSdk.indexOf(`import { createHmac`)).toBeLessThan(serverSdk.indexOf('const CMS_BASE'));
+  });
+
+  it('does not duplicate any v1/v2-core export (posts/pages/collections/globals live only in lib/cms.ts)', () => {
+    expect(serverSdk).not.toContain('export function getPosts(');
+    expect(serverSdk).not.toContain('export function getCollection<');
+    expect(serverSdk).not.toContain('export function getGlobals(');
   });
 });
 

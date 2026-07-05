@@ -1,22 +1,35 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
-import { generateV2Sdk, type SdkCollectionInput } from '@/lib/sdk/generate';
+import { generateV1Sdk, generateV2Sdk, generateV2ServerSdk, type SdkCollectionInput } from '@/lib/sdk/generate';
 
 /**
  * Task 7.2: this route's own inline `generateCmsLib` (near-duplicated with
  * `sdk/route.ts`'s pre-Task-7.2 `cmsLib`) has been replaced with the shared
- * `generateV2Sdk` from `src/lib/sdk/generate.ts`.
+ * generator functions from `src/lib/sdk/generate.ts`.
  *
- * Deliberately **v2**, not v1, unlike `sdk/route.ts`'s default: this route
- * only ever runs when someone is pushing a *brand-new* integration PR to a
- * client repo that has no existing `lib/cms.ts` at all (see the PUT below —
- * it upserts `lib/cms.ts` fresh into a new branch). There is no
- * already-integrated site depending on this route's exact byte output the
- * way al-islah depends on `sdk/route.ts`'s default GET — so there's no
- * backward-compatibility reason to hand a brand-new integration the
- * v1-only feature set when v2 (collections, globals, forms, redirects,
- * preview + revalidate handlers) is a strict superset that a new client
- * benefits from immediately.
+ * ## `sdk_version` — defaults to v1, matching `sdk/route.ts`
+ *
+ * The request body accepts an optional `sdk_version: 'v1' | 'v2'`, defaulting
+ * to **`'v1'`** when omitted. This was a review finding: a prior version of
+ * this route defaulted to v2 unconditionally with no opt-out, unlike
+ * `sdk/route.ts` (which conservatively defaults its own `GET` to v1 and only
+ * serves v2 via an explicit `?v=2` query param). If a v2-only problem ever
+ * surfaces (e.g. the Edge Runtime incompatibility Finding 1 fixed, or
+ * anything else), there was no easy way to fall back to the simpler,
+ * already-proven v1 output for a brand-new integration pushed through this
+ * route. Defaulting both routes' DEFAULT behavior to v1 keeps them
+ * consistent and keeps the safer, smaller, longest-proven output as the
+ * path of least surprise; a caller (e.g. a future Settings-page toggle) can
+ * still explicitly opt into v2 by passing `sdk_version: 'v2'`.
+ *
+ * - `v1`: writes a single `lib/cms.ts` (byte-identical to `generateV1Sdk`'s
+ *   output — posts/pages/analytics only, no collections/globals/forms/
+ *   preview/revalidate).
+ * - `v2`: writes TWO files — `lib/cms.ts` (`generateV2Sdk`, middleware-safe)
+ *   and `lib/cms-server.ts` (`generateV2ServerSdk`, server/Node-only:
+ *   `createPreviewHandler`/`createRevalidateHandler`) — see `generate.ts`'s
+ *   "Two files for v2" section for why these must be two separate files.
+ *   Both are written as separate file writes in the same PR/branch.
  */
 async function githubRequest(
   token: string,
@@ -39,6 +52,33 @@ async function githubRequest(
   return json;
 }
 
+/** Upserts one file's content into `branch`, looking up its existing SHA (if any) first so the PUT updates rather than conflicts. */
+async function upsertFile(
+  token: string,
+  repo: string,
+  branch: string,
+  path: string,
+  content: string,
+  message: string
+) {
+  const encoded = Buffer.from(content).toString('base64');
+
+  let existingSha: string | undefined;
+  try {
+    const existing = await githubRequest(token, 'GET', `/repos/${repo}/contents/${path}?ref=${branch}`);
+    existingSha = existing.sha;
+  } catch {
+    // File doesn't exist — create fresh
+  }
+
+  await githubRequest(token, 'PUT', `/repos/${repo}/contents/${path}`, {
+    message,
+    content: encoded,
+    branch,
+    ...(existingSha ? { sha: existingSha } : {}),
+  });
+}
+
 export async function POST(req: Request) {
   // Auth check
   const supabase = await createClient();
@@ -51,16 +91,18 @@ export async function POST(req: Request) {
     .eq('id', user.id)
     .single();
 
-  const { github_token, repo, slug, client_name } = await req.json();
+  const { github_token, repo, slug, client_name, sdk_version } = await req.json();
   const cmsBase = new URL(req.url).origin;
+  const version: 'v1' | 'v2' = sdk_version === 'v2' ? 'v2' : 'v1';
 
   if (!github_token || !repo || !slug) {
     return NextResponse.json({ error: 'github_token, repo, slug required' }, { status: 400 });
   }
 
   // Resolved unconditionally (not just inside the non-ne_admin branch below)
-  // because it's also needed to fetch this client's `storage='generic'`
-  // collections for `generateV2Sdk`, regardless of caller role.
+  // because it's also needed (for `version === 'v2'`) to fetch this client's
+  // `storage='generic'` collections for `generateV2Sdk`, regardless of
+  // caller role.
   const { data: clientRow } = await supabase
     .from('clients')
     .select('id')
@@ -90,46 +132,47 @@ export async function POST(req: Request) {
       sha: baseSha,
     });
 
-    // 4. Upsert lib/cms.ts
+    // 4. Upsert lib/cms.ts (v1 or v2) and, for v2 only, lib/cms-server.ts.
     // `clientRow` can be null if this client doesn't have a `clients` row
     // yet (e.g. an ne_admin pushing the integration ahead of onboarding) —
-    // generate with an empty collections list rather than failing; the core
-    // v2 SDK (collections/globals/forms/redirects/preview/revalidate helper
-    // factories) is still fully generated, just with no per-collection
-    // helpers until this client's own collections exist.
-    let collectionRows: SdkCollectionInput[] = [];
-    if (clientRow) {
-      const { data } = await supabase
-        .from('collections')
-        .select('slug, name, name_singular, fields')
-        .eq('client_id', clientRow.id)
-        .eq('storage', 'generic');
-      collectionRows = (data ?? []) as SdkCollectionInput[];
+    // for v2, generate with an empty collections list rather than failing;
+    // the core v2 SDK (collections/globals/forms/redirects helpers) is still
+    // fully generated, just with no per-collection helpers until this
+    // client's own collections exist.
+    let prBody: string;
+    if (version === 'v2') {
+      let collectionRows: SdkCollectionInput[] = [];
+      if (clientRow) {
+        const { data } = await supabase
+          .from('collections')
+          .select('slug, name, name_singular, fields')
+          .eq('client_id', clientRow.id)
+          .eq('storage', 'generic');
+        collectionRows = (data ?? []) as SdkCollectionInput[];
+      }
+
+      const cmsFile = generateV2Sdk(slug, cmsBase, collectionRows);
+      const cmsServerFile = generateV2ServerSdk(slug, cmsBase);
+
+      await upsertFile(github_token, repo, branchName, 'lib/cms.ts', cmsFile,
+        `feat: add NE Website Manager CMS integration for ${client_name ?? slug}`);
+      await upsertFile(github_token, repo, branchName, 'lib/cms-server.ts', cmsServerFile,
+        `feat: add NE Website Manager CMS server helpers for ${client_name ?? slug}`);
+
+      prBody = `## NE Website Manager Integration\n\nThis PR adds two files that connect this website to the NE Website Manager CMS:\n\n- **\`lib/cms.ts\`** (SDK v2, middleware-safe) — posts/pages, collections, site globals/navigation, form submissions, and redirects. Has no Node.js/App-Router-only imports, so it's safe to \`import\` from this site's own \`middleware.ts\` (e.g. for \`getRedirects()\` — see \`PROXY_MIDDLEWARE_SNIPPET\` below).\n- **\`lib/cms-server.ts\`** (server/Node-only) — \`createPreviewHandler\`/\`createRevalidateHandler\` for draft previews and on-publish revalidation. Uses Node.js (\`crypto\`) and App-Router server-only APIs (\`next/headers\`, \`next/navigation\`) that are **not** supported in the Edge Runtime, which Next.js Middleware uses by default — do NOT import this file from \`middleware.ts\`. Safe to import from Route Handlers.\n\n### Usage\n\n\`\`\`ts\nimport { getPosts, getPostBySlug, getPages, getCollection, getGlobals, submitForm } from '@/lib/cms';\n\n// Fetch all published posts\nconst posts = await getPosts();\n\n// Fetch single post\nconst post = await getPostBySlug('my-post-slug');\n\n// Fetch a collection typed by its own generated interface (e.g. getSermons())\nconst items = await getCollection('sermons');\n\n// Site globals (footer, announcement, navigation, theme, contact, social)\nconst globals = await getGlobals();\n\`\`\`\n\n### Preview & revalidation\n\nAdd these two route handlers to enable draft previews and on-publish revalidation from the CMS — both import from \`lib/cms-server.ts\`, NOT \`lib/cms.ts\`:\n\n\`\`\`ts\n// app/api/preview/route.ts\nimport { createPreviewHandler } from '@/lib/cms-server';\nexport const GET = createPreviewHandler(process.env.CMS_PREVIEW_SECRET!);\n\n// app/api/revalidate/route.ts\nimport { createRevalidateHandler } from '@/lib/cms-server';\nexport const POST = createRevalidateHandler(process.env.CMS_REVALIDATE_SECRET!);\n\`\`\`\n\nBoth secrets should be set to this client's \`revalidate_secret\`, configured in the CMS's Settings -> Publishing tab.\n\n\`lib/cms.ts\` also exports \`PROXY_MIDDLEWARE_SNIPPET\` — a documented starting point for applying CMS-managed redirects (\`getRedirects()\`) in this site's own \`middleware.ts\`.\n\n### API Endpoints\n- Posts: \`${cmsBase}/api/client/${slug}/posts\`\n- Pages: \`${cmsBase}/api/client/${slug}/pages\`\n- Collections: \`${cmsBase}/api/client/${slug}/collections/:collection\`\n- Globals: \`${cmsBase}/api/client/${slug}/globals\`\n- Forms: \`${cmsBase}/api/client/${slug}/forms/:formSlug\`\n- SEO/redirects: \`${cmsBase}/api/client/${slug}/seo\`\n\n---\n*Generated by [NE Website Manager](${cmsBase})*`;
+    } else {
+      const cmsFile = generateV1Sdk(slug, cmsBase);
+
+      await upsertFile(github_token, repo, branchName, 'lib/cms.ts', cmsFile,
+        `feat: add NE Website Manager CMS integration for ${client_name ?? slug}`);
+
+      prBody = `## NE Website Manager Integration\n\nThis PR adds \`lib/cms.ts\` (SDK v1) — a typed API client that connects this website to the NE Website Manager CMS: posts, pages, and analytics tracking.\n\n### Usage\n\n\`\`\`ts\nimport { getPosts, getPostBySlug, getPages } from '@/lib/cms';\n\n// Fetch all published posts\nconst posts = await getPosts();\n\n// Fetch single post\nconst post = await getPostBySlug('my-post-slug');\n\n// Fetch all published pages\nconst pages = await getPages();\n\`\`\`\n\nWant collections, site globals/navigation, form submissions, redirects, or draft preview/on-publish revalidation? Re-run this integration with the v2 SDK (\`sdk_version: 'v2'\`), which additionally writes a \`lib/cms-server.ts\` companion file for the Node-only preview/revalidate handlers.\n\n### API Endpoints\n- Posts: \`${cmsBase}/api/client/${slug}/posts\`\n- Pages: \`${cmsBase}/api/client/${slug}/pages\`\n\n---\n*Generated by [NE Website Manager](${cmsBase})*`;
     }
-
-    const fileContent = generateV2Sdk(slug, cmsBase, collectionRows);
-    const encoded = Buffer.from(fileContent).toString('base64');
-
-    // Check if file exists (to get SHA for update)
-    let existingSha: string | undefined;
-    try {
-      const existing = await githubRequest(github_token, 'GET', `/repos/${repo}/contents/lib/cms.ts?ref=${branchName}`);
-      existingSha = existing.sha;
-    } catch {
-      // File doesn't exist — create fresh
-    }
-
-    await githubRequest(github_token, 'PUT', `/repos/${repo}/contents/lib/cms.ts`, {
-      message: `feat: add NE Website Manager CMS integration for ${client_name ?? slug}`,
-      content: encoded,
-      branch: branchName,
-      ...(existingSha ? { sha: existingSha } : {}),
-    });
 
     // 5. Create PR
     const pr = await githubRequest(github_token, 'POST', `/repos/${repo}/pulls`, {
       title: `Add NE Website Manager CMS integration`,
-      body: `## NE Website Manager Integration\n\nThis PR adds \`lib/cms.ts\` (SDK v2) — a typed API client that connects this website to the NE Website Manager CMS: posts/pages, collections, site globals/navigation, form submissions, redirects, and preview/revalidation route handlers.\n\n### Usage\n\n\`\`\`ts\nimport { getPosts, getPostBySlug, getPages, getCollection, getGlobals, submitForm } from '@/lib/cms';\n\n// Fetch all published posts\nconst posts = await getPosts();\n\n// Fetch single post\nconst post = await getPostBySlug('my-post-slug');\n\n// Fetch a collection typed by its own generated interface (e.g. getSermons())\nconst items = await getCollection('sermons');\n\n// Site globals (footer, announcement, navigation, theme, contact, social)\nconst globals = await getGlobals();\n\`\`\`\n\n### Preview & revalidation\n\nAdd these two route handlers to enable draft previews and on-publish revalidation from the CMS:\n\n\`\`\`ts\n// app/api/preview/route.ts\nimport { createPreviewHandler } from '@/lib/cms';\nexport const GET = createPreviewHandler(process.env.CMS_PREVIEW_SECRET!);\n\n// app/api/revalidate/route.ts\nimport { createRevalidateHandler } from '@/lib/cms';\nexport const POST = createRevalidateHandler(process.env.CMS_REVALIDATE_SECRET!);\n\`\`\`\n\nBoth secrets should be set to this client's \`revalidate_secret\`, configured in the CMS's Settings -> Publishing tab.\n\n\`lib/cms.ts\` also exports \`PROXY_MIDDLEWARE_SNIPPET\` — a documented starting point for applying CMS-managed redirects (\`getRedirects()\`) in this site's own \`middleware.ts\`.\n\n### API Endpoints\n- Posts: \`${cmsBase}/api/client/${slug}/posts\`\n- Pages: \`${cmsBase}/api/client/${slug}/pages\`\n- Collections: \`${cmsBase}/api/client/${slug}/collections/:collection\`\n- Globals: \`${cmsBase}/api/client/${slug}/globals\`\n- Forms: \`${cmsBase}/api/client/${slug}/forms/:formSlug\`\n- SEO/redirects: \`${cmsBase}/api/client/${slug}/seo\`\n\n---\n*Generated by [NE Website Manager](${cmsBase})*`,
+      body: prBody,
       head: branchName,
       base: defaultBranch,
     });

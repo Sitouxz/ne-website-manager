@@ -66,6 +66,11 @@ export default function SettingsPage() {
   const [prUrl,     setPrUrl]     = useState('');
   const [intErr,    setIntErr]    = useState('');
   const [copied,    setCopied]    = useState<string | null>(null);
+  // Defaults to v1 (unchecked) to match `push-integration/route.ts`'s own
+  // conservative route-level default — see that route's file header. Opting
+  // into v2 additionally writes a `lib/cms-server.ts` companion file for the
+  // preview/revalidate handlers.
+  const [pushV2,    setPushV2]    = useState(false);
 
   // API Keys state
   const canManageKeys = isAdmin || role === 'client_admin';
@@ -243,6 +248,7 @@ export default function SettingsPage() {
         repo: form.github_repo,
         slug: client.slug,
         client_name: client.name,
+        sdk_version: pushV2 ? 'v2' : 'v1',
       }),
     });
     const json = await res.json();
@@ -670,6 +676,21 @@ const pages = await fetch('${pagesUrl}').then(r => r.json());`,
                   <p style={{ fontSize: 11.5, color: 'var(--fg3)', margin: '5px 0 0' }}>Needs <code>repo</code> scope. Token is used once and never stored.</p>
                 </div>
 
+                <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 12.5, color: 'var(--fg2)', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={pushV2}
+                    onChange={(e) => setPushV2(e.target.checked)}
+                    style={{ marginTop: 2 }}
+                  />
+                  <span>
+                    Include v2 collections/preview/revalidate support
+                    <span style={{ display: 'block', fontSize: 11, color: 'var(--fg3)', fontWeight: 400 }}>
+                      Also writes <code>lib/cms-server.ts</code> (server-only preview/revalidate handlers). Leave unchecked for the simpler, longest-proven v1 SDK (posts/pages/analytics only).
+                    </span>
+                  </span>
+                </label>
+
                 {intErr && (
                   <div style={{ padding: '10px 14px', background: '#FEF2F2', color: 'var(--ne-danger)', borderRadius: 'var(--r-sm)', fontSize: 13 }}>
                     {intErr}
@@ -706,7 +727,14 @@ const pages = await fetch('${pagesUrl}').then(r => r.json());`,
                   <b style={{ color: 'var(--fg2)' }}>What this does:</b>
                   <ol style={{ margin: '6px 0 0', paddingLeft: 16 }}>
                     <li>Creates a new branch <code>cms/ne-integration-*</code></li>
-                    <li>Adds <code>lib/cms.ts</code> — typed API client with <code>getPosts()</code>, <code>getPostBySlug()</code>, <code>getPages()</code></li>
+                    {pushV2 ? (
+                      <>
+                        <li>Adds <code>lib/cms.ts</code> — typed API client with <code>getPosts()</code>, <code>getPages()</code>, <code>getCollection()</code>, <code>getGlobals()</code>, <code>submitForm()</code>, <code>getRedirects()</code> (middleware-safe)</li>
+                        <li>Adds <code>lib/cms-server.ts</code> — <code>createPreviewHandler()</code> / <code>createRevalidateHandler()</code> (server-only, do not import from <code>middleware.ts</code>)</li>
+                      </>
+                    ) : (
+                      <li>Adds <code>lib/cms.ts</code> — typed API client with <code>getPosts()</code>, <code>getPostBySlug()</code>, <code>getPages()</code></li>
+                    )}
                     <li>Opens a pull request on your default branch for review</li>
                   </ol>
                 </div>
