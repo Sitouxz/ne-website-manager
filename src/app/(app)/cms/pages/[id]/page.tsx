@@ -64,6 +64,13 @@ export default function PageEditor({ params }: { params: Promise<{ id: string }>
   const [error,       setError]     = useState('');
   const [clientId,    setClientId]  = useState<string | null>(null);
   const [isAdmin,     setIsAdmin]   = useState(false);
+  // Whether this user's role is allowed to publish a page at all
+  // (`client_admin`/`ne_admin`, per migration 015_publish_rls.sql's
+  // `WITH CHECK` on `pages`). UX nicety only — the real boundary is the
+  // RLS policy; this just hides/disables the control before a plain
+  // `editor` submits a save RLS would reject anyway, same convention as
+  // the role-gating in Tasks 4.2/5.3.
+  const [canPublish, setCanPublish] = useState(false);
   const [autosaveState, setAutosaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [historyOpen, setHistoryOpen] = useState(false);
   const { selectedClientId } = useSelectedClient();
@@ -105,6 +112,7 @@ export default function PageEditor({ params }: { params: Promise<{ id: string }>
 
       const admin = profile?.role === 'ne_admin';
       setIsAdmin(admin);
+      setCanPublish(admin || profile?.role === 'client_admin');
 
       if (admin) {
         if (isNew) setClientId(selectedClientId ?? null);
@@ -343,10 +351,17 @@ export default function PageEditor({ params }: { params: Promise<{ id: string }>
               {saving ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Save size={14} />}
               Save Draft
             </button>
-            <button className="btn-ne" onClick={() => handleSave('published')} disabled={saving}>
-              {saving ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Send size={14} />}
-              {form.status === 'published' ? 'Update' : 'Publish'}
-            </button>
+            {/* Publish shortcut: hidden entirely for `editor` — RLS
+                (migration 015) rejects any save that leaves `status =
+                'published'` unless the caller is client_admin/ne_admin.
+                "Save Draft" above remains available. Pages have no
+                `in_review` state, so there's nothing else to submit into. */}
+            {canPublish && (
+              <button className="btn-ne" onClick={() => handleSave('published')} disabled={saving}>
+                {saving ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Send size={14} />}
+                {form.status === 'published' ? 'Update' : 'Publish'}
+              </button>
+            )}
           </div>
         </div>
 
@@ -415,10 +430,20 @@ export default function PageEditor({ params }: { params: Promise<{ id: string }>
               <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
                 <div>
                   <label style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--fg3)', display: 'block', marginBottom: 5 }}>Status</label>
+                  {/* Pages have only draft/published — no in_review/scheduled
+                      state. Publish now is hidden for `editor` (RLS,
+                      migration 015, requires client_admin/ne_admin). If an
+                      editor is viewing a page an admin already published, a
+                      disabled option keeps the displayed status accurate
+                      instead of silently showing "Draft" as selected. */}
                   <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value as PageStatus })}
                     style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '8px 10px', fontSize: 13, color: 'var(--fg1)', background: 'var(--surface)' }}>
                     <option value="draft">Draft</option>
-                    <option value="published">Publish now</option>
+                    {canPublish ? (
+                      <option value="published">Publish now</option>
+                    ) : form.status === 'published' && (
+                      <option value="published" disabled>Published</option>
+                    )}
                   </select>
                 </div>
                 <div>
@@ -435,7 +460,15 @@ export default function PageEditor({ params }: { params: Promise<{ id: string }>
                       : 'Hidden from the public pages API even when published.'}
                   </div>
                 </div>
-                <button className="btn-ne" style={{ width: '100%', justifyContent: 'center' }} onClick={() => handleSave()} disabled={saving}>
+                <button
+                  className="btn-ne"
+                  style={{ width: '100%', justifyContent: 'center' }}
+                  onClick={() => handleSave()}
+                  // Disabled when the page's *current* status is already
+                  // published and this user can't touch it — mirrors the
+                  // post editor's equivalent guard.
+                  disabled={saving || (!canPublish && form.status === 'published')}
+                >
                   <Send size={14} />
                   {form.status === 'published' ? 'Update Page' : 'Save as Draft'}
                 </button>

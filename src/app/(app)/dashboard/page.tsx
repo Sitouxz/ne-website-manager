@@ -1,19 +1,18 @@
 import Topbar from '@/components/Topbar';
 import { cookies } from 'next/headers';
 import { createClient } from '@/lib/supabase/server';
-import { FileText, Eye, Clock, TrendingUp, ArrowUpRight, Search, Image, Mail, Megaphone, Users } from 'lucide-react';
+import { createAdminClient } from '@/lib/supabase/admin';
+import { FileText, Eye, Clock, TrendingUp, ArrowUpRight, History } from 'lucide-react';
 import Link from 'next/link';
+import ReviewQueue from '@/components/dashboard/ReviewQueue';
 import type { Profile } from '@/lib/supabase/types';
 
 const SELECTED_CLIENT_COOKIE = 'ne_selected_client_id';
 
-const COMING_SOON = [
-  { icon: Search, label: 'SEO Manager', desc: 'Meta tags, sitemaps, keyword tracking' },
-  { icon: Image, label: 'Media Library', desc: 'Centralised image & file management' },
-  { icon: Mail, label: 'Forms & Leads', desc: 'Contact forms, lead capture, submissions' },
-  { icon: Megaphone, label: 'Announcements', desc: 'Push banners and site-wide notices' },
-  { icon: Users, label: 'Team Members', desc: 'Manage editors, roles and permissions' },
-];
+// Task 6.2: SEO Manager, Media Library, Forms & Leads, Announcements, and
+// Team Members have all shipped (Phases 2, 5, and 6.1) — the "Coming Soon"
+// placeholder section that used to list them here has been removed rather
+// than left in place with a stale list.
 
 function fmtDate(iso: string | null) {
   if (!iso) return '—';
@@ -64,6 +63,43 @@ export default async function DashboardPage() {
   let pagesQuery = supabase.from('pages').select('id, status, updated_at');
   if (clientId) pagesQuery = pagesQuery.eq('client_id', clientId);
   const { data: allPages = [] } = await pagesQuery;
+
+  // `client_admin`/`ne_admin` only — an `editor` has no use for a queue of
+  // things awaiting someone else's review (see ReviewQueue's own comment
+  // for why this is posts-only).
+  const canReviewQueue = profile?.role === 'ne_admin' || profile?.role === 'client_admin';
+
+  // Recent activity feed (Task 6.2) — `activity_log` RLS (`client_id =
+  // my_client_id() OR is_ne_admin()`, migration 003_activity_log.sql)
+  // already scopes this the same way the posts/pages queries above are,
+  // so the same conditional `.eq('client_id', ...)` is enough here too.
+  let activityQuery = supabase
+    .from('activity_log')
+    .select('id, actor_id, summary, created_at')
+    .order('created_at', { ascending: false })
+    .limit(8);
+  if (clientId) activityQuery = activityQuery.eq('client_id', clientId);
+  const { data: activityRows = [] } = await activityQuery;
+
+  // `profiles_select` RLS (migration 001_initial_schema.sql) only lets a
+  // caller see their OWN profile row unless they're `ne_admin` — so
+  // resolving a teammate's display name for this feed needs the
+  // service-role admin client, exposing only `full_name`. Same narrow,
+  // read-only precedent as `resolveAuthorNames` in
+  // `src/app/api/cms/revisions/route.ts` (Task 3.3's revision-history
+  // panel): not a tenant-scoping bypass, since the activity rows
+  // themselves are still resolved through the user-scoped client above.
+  const actorIds = Array.from(
+    new Set((activityRows ?? []).map((r) => r.actor_id).filter((v): v is string => Boolean(v)))
+  );
+  let actorNames: Record<string, string> = {};
+  if (actorIds.length > 0) {
+    const admin = createAdminClient();
+    const { data: actorProfiles } = await admin.from('profiles').select('id, full_name').in('id', actorIds);
+    actorNames = Object.fromEntries(
+      (actorProfiles ?? []).map((p: { id: string; full_name: string | null }) => [p.id, p.full_name ?? 'Unknown'])
+    );
+  }
 
   const published = (allPosts ?? []).filter(p => p.status === 'published').length;
   const drafts    = (allPosts ?? []).filter(p => p.status === 'draft').length;
@@ -214,25 +250,40 @@ export default async function DashboardPage() {
           </div>
         </div>
 
-        {/* Coming soon features */}
-        <div style={{ marginBottom: 8 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--fg3)', marginBottom: 16 }}>
-            Coming Soon — More Features
-          </div>
-          <div className="grid-3col">
-            {COMING_SOON.map(({ icon: Icon, label, desc }) => (
-              <div key={label} className="coming-soon-card">
-                <div style={{ position: 'relative', zIndex: 1 }}>
-                  <div className="cs-badge"><Clock size={10} />Coming Soon</div>
-                  <div style={{ width: 44, height: 44, borderRadius: 12, background: 'var(--surface-3)', display: 'grid', placeItems: 'center', margin: '0 auto 12px', color: 'var(--fg3)' }}>
-                    <Icon size={20} />
+        {/* Recent activity + editorial review queue (Task 6.2) */}
+        <div className="grid-2col">
+          {/* Recent activity */}
+          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
+            <div style={{ padding: '18px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <History size={16} color="var(--fg3)" />
+              <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--fg1)' }}>Recent Activity</div>
+            </div>
+            <div style={{ padding: (activityRows ?? []).length === 0 ? '28px 16px' : 0 }}>
+              {(activityRows ?? []).length === 0 ? (
+                <div style={{ textAlign: 'center', color: 'var(--fg3)', fontSize: 13 }}>No activity yet.</div>
+              ) : (
+                (activityRows ?? []).map((row, i) => (
+                  <div
+                    key={row.id}
+                    style={{
+                      padding: '12px 20px',
+                      borderBottom: i === (activityRows ?? []).length - 1 ? 'none' : '1px solid var(--border)',
+                    }}
+                  >
+                    <div style={{ fontSize: 13, color: 'var(--fg1)', fontWeight: 500 }}>{row.summary}</div>
+                    <div style={{ fontSize: 11.5, color: 'var(--fg3)', marginTop: 2 }}>
+                      {row.actor_id ? actorNames[row.actor_id] ?? 'Unknown' : 'System'} · {timeAgo(row.created_at)}
+                    </div>
                   </div>
-                  <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 6 }}>{label}</div>
-                  <p style={{ fontSize: 12.5, color: 'var(--fg3)', margin: 0 }}>{desc}</p>
-                </div>
-              </div>
-            ))}
+                ))
+              )}
+            </div>
           </div>
+
+          {/* Editorial review queue — admin-only (client_admin/ne_admin);
+              an `editor` has no use for it, so it's simply not rendered
+              for them (see ReviewQueue's own comment on why it's posts-only). */}
+          {canReviewQueue && <ReviewQueue clientId={clientId ?? null} />}
         </div>
 
       </div>

@@ -79,6 +79,15 @@ export default function CollectionEntryEditor({
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
   const [autosaveState, setAutosaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [historyOpen,   setHistoryOpen]   = useState(false);
+  // Whether this user's role is allowed to publish an entry at all
+  // (`client_admin`/`ne_admin`, per migration 015_publish_rls.sql's
+  // `WITH CHECK` on `collection_items`). UX nicety only — the real
+  // boundary is the RLS policy; this just hides/disables the control
+  // before a plain `editor` submits a save RLS would reject anyway, same
+  // convention as the role-gating in Tasks 4.2/5.3. `archived` is
+  // deliberately not gated here — see the migration's comment: archiving
+  // takes something down, it doesn't publish anything.
+  const [canPublish, setCanPublish] = useState(false);
 
   const skipNextAutosaveRef = useRef(true);
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -105,6 +114,16 @@ export default function CollectionEntryEditor({
 
       const { data: item } = await supabase.from('collection_items').select('*').eq('id', entryId).single();
       if (!item || item.collection_id !== collectionId) { setNotFound(true); setLoading(false); return; }
+
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('role')
+          .eq('id', user.id)
+          .single();
+        setCanPublish(profile?.role === 'ne_admin' || profile?.role === 'client_admin');
+      }
 
       setClientId(item.client_id);
       applyItemToForm(item as CollectionItem);
@@ -294,10 +313,17 @@ export default function CollectionEntryEditor({
               {saving ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Save size={14} />}
               Save Draft
             </button>
-            <button className="btn-ne" onClick={() => handleSave('published')} disabled={saving}>
-              {saving ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Send size={14} />}
-              {form.status === 'published' ? 'Update' : 'Publish'}
-            </button>
+            {/* Publish shortcut: hidden entirely for `editor` — RLS
+                (migration 015) rejects any save that leaves `status =
+                'published'` unless the caller is client_admin/ne_admin.
+                "Save Draft" above (and the "Archive Entry" action in the
+                sidebar below, which stays available) remain accessible. */}
+            {canPublish && (
+              <button className="btn-ne" onClick={() => handleSave('published')} disabled={saving}>
+                {saving ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Send size={14} />}
+                {form.status === 'published' ? 'Update' : 'Publish'}
+              </button>
+            )}
           </div>
         </div>
 
@@ -345,17 +371,38 @@ export default function CollectionEntryEditor({
                 </div>
                 <div>
                   <label style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--fg3)', display: 'block', marginBottom: 5 }}>Status</label>
+                  {/* Draft and Archived stay available to `editor` — RLS
+                      (migration 015) only gates a NEW status of `published`
+                      for this table (archiving takes something down, it
+                      doesn't publish anything, so it isn't gated). Published
+                      is hidden for `editor`; if an admin already published
+                      this entry, a disabled option keeps the displayed
+                      status accurate instead of silently showing "Draft" as
+                      selected. */}
                   <select
                     value={form.status}
                     onChange={(e) => setForm({ ...form, status: e.target.value as CollectionItemStatus })}
                     style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '8px 10px', fontSize: 13, color: 'var(--fg1)', background: 'var(--surface)' }}
                   >
                     <option value="draft">Draft</option>
-                    <option value="published">Published</option>
+                    {canPublish ? (
+                      <option value="published">Published</option>
+                    ) : form.status === 'published' && (
+                      <option value="published" disabled>Published</option>
+                    )}
                     <option value="archived">Archived</option>
                   </select>
                 </div>
-                <button className="btn-ne" style={{ width: '100%', justifyContent: 'center' }} onClick={() => handleSave()} disabled={saving}>
+                <button
+                  className="btn-ne"
+                  style={{ width: '100%', justifyContent: 'center' }}
+                  onClick={() => handleSave()}
+                  // Disabled when the entry's *current* status is already
+                  // published and this user can't touch it — mirrors the
+                  // post/page editors' equivalent guard. Doesn't apply to
+                  // `archived`, which stays editable for everyone.
+                  disabled={saving || (!canPublish && form.status === 'published')}
+                >
                   <Send size={14} />
                   {form.status === 'published' ? 'Update Entry' : form.status === 'archived' ? 'Archive Entry' : 'Save as Draft'}
                 </button>

@@ -84,6 +84,13 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
   const [error,       setError]     = useState('');
   const [clientId,    setClientId]  = useState<string | null>(null);
   const [isAdmin,     setIsAdmin]   = useState(false);
+  // Whether this user's role is allowed to publish/schedule a post at all
+  // (`client_admin`/`ne_admin`, per migration 015_publish_rls.sql's
+  // `WITH CHECK` on `posts`). This is a UX nicety only — it hides/disables
+  // the Schedule/Publish controls so a plain `editor` never submits a save
+  // RLS would reject anyway; the actual security boundary is the database
+  // policy itself, same convention as the role-gating in Tasks 4.2/5.3.
+  const [canPublish, setCanPublish] = useState(false);
   const [showImagePicker, setShowImagePicker] = useState(false);
   const [autosaveState, setAutosaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [previewError, setPreviewError] = useState('');
@@ -131,6 +138,7 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
 
       const admin = profile?.role === 'ne_admin';
       setIsAdmin(admin);
+      setCanPublish(admin || profile?.role === 'client_admin');
 
       if (admin) {
         if (isNew) setClientId(selectedClientId ?? null);
@@ -443,10 +451,18 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
               {saving ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Save size={14} />}
               Save Draft
             </button>
-            <button className="btn-ne" onClick={() => handleSave('published')} disabled={saving}>
-              {saving ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Send size={14} />}
-              {form.status === 'published' ? 'Update' : 'Publish'}
-            </button>
+            {/* Publish shortcut: hidden entirely for `editor` — RLS
+                (migration 015) rejects any save that leaves `status =
+                'published'` unless the caller is client_admin/ne_admin, so
+                showing this button to an editor would only produce a
+                confusing RLS-denial error. "Save Draft" above and the
+                sidebar's status-aware action button below remain available. */}
+            {canPublish && (
+              <button className="btn-ne" onClick={() => handleSave('published')} disabled={saving}>
+                {saving ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Send size={14} />}
+                {form.status === 'published' ? 'Update' : 'Publish'}
+              </button>
+            )}
           </div>
         </div>
 
@@ -526,12 +542,31 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
               <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
                 <div>
                   <label style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--fg3)', display: 'block', marginBottom: 5 }}>Status</label>
+                  {/* Draft/In review are always selectable — moving a post
+                      into `in_review` is exactly "Submit for Review" (the
+                      sidebar action button below relabels itself to that
+                      when this option is picked). Schedule/Publish now are
+                      hidden for `editor` — RLS (migration 015) requires
+                      client_admin/ne_admin for those; showing them would let
+                      an editor pick an option that then fails to save. If an
+                      editor is viewing a post an admin already scheduled or
+                      published, a disabled option preserves an accurate
+                      (non-editable) status display instead of silently
+                      showing "Draft" as selected. */}
                   <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value as PostStatus })}
                     style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '8px 10px', fontSize: 13, color: 'var(--fg1)', background: 'var(--surface)' }}>
                     <option value="draft">Draft</option>
                     <option value="in_review">In review</option>
-                    <option value="scheduled">Schedule</option>
-                    <option value="published">Publish now</option>
+                    {canPublish ? (
+                      <>
+                        <option value="scheduled">Schedule</option>
+                        <option value="published">Publish now</option>
+                      </>
+                    ) : (form.status === 'scheduled' || form.status === 'published') && (
+                      <option value={form.status} disabled>
+                        {form.status === 'scheduled' ? 'Scheduled' : 'Published'}
+                      </option>
+                    )}
                   </select>
                 </div>
                 {form.status === 'scheduled' && (
@@ -550,7 +585,19 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
                   <input value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}
                     style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '8px 10px', fontSize: 13, color: 'var(--fg1)', background: 'var(--surface)' }} />
                 </div>
-                <button className="btn-ne" style={{ width: '100%', justifyContent: 'center' }} onClick={() => handleSave()} disabled={saving}>
+                <button
+                  className="btn-ne"
+                  style={{ width: '100%', justifyContent: 'center' }}
+                  onClick={() => handleSave()}
+                  // Disabled (not just hidden) when the post's *current*
+                  // status is already an elevated one (scheduled/published)
+                  // an editor can't touch at all per RLS — the status select
+                  // above can't set these for an editor, but a post an admin
+                  // already scheduled/published keeps that value in `form`,
+                  // and re-saving it unchanged would still fail the same
+                  // `WITH CHECK`.
+                  disabled={saving || (!canPublish && (form.status === 'scheduled' || form.status === 'published'))}
+                >
                   <Send size={14} />
                   {form.status === 'scheduled' ? 'Schedule Post'
                     : form.status === 'in_review' ? 'Submit for Review'
