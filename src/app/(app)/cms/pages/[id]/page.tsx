@@ -10,7 +10,7 @@ import {
 import { createClient } from '@/lib/supabase/client';
 import { useSelectedClient } from '@/components/AppShell';
 import { logActivity } from '@/lib/activity';
-import { firePublishNotify } from '@/lib/publish-client';
+import { firePublishNotify, computeLivePath } from '@/lib/publish-client';
 import RichTextEditor from '@/components/editor/RichTextEditor';
 import type { PageStatus } from '@/lib/supabase/types';
 
@@ -263,7 +263,7 @@ export default function PageEditor({ params }: { params: Promise<{ id: string }>
       if (status === 'published') {
         // A brand-new page transitioning straight to published is always a
         // fresh publish (there's no prior live version to merely update).
-        firePublishNotify({ clientId, event: 'content.published', entityType: 'page', entityId: newPage.id, slug: payload.path });
+        firePublishNotify({ clientId, event: 'content.published', entityType: 'page', entityId: newPage.id, slug: payload.path, path: computeLivePath('page', { path: payload.path }) });
       }
 
       const action = status === 'published' ? 'published' : 'created';
@@ -299,6 +299,7 @@ export default function PageEditor({ params }: { params: Promise<{ id: string }>
           entityType: 'page',
           entityId: id,
           slug: payload.path,
+          path: computeLivePath('page', { path: payload.path }),
         });
       }
 

@@ -150,7 +150,10 @@ export default function NavigationPage() {
     // write here IS the save point (see the file-level comment above), so
     // each one fires `content.updated` (there's no publish/unpublish
     // transition concept for a nav item).
-    firePublishNotify({ clientId: selectedClientId, event: 'content.updated', entityType: 'menu_item', entityId: inserted?.id ?? '', slug: label });
+    // `path: null` — a menu item has no single canonical live path of its
+    // own (it's a link to something else, not a page); a generated
+    // `createRevalidateHandler` falls back to revalidating the whole site.
+    firePublishNotify({ clientId: selectedClientId, event: 'content.updated', entityType: 'menu_item', entityId: inserted?.id ?? '', slug: label, path: null });
     resetAddForm();
     load();
   }
@@ -176,7 +179,7 @@ export default function NavigationPage() {
     // removing published content, since a nav item disappearing is itself
     // a visible change to the live site.
     if (selectedClientId) {
-      firePublishNotify({ clientId: selectedClientId, event: 'content.deleted', entityType: 'menu_item', entityId: item.id, slug: item.label });
+      firePublishNotify({ clientId: selectedClientId, event: 'content.deleted', entityType: 'menu_item', entityId: item.id, slug: item.label, path: null });
     }
     load();
   }
@@ -196,7 +199,7 @@ export default function NavigationPage() {
       return;
     }
     if (selectedClientId) {
-      firePublishNotify({ clientId: selectedClientId, event: 'content.updated', entityType: 'menu_item', entityId: item.id, slug: item.label });
+      firePublishNotify({ clientId: selectedClientId, event: 'content.updated', entityType: 'menu_item', entityId: item.id, slug: item.label, path: null });
     }
     setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, is_visible: !i.is_visible } : i)));
   }
@@ -225,7 +228,7 @@ export default function NavigationPage() {
       return;
     }
     if (selectedClientId) {
-      firePublishNotify({ clientId: selectedClientId, event: 'content.updated', entityType: 'menu_item', entityId: item.id, slug: item.label });
+      firePublishNotify({ clientId: selectedClientId, event: 'content.updated', entityType: 'menu_item', entityId: item.id, slug: item.label, path: null });
     }
     setItems((prev) => prev.map((i) => {
       if (i.id === item.id) return { ...i, sort_order: other.sort_order };

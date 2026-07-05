@@ -6,7 +6,7 @@ import { use, useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowLeft, Save, Send, Loader2, History, X, AlertCircle } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { logActivity } from '@/lib/activity';
-import { firePublishNotify } from '@/lib/publish-client';
+import { firePublishNotify, computeLivePath } from '@/lib/publish-client';
 import FieldInput from '@/components/collections/FieldInput';
 import { validateEntry } from '@/lib/collections/validate';
 import type { Collection, CollectionItem, CollectionItemStatus } from '@/lib/supabase/types';
@@ -247,6 +247,7 @@ export default function CollectionEntryEditor({
         entityType: 'collection_entry',
         entityId: entryId,
         slug: payload.slug as string,
+        path: computeLivePath('collection_entry', { slug: payload.slug as string, collectionSlug: collection.slug }),
       });
     }
 

@@ -30,10 +30,25 @@
  *   "entityType": "post" | "page" | "collection_entry" | "site_globals" | "menu_item" | ...,
  *   "entityId": "<uuid>",
  *   "slug": "my-post-slug" | null,
+ *   "path": "/blog/my-post-slug" | null,
  *   "clientId": "<uuid>",
  *   "timestamp": "2026-07-05T12:00:00.000Z"
  * }
  * ```
+ * `slug` is whatever bare slug/tab-key/label the call site happens to have on
+ * hand — its shape differs per `entityType` (bare post slug, an
+ * already-absolute page path, a bare collection-item slug, a globals tab key,
+ * a nav-item label) and is carried along purely for observability in the
+ * delivery log, NOT for revalidation. `path` is the one field with a single,
+ * unambiguous meaning across every call site: the entity's canonical LIVE
+ * PATH, computed the exact same way `src/app/api/client/[slug]/preview/
+ * route.ts`'s `resolveEntity` computes it (post -> `/blog/{slug}`, page ->
+ * the page's own `path` column verbatim, collection entry ->
+ * `/{collectionSlug}/{itemSlug}`) — `null` for `site_globals`/`menu_item`
+ * events, which have no single canonical path. A generated
+ * `createRevalidateHandler` calls `revalidatePath(payload.path)` directly
+ * (no re-prepending of `/`), falling back to revalidating the whole site
+ * when `path` is `null`.
  * Signed via request header `x-ne-signature: <hex HMAC-SHA256 of the exact
  * raw request body>`, keyed by `client.revalidate_secret` — computed with
  * Node's `crypto.createHmac('sha256', secret).update(body).digest('hex')`,
@@ -58,11 +73,23 @@ export interface NotifyPublishParams {
   event: PublishEvent;
   entityType: string;
   entityId: string;
-  /** Public slug/path of the affected content, if it has one. */
+  /**
+   * Bare slug/tab-key/label of the affected content, if it has one — kept
+   * for observability only (see the file header's payload-shape comment for
+   * why this must never be used to derive a revalidation path).
+   */
   slug?: string | null;
+  /**
+   * Canonical LIVE PATH of the affected entity (e.g. `/blog/hello-world`,
+   * `/about`, `/sermons/friday-sermon`), or `null` for entity types with no
+   * single canonical path (`site_globals`, `menu_item`). See the file
+   * header's payload-shape comment for the exact computation this must
+   * mirror.
+   */
+  path?: string | null;
 }
 
-/** Minimal shape `notifyPublish` needs from a `clients` row. */
+/** Minimal shape `notifyPublish` needs from a `client_publish_config` row (Task 7.1's Fix Report — these fields moved off the public `clients` table). */
 export interface NotifyPublishClient {
   id: string;
   revalidate_url?: string | null;
@@ -199,6 +226,7 @@ export async function notifyPublish(
       entityType: params.entityType,
       entityId: params.entityId,
       slug: params.slug ?? null,
+      path: params.path ?? null,
       clientId: client.id,
       timestamp: new Date().toISOString(),
     };

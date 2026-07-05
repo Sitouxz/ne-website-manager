@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { logActivity } from '@/lib/activity';
 import { notifyPublish } from '@/lib/publish';
+import { computeLivePath } from '@/lib/publish-client';
 
 /**
  * Scheduled-publish cron: flips due `scheduled` posts to `published`.
@@ -96,7 +97,13 @@ export async function GET(req: Request) {
     if (config) {
       await notifyPublish(
         { id: row.client_id as string, revalidate_url: config.revalidate_url as string | null, revalidate_secret: config.revalidate_secret as string | null, deploy_hook: config.deploy_hook as string | null },
-        { event: 'content.published', entityType: 'post', entityId: row.id as string, slug: row.slug as string | undefined },
+        {
+          event: 'content.published',
+          entityType: 'post',
+          entityId: row.id as string,
+          slug: row.slug as string | undefined,
+          path: computeLivePath('post', { slug: row.slug as string }),
+        },
         supabase
       );
     }

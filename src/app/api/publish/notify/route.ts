@@ -80,6 +80,7 @@ export async function POST(req: Request) {
   const entityType: string = typeof body.entityType === 'string' ? body.entityType : '';
   const entityId: string = typeof body.entityId === 'string' ? body.entityId : '';
   const slug: string | null = typeof body.slug === 'string' ? body.slug : null;
+  const path: string | null = typeof body.path === 'string' ? body.path : null;
 
   if (!clientId || !entityType || !entityId || !VALID_EVENTS.includes(event)) {
     return NextResponse.json({ error: 'Invalid payload' }, { status: 400 });
@@ -104,7 +105,7 @@ export async function POST(req: Request) {
     if (!config) return;
     await notifyPublish(
       { id: clientId, revalidate_url: config.revalidate_url, revalidate_secret: config.revalidate_secret, deploy_hook: config.deploy_hook },
-      { event, entityType, entityId, slug },
+      { event, entityType, entityId, slug, path },
       admin
     );
   });

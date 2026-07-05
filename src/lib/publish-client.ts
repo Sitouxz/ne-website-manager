@@ -19,12 +19,49 @@ import type { PublishEvent } from '@/lib/publish';
  * route (e.g. offline), the publish event is simply not delivered this
  * time — there is deliberately no retry/queue (YAGNI per the task brief).
  */
+
+/**
+ * Computes the canonical LIVE PATH for an entity about to be
+ * published/updated/deleted — the value every `firePublishNotify` call site
+ * should pass as `path`. Mirrors `resolveEntity` in
+ * `src/app/api/client/[slug]/preview/route.ts` EXACTLY (that function is the
+ * other place in this codebase that turns a bare entity into a canonical
+ * path, itself following the same convention `seo/route.ts`'s sitemap
+ * builder established): post -> `/blog/{slug}`, page -> its own `path`
+ * column verbatim (already absolute, returned unchanged, never re-prefixed),
+ * collection entry -> `/{collectionSlug}/{itemSlug}`. Returns `null` for any
+ * other `entityType` (`site_globals`, `menu_item`, or anything this function
+ * doesn't recognize) — those have no single canonical path; callers pass
+ * `null` straight through as `NotifyPublishParams.path`, and a generated
+ * `createRevalidateHandler` falls back to revalidating the whole site.
+ *
+ * Deliberately pure/no I/O and framework-agnostic (no Node-only or
+ * browser-only APIs) so it can be called from both the 'use client' editors
+ * and server-side callers (the scheduled-publish cron) alike.
+ */
+export function computeLivePath(
+  entityType: string,
+  info: { slug?: string | null; path?: string | null; collectionSlug?: string | null }
+): string | null {
+  if (entityType === 'post') {
+    return info.slug ? `/blog/${info.slug}` : null;
+  }
+  if (entityType === 'page') {
+    return info.path ?? null;
+  }
+  if (entityType === 'collection_entry') {
+    return info.collectionSlug && info.slug ? `/${info.collectionSlug}/${info.slug}` : null;
+  }
+  return null;
+}
 export function firePublishNotify(params: {
   clientId: string;
   event: PublishEvent;
   entityType: string;
   entityId: string;
   slug?: string | null;
+  /** Canonical live path of the affected entity — see `NotifyPublishParams.path` in `src/lib/publish.ts`. `null`/omitted for entity types with no single canonical path. */
+  path?: string | null;
 }): void {
   fetch('/api/publish/notify', {
     method: 'POST',

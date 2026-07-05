@@ -307,17 +307,30 @@ export function get${pascal}Entry(itemSlug: string): Promise<CmsCollectionItem<$
 }
 
 // Imports needed only by `lib/cms-server.ts`'s two handler factories
-// (createHmac/timingSafeEqual for createRevalidateHandler;
-// revalidatePath/revalidateTag for the same; draftMode/redirect for
-// createPreviewHandler). Deliberately NOT part of `generateV2Sdk`'s
-// `lib/cms.ts` output — see the file header's "Two files for v2" section for
-// why these must stay out of the middleware-safe file. Placed at the very
-// top of `lib/cms-server.ts` because ES module import declarations are
-// conventionally expected to lead a file (most lint configs flag "import
-// after statement"), and this generated file will be dropped into a
-// THIRD-PARTY repo whose lint rules this generator doesn't control.
+// (createHmac/timingSafeEqual for createRevalidateHandler; revalidatePath
+// for the same; draftMode/redirect for createPreviewHandler). Deliberately
+// NOT part of `generateV2Sdk`'s `lib/cms.ts` output — see the file header's
+// "Two files for v2" section for why these must stay out of the
+// middleware-safe file. Placed at the very top of `lib/cms-server.ts`
+// because ES module import declarations are conventionally expected to lead
+// a file (most lint configs flag "import after statement"), and this
+// generated file will be dropped into a THIRD-PARTY repo whose lint rules
+// this generator doesn't control.
+//
+// No `revalidateTag` import: `fetchJson` (this SDK's one shared fetch
+// helper, used by every `get*` function in both v1 and v2 core) never
+// attaches `next: { tags: [...] }` to any of its calls, so a generated
+// `revalidateTag(payload.entityType)` call would match nothing — inert code
+// that implies a working tag-based revalidation path that doesn't actually
+// exist end-to-end. Making it real would mean deciding, and threading
+// through, a distinct cache tag per resource (and per list vs. per single
+// item — `getPosts()` and `getPostBySlug()` would need different tags to
+// invalidate correctly) across every `fetchJson` call site in the
+// generator — a materially larger, separate change than this fix's scope
+// (carrying the correct `path` through to `revalidatePath`). Removed rather
+// than left in non-functional.
 const V2_SERVER_IMPORTS = `import { createHmac, timingSafeEqual } from 'crypto';
-import { revalidatePath, revalidateTag } from 'next/cache';
+import { revalidatePath } from 'next/cache';
 import { draftMode } from 'next/headers';
 import { redirect } from 'next/navigation';
 `;
@@ -643,6 +656,26 @@ export function createPreviewHandler(secret: string) {
  * this must byte-for-byte match that scheme or every real delivery fails
  * verification. \`secret\` is this client's \`revalidate_secret\`, configured
  * in the CMS's Settings -> Publishing tab.
+ *
+ * Calls \`revalidatePath(payload.path)\` directly — \`path\` is the CMS's own
+ * pre-computed canonical live path for the published/updated/deleted entity
+ * (post -> \`/blog/{slug}\`, page -> its own \`path\` column, collection entry
+ * -> \`/{collectionSlug}/{itemSlug}\`), so this handler never re-derives or
+ * re-prepends anything — it trusts \`path\` as given. \`payload.slug\` (also
+ * present on the wire) is deliberately NOT used here: its shape differs by
+ * \`entityType\` (a bare post/collection-item slug vs. an already-absolute
+ * page path vs. a globals tab key/nav-item label), so building a path out of
+ * it would be wrong for at least two of those cases. When \`path\` is
+ * \`null\` (site_globals/menu_item events, which have no single canonical
+ * path), this falls back to revalidating the whole site via
+ * \`revalidatePath('/', 'layout')\` — the root layout wraps every route, so
+ * this invalidates all cached data on the next visit to any page (see
+ * https://nextjs.org/docs/app/api-reference/functions/revalidatePath#revalidating-all-data).
+ *
+ * No \`revalidateTag\` call: this SDK's \`fetchJson\` never attaches
+ * \`next: { tags: [...] }\` to any fetch, so a tag-based revalidation call
+ * here would match nothing — see \`V2_SERVER_IMPORTS\`'s comment in the
+ * generator source for the full reasoning.
  */
 export function createRevalidateHandler(secret: string) {
   return async function POST(req: Request): Promise<Response> {
@@ -655,15 +688,18 @@ export function createRevalidateHandler(secret: string) {
     const valid = sigBuf.length === expBuf.length && timingSafeEqual(sigBuf, expBuf);
     if (!valid) return new Response('Invalid signature', { status: 401 });
 
-    let payload: { entityType?: string; slug?: string | null };
+    let payload: { entityType?: string; path?: string | null };
     try {
       payload = JSON.parse(rawBody);
     } catch {
       return new Response('Invalid JSON body', { status: 400 });
     }
 
-    if (payload.slug) revalidatePath(\`/\${payload.slug}\`);
-    if (payload.entityType) revalidateTag(payload.entityType);
+    if (payload.path) {
+      revalidatePath(payload.path);
+    } else {
+      revalidatePath('/', 'layout');
+    }
 
     return Response.json({ revalidated: true });
   };

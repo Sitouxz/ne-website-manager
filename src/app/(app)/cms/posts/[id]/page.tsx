@@ -10,7 +10,7 @@ import {
 import { createClient } from '@/lib/supabase/client';
 import { useSelectedClient } from '@/components/AppShell';
 import { logActivity } from '@/lib/activity';
-import { firePublishNotify } from '@/lib/publish-client';
+import { firePublishNotify, computeLivePath } from '@/lib/publish-client';
 import MediaPicker from '@/components/MediaPicker';
 import type { MediaItem } from '@/app/api/media/route';
 import RichTextEditor from '@/components/editor/RichTextEditor';
@@ -318,7 +318,7 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
       if (status === 'published') {
         // A brand-new post transitioning straight to published is always a
         // fresh publish (there's no prior live version to merely update).
-        firePublishNotify({ clientId, event: 'content.published', entityType: 'post', entityId: newPost.id, slug: payload.slug });
+        firePublishNotify({ clientId, event: 'content.published', entityType: 'post', entityId: newPost.id, slug: payload.slug, path: computeLivePath('post', { slug: payload.slug }) });
       }
 
       const action = status === 'published' ? 'published' : status === 'scheduled' ? 'scheduled' : 'created';
@@ -354,6 +354,7 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
           entityType: 'post',
           entityId: id,
           slug: payload.slug,
+          path: computeLivePath('post', { slug: payload.slug }),
         });
       }
 

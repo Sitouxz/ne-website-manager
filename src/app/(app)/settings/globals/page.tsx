@@ -80,8 +80,11 @@ export default function SiteGlobalsPage() {
     // `content.updated`. `entityId`/`slug` use the `site_globals` key
     // (footer/theme/social/contact) since there's no separate row id
     // tracked in this component — `(client_id, key)` is the natural
-    // identity for a globals row.
-    firePublishNotify({ clientId: selectedClientId, event: 'content.updated', entityType: 'site_globals', entityId: tab, slug: tab });
+    // identity for a globals row. `path: null` — globals have no single
+    // canonical live path (they affect shared layout data across the whole
+    // site); a generated `createRevalidateHandler` falls back to
+    // revalidating the whole site for a `null` path.
+    firePublishNotify({ clientId: selectedClientId, event: 'content.updated', entityType: 'site_globals', entityId: tab, slug: tab, path: null });
     setSaved(true);
     setTimeout(() => setSaved(false), 2500);
   }

@@ -64,7 +64,7 @@ describe('notifyPublish', () => {
 
     await notifyPublish(
       client,
-      { event: 'content.published', entityType: 'post', entityId: 'p1', slug: 'hello-world' },
+      { event: 'content.published', entityType: 'post', entityId: 'p1', slug: 'hello-world', path: '/blog/hello-world' },
       supabase
     );
 
@@ -78,13 +78,17 @@ describe('notifyPublish', () => {
     const expectedSignature = createHmac('sha256', 'top-secret').update(capturedBody).digest('hex');
     expect(capturedHeaders['x-ne-signature']).toBe(expectedSignature);
 
-    // And the payload shape is what we documented.
+    // And the payload shape is what we documented — including `path`, the
+    // field a generated `createRevalidateHandler` actually revalidates with
+    // (see the Phase 7 final-review fix: `slug` alone is ambiguous across
+    // entity types, `path` is not).
     const parsed = JSON.parse(capturedBody);
     expect(parsed).toMatchObject({
       event: 'content.published',
       entityType: 'post',
       entityId: 'p1',
       slug: 'hello-world',
+      path: '/blog/hello-world',
       clientId: 'client-1',
     });
     expect(typeof parsed.timestamp).toBe('string');
@@ -127,6 +131,66 @@ describe('notifyPublish', () => {
       expect(row.ok).toBe(true);
       expect(row.payload).toMatchObject({ event: 'content.updated', entityType: 'page', entityId: 'pg1' });
     }
+  });
+
+  describe('path field (Phase 7 final-review fix)', () => {
+    async function captureDeliveredPath(params: Parameters<typeof notifyPublish>[1]): Promise<unknown> {
+      let capturedBody = '';
+      const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+        capturedBody = init.body as string;
+        return { ok: true, status: 200 } as Response;
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      const supabase = mockSupabase({ webhook_deliveries: [] });
+      const client: NotifyPublishClient = { id: 'client-1', revalidate_url: 'https://example.com/api/revalidate' };
+
+      await notifyPublish(client, params, supabase);
+
+      return JSON.parse(capturedBody).path;
+    }
+
+    it('carries a page\'s canonical path through unchanged (already absolute)', async () => {
+      const path = await captureDeliveredPath({
+        event: 'content.published',
+        entityType: 'page',
+        entityId: 'pg1',
+        slug: '/about',
+        path: '/about',
+      });
+      expect(path).toBe('/about');
+    });
+
+    it('carries a collection entry\'s canonical /{collectionSlug}/{itemSlug} path', async () => {
+      const path = await captureDeliveredPath({
+        event: 'content.published',
+        entityType: 'collection_entry',
+        entityId: 'ci1',
+        slug: 'friday-sermon',
+        path: '/sermons/friday-sermon',
+      });
+      expect(path).toBe('/sermons/friday-sermon');
+    });
+
+    it('defaults to null when the caller passes no path at all (e.g. site_globals/menu_item events)', async () => {
+      const path = await captureDeliveredPath({
+        event: 'content.updated',
+        entityType: 'site_globals',
+        entityId: 'footer',
+        slug: 'footer',
+      });
+      expect(path).toBeNull();
+    });
+
+    it('carries an explicit path: null through as null, not omitted', async () => {
+      const path = await captureDeliveredPath({
+        event: 'content.updated',
+        entityType: 'menu_item',
+        entityId: 'm1',
+        slug: 'Home',
+        path: null,
+      });
+      expect(path).toBeNull();
+    });
   });
 
   it('records a non-2xx response as a failed (ok: false) delivery and does not throw', async () => {

@@ -249,10 +249,9 @@ describe('generateV2Sdk — middleware-safe: no Edge-incompatible imports (Findi
     expect(v2).not.toContain('redirect(entity.path)');
   });
 
-  it('does not import from next/cache (handler-only: revalidatePath/revalidateTag)', () => {
+  it('does not import from next/cache (handler-only: revalidatePath)', () => {
     expect(v2).not.toMatch(/from ['"]next\/cache['"]/);
     expect(v2).not.toContain('revalidatePath(');
-    expect(v2).not.toContain('revalidateTag(');
   });
 
   it('does not contain createPreviewHandler/createRevalidateHandler at all — they live in lib/cms-server.ts', () => {
@@ -289,12 +288,19 @@ describe('generateV2ServerSdk — lib/cms-server.ts (server/Node-only companion 
     expect(serverSdk).toContain('redirect(entity.path)');
 
     // createRevalidateHandler verifies x-ne-signature via HMAC-SHA256 and
-    // calls revalidatePath/revalidateTag.
+    // calls revalidatePath with the CMS-computed canonical path — no
+    // revalidateTag (see the generator source's V2_SERVER_IMPORTS comment
+    // for why: fetchJson never attaches cache tags, so a revalidateTag call
+    // would be inert).
     expect(serverSdk).toContain(`req.headers.get('x-ne-signature')`);
     expect(serverSdk).toContain(`createHmac('sha256', secret)`);
     expect(serverSdk).toContain('timingSafeEqual(');
-    expect(serverSdk).toContain('revalidatePath(');
-    expect(serverSdk).toContain('revalidateTag(');
+    expect(serverSdk).toContain('revalidatePath(payload.path)');
+    expect(serverSdk).toContain(`revalidatePath('/', 'layout')`);
+    // No functional revalidateTag call (the generated file's own doc
+    // comment explains, in prose, why it was removed — that mention alone
+    // is fine; there must be no actual call or import).
+    expect(serverSdk).not.toContain('revalidateTag(');
 
     // Lightweight syntactic sanity check: braces balance across the whole
     // generated file.
@@ -305,9 +311,10 @@ describe('generateV2ServerSdk — lib/cms-server.ts (server/Node-only companion 
 
   it('leads with its Node/App-Router-only imports (crypto, next/cache, next/headers, next/navigation)', () => {
     expect(serverSdk).toContain(`import { createHmac, timingSafeEqual } from 'crypto';`);
-    expect(serverSdk).toContain(`import { revalidatePath, revalidateTag } from 'next/cache';`);
+    expect(serverSdk).toContain(`import { revalidatePath } from 'next/cache';`);
     expect(serverSdk).toContain(`import { draftMode } from 'next/headers';`);
     expect(serverSdk).toContain(`import { redirect } from 'next/navigation';`);
+    expect(serverSdk).not.toMatch(/import \{[^}]*revalidateTag[^}]*\} from 'next\/cache'/);
     // Imports must lead the file (ES module convention) — before the
     // CMS_BASE/CLIENT_SLUG consts and the handler functions.
     expect(serverSdk.indexOf(`import { createHmac`)).toBeLessThan(serverSdk.indexOf('const CMS_BASE'));
@@ -317,6 +324,27 @@ describe('generateV2ServerSdk — lib/cms-server.ts (server/Node-only companion 
     expect(serverSdk).not.toContain('export function getPosts(');
     expect(serverSdk).not.toContain('export function getCollection<');
     expect(serverSdk).not.toContain('export function getGlobals(');
+  });
+
+  // Review finding (Phase 7 final review, Important): createRevalidateHandler
+  // used to build its own path from `payload.slug` (`revalidatePath(`/${payload.slug}`)`),
+  // which is wrong for posts (missing `/blog` prefix), wrong for collection
+  // entries (missing `/{collectionSlug}` prefix), and produces a double slash
+  // for pages (`payload.slug` there was already an absolute `path`). The CMS
+  // now computes the canonical path itself and sends it as `payload.path` —
+  // this handler must use that value as-is.
+  it('calls revalidatePath(payload.path) directly — no re-derivation, no re-prepending of "/"', () => {
+    expect(serverSdk).toContain('revalidatePath(payload.path)');
+    // The parsed payload's own type declaration no longer carries a `slug`
+    // field at all — the old, wrong behavior reconstructed a path out of it
+    // (`revalidatePath(`/${payload.slug}`)`); this asserts that shape is
+    // gone, not just that this one call site avoids it.
+    expect(serverSdk).toContain('let payload: { entityType?: string; path?: string | null }');
+    expect(serverSdk).not.toMatch(/revalidatePath\(`\/\$\{payload\.(slug|path)\}`\)/);
+  });
+
+  it('falls back to revalidating the whole site when payload.path is null (site_globals/menu_item events)', () => {
+    expect(serverSdk).toContain(`revalidatePath('/', 'layout')`);
   });
 });
 
