@@ -71,6 +71,15 @@ export default function PageEditor({ params }: { params: Promise<{ id: string }>
   // `editor` submits a save RLS would reject anyway, same convention as
   // the role-gating in Tasks 4.2/5.3.
   const [canPublish, setCanPublish] = useState(false);
+  // The page's status as currently persisted in the database — set only
+  // from data actually loaded from (or successfully written to) `pages`,
+  // never from `form.status` while a user is mid-edit. Kept separate from
+  // `form.status` on purpose: an `editor` can freely flip the in-memory
+  // dropdown to `'draft'` while viewing an already-published page, but
+  // that alone must never unlock a save action that would downgrade the
+  // row RLS (migration 015) reserves for client_admin/ne_admin — see
+  // `isElevatedLocked` below, which gates on this value.
+  const [initialStatus, setInitialStatus] = useState<PageStatus | null>(null);
   const [autosaveState, setAutosaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [historyOpen, setHistoryOpen] = useState(false);
   const { selectedClientId } = useSelectedClient();
@@ -85,16 +94,22 @@ export default function PageEditor({ params }: { params: Promise<{ id: string }>
 
   function applyPageToForm(page: Record<string, unknown>) {
     skipNextAutosaveRef.current = true;
+    const status = (page.status as PageStatus) ?? 'draft';
     setForm({
       title:       (page.title as string) ?? '',
       path:        (page.path as string) ?? '',
       content:     (page.content as string) ?? '',
       contentJson: (page.content_json as Record<string, unknown> | null) ?? null,
-      status:      (page.status as PageStatus) ?? 'draft',
+      status,
       visibility:  (page.visibility as 'public' | 'private') ?? 'public',
       seoTitle:    (page.seo_title as string) ?? '',
       seoDesc:     (page.seo_description as string) ?? '',
     });
+    // `page` here is always the row as it currently exists in the DB (a
+    // fresh fetch on load, or the server's post-restore row) — so this is
+    // "the status this row has right now", independent of whatever the user
+    // goes on to pick in the dropdown afterward.
+    setInitialStatus(status);
   }
 
   // Load existing page + client_id
@@ -285,6 +300,10 @@ export default function PageEditor({ params }: { params: Promise<{ id: string }>
       await maybeSnapshotRevision(supabase, user.id, id, clientId, payload, true);
 
       setForm((f) => ({ ...f, status }));
+      // The write above just succeeded, so `status` is now what's actually
+      // live in the DB — keep `initialStatus` in sync so a subsequent save
+      // in the same session gates on the row's real current state.
+      setInitialStatus(status);
       setSaving(false);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
@@ -301,6 +320,18 @@ export default function PageEditor({ params }: { params: Promise<{ id: string }>
       await fetch(client.deploy_hook, { method: 'POST' }).catch(() => null);
     }
   }
+
+  // A plain `editor` (not `canPublish`) can never downgrade a page whose
+  // *currently-persisted* status is already published — matching migration
+  // 015_publish_rls.sql's `WITH CHECK` gated set for `pages`. Keyed off
+  // `initialStatus` (the DB's last-known value), not `form.status`: an
+  // editor selecting "Draft" in the dropdown while viewing an
+  // already-published page must not unlock either save action below.
+  // Never blocks client_admin/ne_admin.
+  const isElevatedLocked = !canPublish && initialStatus === 'published';
+  const elevatedLockedTitle = isElevatedLocked
+    ? 'Only an admin can change the status of an already-published page.'
+    : undefined;
 
   if (loading) {
     return (
@@ -347,7 +378,12 @@ export default function PageEditor({ params }: { params: Promise<{ id: string }>
                 <History size={14} /> History
               </button>
             )}
-            <button className="btn-outline-ne" onClick={() => handleSave('draft')} disabled={saving}>
+            <button
+              className="btn-outline-ne"
+              onClick={() => handleSave('draft')}
+              disabled={saving || isElevatedLocked}
+              title={elevatedLockedTitle}
+            >
               {saving ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Save size={14} />}
               Save Draft
             </button>
@@ -464,10 +500,14 @@ export default function PageEditor({ params }: { params: Promise<{ id: string }>
                   className="btn-ne"
                   style={{ width: '100%', justifyContent: 'center' }}
                   onClick={() => handleSave()}
-                  // Disabled when the page's *current* status is already
-                  // published and this user can't touch it — mirrors the
-                  // post editor's equivalent guard.
-                  disabled={saving || (!canPublish && form.status === 'published')}
+                  // Disabled whenever `isElevatedLocked` — keyed off
+                  // `initialStatus` (the DB's currently-persisted value),
+                  // not `form.status`, so selecting "Draft" in the dropdown
+                  // above while viewing an already-published page can't
+                  // unlock this button — mirrors the post editor's
+                  // equivalent guard.
+                  disabled={saving || isElevatedLocked}
+                  title={elevatedLockedTitle}
                 >
                   <Send size={14} />
                   {form.status === 'published' ? 'Update Page' : 'Save as Draft'}

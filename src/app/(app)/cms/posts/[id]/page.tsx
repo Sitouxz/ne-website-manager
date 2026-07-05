@@ -91,6 +91,16 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
   // RLS would reject anyway; the actual security boundary is the database
   // policy itself, same convention as the role-gating in Tasks 4.2/5.3.
   const [canPublish, setCanPublish] = useState(false);
+  // The post's status as currently persisted in the database — set only
+  // from data actually loaded from (or successfully written to) `posts`,
+  // never from `form.status` while a user is mid-edit. This is deliberately
+  // tracked separately from `form.status`: an `editor` can freely flip the
+  // in-memory `form.status` dropdown to `'draft'` while viewing an
+  // already-published post, but that alone must never unlock a save action
+  // that would downgrade the row RLS (migration 015) reserves for
+  // client_admin/ne_admin — see `isElevatedLocked` below, which gates on
+  // this value, not on `form.status`.
+  const [initialStatus, setInitialStatus] = useState<PostStatus | null>(null);
   const [showImagePicker, setShowImagePicker] = useState(false);
   const [autosaveState, setAutosaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [previewError, setPreviewError] = useState('');
@@ -107,6 +117,7 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
 
   function applyPostToForm(post: Record<string, unknown>) {
     skipNextAutosaveRef.current = true;
+    const status = (post.status as PostStatus) ?? 'draft';
     setForm({
       title:       (post.title as string) ?? '',
       slug:        (post.slug as string) ?? '',
@@ -114,13 +125,18 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
       content:     (post.content as string) ?? '',
       contentJson: (post.content_json as Record<string, unknown> | null) ?? null,
       category:    (post.category as string) ?? 'Worship',
-      status:      (post.status as PostStatus) ?? 'draft',
+      status,
       featuredImg: (post.cover_url as string) ?? '',
       tags:        (post.tags as string[]) ?? [],
       seoTitle:    (post.seo_title as string) ?? '',
       seoDesc:     (post.seo_description as string) ?? '',
       scheduledAt: post.scheduled_at ? toDatetimeLocalValue(post.scheduled_at as string) : '',
     });
+    // `post` here is always the row as it currently exists in the DB (a
+    // fresh fetch on load, or the server's post-restore row) — so this is
+    // exactly "the status this row has right now", independent of whatever
+    // the user goes on to pick in the dropdown afterward.
+    setInitialStatus(status);
   }
 
   // Load existing post + client_id
@@ -343,6 +359,13 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
       await maybeSnapshotRevision(supabase, user.id, id, clientId, payload, true);
 
       setForm((f) => ({ ...f, status, scheduledAt: status === 'scheduled' ? f.scheduledAt : '' }));
+      // The write above just succeeded, so `status` is now what's actually
+      // live in the DB — keep `initialStatus` in sync so a subsequent save
+      // in the same session gates on the row's real current state (e.g. an
+      // admin who downgrades published->draft should immediately be able to
+      // keep editing that now-draft row without the lock the previous
+      // published status carried).
+      setInitialStatus(status);
       setSaving(false);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
@@ -394,6 +417,20 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
 
     window.open(`${websiteUrl.replace(/\/$/, '')}/api/preview?token=${token}`, '_blank');
   }
+
+  // A plain `editor` (not `canPublish`) can never downgrade a post whose
+  // *currently-persisted* status is scheduled/published — matching
+  // migration 015_publish_rls.sql's `WITH CHECK` gated set for `posts`.
+  // Deliberately keyed off `initialStatus` (the DB's last-known value), not
+  // `form.status`: an editor selecting "Draft" in the dropdown while
+  // viewing an already-published post must not unlock either save action
+  // below — RLS itself would still allow that specific write (an explicit
+  // downgrade's new status is never in the gated set), so the UI is the
+  // only place this can be closed. Never blocks client_admin/ne_admin.
+  const isElevatedLocked = !canPublish && (initialStatus === 'scheduled' || initialStatus === 'published');
+  const elevatedLockedTitle = isElevatedLocked
+    ? 'Only an admin can change the status of an already-published or scheduled post.'
+    : undefined;
 
   if (loading) {
     return (
@@ -447,7 +484,12 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
                 Preview
               </button>
             )}
-            <button className="btn-outline-ne" onClick={() => handleSave('draft')} disabled={saving}>
+            <button
+              className="btn-outline-ne"
+              onClick={() => handleSave('draft')}
+              disabled={saving || isElevatedLocked}
+              title={elevatedLockedTitle}
+            >
               {saving ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Save size={14} />}
               Save Draft
             </button>
@@ -589,14 +631,18 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
                   className="btn-ne"
                   style={{ width: '100%', justifyContent: 'center' }}
                   onClick={() => handleSave()}
-                  // Disabled (not just hidden) when the post's *current*
-                  // status is already an elevated one (scheduled/published)
-                  // an editor can't touch at all per RLS — the status select
-                  // above can't set these for an editor, but a post an admin
-                  // already scheduled/published keeps that value in `form`,
-                  // and re-saving it unchanged would still fail the same
-                  // `WITH CHECK`.
-                  disabled={saving || (!canPublish && (form.status === 'scheduled' || form.status === 'published'))}
+                  // Disabled (not just hidden) whenever `isElevatedLocked` —
+                  // i.e. the post's *currently-persisted* status is already
+                  // scheduled/published and this user isn't an admin. Keyed
+                  // off `initialStatus`, not `form.status`, on purpose: if
+                  // an editor flips the dropdown above to "Draft" while
+                  // viewing an already-published post, `form.status`
+                  // becomes `'draft'` but the row is still published in the
+                  // DB — saving that would be a one-click unpublish RLS
+                  // would otherwise still permit (an explicit downgrade's
+                  // new status is never in the gated set).
+                  disabled={saving || isElevatedLocked}
+                  title={elevatedLockedTitle}
                 >
                   <Send size={14} />
                   {form.status === 'scheduled' ? 'Schedule Post'

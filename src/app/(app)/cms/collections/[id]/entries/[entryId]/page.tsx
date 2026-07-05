@@ -88,6 +88,16 @@ export default function CollectionEntryEditor({
   // deliberately not gated here — see the migration's comment: archiving
   // takes something down, it doesn't publish anything.
   const [canPublish, setCanPublish] = useState(false);
+  // The entry's status as currently persisted in the database — set only
+  // from data actually loaded from (or successfully written to)
+  // `collection_items`, never from `form.status` while a user is mid-edit.
+  // Kept separate from `form.status` on purpose: an `editor` can freely
+  // flip the in-memory dropdown to `'draft'` while viewing an
+  // already-published entry, but that alone must never unlock a save
+  // action that would downgrade the row RLS (migration 015) reserves for
+  // client_admin/ne_admin — see `isElevatedLocked` below, which gates on
+  // this value. Doesn't apply to `archived`, which isn't gated by RLS.
+  const [initialStatus, setInitialStatus] = useState<CollectionItemStatus | null>(null);
 
   const skipNextAutosaveRef = useRef(true);
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -95,11 +105,17 @@ export default function CollectionEntryEditor({
 
   function applyItemToForm(item: CollectionItem) {
     skipNextAutosaveRef.current = true;
+    const status = item.status ?? 'draft';
     setForm({
       slug: item.slug ?? '',
-      status: item.status ?? 'draft',
+      status,
       data: item.data ?? {},
     });
+    // `item` here is always the row as it currently exists in the DB (a
+    // fresh fetch on load, or the server's post-restore row) — so this is
+    // "the status this row has right now", independent of whatever the
+    // user goes on to pick in the dropdown afterward.
+    setInitialStatus(status);
   }
 
   useEffect(() => {
@@ -229,6 +245,10 @@ export default function CollectionEntryEditor({
     await maybeSnapshotRevision(supabase, user.id, payload, true);
 
     setForm((f) => ({ ...f, status }));
+    // The write above just succeeded, so `status` is now what's actually
+    // live in the DB — keep `initialStatus` in sync so a subsequent save
+    // in the same session gates on the row's real current state.
+    setInitialStatus(status);
     setSaving(false);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
@@ -278,6 +298,19 @@ export default function CollectionEntryEditor({
     );
   }
 
+  // A plain `editor` (not `canPublish`) can never downgrade an entry whose
+  // *currently-persisted* status is already published — matching migration
+  // 015_publish_rls.sql's `WITH CHECK` gated set for `collection_items`
+  // (archiving isn't gated, so it's excluded here). Keyed off
+  // `initialStatus` (the DB's last-known value), not `form.status`: an
+  // editor selecting "Draft" in the dropdown while viewing an
+  // already-published entry must not unlock either save action below.
+  // Never blocks client_admin/ne_admin.
+  const isElevatedLocked = !canPublish && initialStatus === 'published';
+  const elevatedLockedTitle = isElevatedLocked
+    ? 'Only an admin can change the status of an already-published entry.'
+    : undefined;
+
   const titleField = collection.options?.title_field;
   const derivedTitle = (titleField && typeof form.data[titleField] === 'string' && (form.data[titleField] as string).trim() !== '')
     ? (form.data[titleField] as string)
@@ -309,7 +342,12 @@ export default function CollectionEntryEditor({
             <button className="btn-outline-ne" onClick={() => setHistoryOpen(true)} title="Revision history">
               <History size={14} /> History
             </button>
-            <button className="btn-outline-ne" onClick={() => handleSave('draft')} disabled={saving}>
+            <button
+              className="btn-outline-ne"
+              onClick={() => handleSave('draft')}
+              disabled={saving || isElevatedLocked}
+              title={elevatedLockedTitle}
+            >
               {saving ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Save size={14} />}
               Save Draft
             </button>
@@ -397,11 +435,15 @@ export default function CollectionEntryEditor({
                   className="btn-ne"
                   style={{ width: '100%', justifyContent: 'center' }}
                   onClick={() => handleSave()}
-                  // Disabled when the entry's *current* status is already
-                  // published and this user can't touch it — mirrors the
-                  // post/page editors' equivalent guard. Doesn't apply to
-                  // `archived`, which stays editable for everyone.
-                  disabled={saving || (!canPublish && form.status === 'published')}
+                  // Disabled whenever `isElevatedLocked` — keyed off
+                  // `initialStatus` (the DB's currently-persisted value),
+                  // not `form.status`, so selecting "Draft" in the dropdown
+                  // above while viewing an already-published entry can't
+                  // unlock this button — mirrors the post/page editors'
+                  // equivalent guard. Doesn't apply to `archived`, which
+                  // stays editable for everyone.
+                  disabled={saving || isElevatedLocked}
+                  title={elevatedLockedTitle}
                 >
                   <Send size={14} />
                   {form.status === 'published' ? 'Update Entry' : form.status === 'archived' ? 'Archive Entry' : 'Save as Draft'}
