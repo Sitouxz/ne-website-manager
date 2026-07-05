@@ -428,12 +428,14 @@ Turns the CMS from "content" into "run the whole site."
 
 Ties CMS actions to live client sites. NE controls the client repos, so the contract can be exact.
 
+> **Reconciled 2026-07-05:** migration renumbered to `017_webhooks.sql` (012 taken by Phase 5's cross-origin-redirect fix). Wiring list corrected: the original draft named "post editor save-publish, cron, entry editor, globals save" but omitted the **pages editor** — pages have their own public feed (`pages_public_read`) and the same publish/unpublish transitions as posts/entries, so `notifyPublish` must be wired there too. `clients.deploy_hook` already exists (migration 001) — only `revalidate_url`/`revalidate_secret` are new columns.
+
 ### Task 7.1: Publish webhooks + deploy triggers
 
 **Files:**
-- Create: `supabase/migrations/012_webhooks.sql` — `webhook_deliveries` (id, client_id, url, event TEXT, payload JSONB, status_code INT, ok BOOLEAN, created_at). Add `clients.revalidate_url TEXT`, `clients.revalidate_secret TEXT`
+- Create: `supabase/migrations/017_webhooks.sql` — `webhook_deliveries` (id, client_id, url, event TEXT, payload JSONB, status_code INT, ok BOOLEAN, created_at). Add `clients.revalidate_url TEXT`, `clients.revalidate_secret TEXT`
 - Create: `src/lib/publish.ts` — `notifyPublish(client, { event: 'content.published' | 'content.updated' | 'content.deleted', entityType, entityId, slug })`: (1) POST `revalidate_url` with HMAC-SHA256 signature header `x-ne-signature` over body using `revalidate_secret`; (2) if `deploy_hook` set, POST it (static rebuild); log delivery row. Fire-and-forget with 5s timeout.
-- Modify: publish points (post editor save-publish, cron, entry editor, globals save) → call `notifyPublish`
+- Modify: publish points (post editor save-publish, **pages editor save-publish**, cron, entry editor, globals save) → call `notifyPublish`
 - Modify: `src/app/(app)/settings/page.tsx` — Publishing card: revalidate URL/secret, deploy hook, delivery log (last 20)
 - Test: `src/lib/publish.test.ts` (signature correctness, timeout swallow)
 
