@@ -120,7 +120,18 @@ export async function POST(req: Request) {
     // (no email was actually sent) — roll it back on the user-scoped
     // client, same one that created it.
     await supabase.from('invitations').delete().eq('id', (invitation as { id: string }).id);
-    return NextResponse.json({ error: inviteError.message }, { status: 500 });
+    // Don't return inviteError.message to the caller: Supabase Auth's
+    // invite API returns a distinguishable error when the target email
+    // already has a registered account, and a client_admin can invite
+    // ANY email address — so echoing the real message back would let a
+    // lower-privileged caller probe whether an arbitrary email is
+    // registered anywhere in the whole system (cross-tenant account
+    // enumeration). Log the real error server-side only.
+    console.error('inviteUserByEmail failed:', inviteError.message);
+    return NextResponse.json(
+      { error: 'Failed to send invitation. Please try again or contact support.' },
+      { status: 500 }
+    );
   }
 
   return NextResponse.json({ success: true, id: (invitation as { id: string }).id, expires_at: expiresAt });

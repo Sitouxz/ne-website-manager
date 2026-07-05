@@ -241,4 +241,35 @@ describe('PATCH /api/team/members', () => {
 
     expect(res.status).toBe(400);
   });
+
+  // Explicit self-target privilege-escalation coverage (review Finding 3):
+  // an actor targeting THEIR OWN id with role: 'ne_admin'. The guard is
+  // written role-agnostically (it only checks `role === 'ne_admin' &&
+  // profile?.role !== 'ne_admin'`, never comparing target id to caller
+  // id), so this is already covered incidentally by the "promote a
+  // teammate" test above — but self-promotion is the single most
+  // important scenario here and deserves its own explicit test.
+  it('rejects a client_admin attempting to self-promote to ne_admin, and does not change their own role', async () => {
+    setSupabase(supabaseFor(CLIENT_ADMIN, { profiles: [CLIENT_ADMIN] }));
+    const { supabase: admin } = adminMockFor({ profiles: [CLIENT_ADMIN] });
+    setAdmin(admin);
+
+    const res = await PATCH(patchReq({ id: CLIENT_ADMIN.id, role: 'ne_admin' }));
+
+    expect(res.status).toBe(403);
+    const { data: rows } = await admin.from('profiles').select('*').eq('id', CLIENT_ADMIN.id);
+    expect(rows![0].role).toBe('client_admin');
+  });
+
+  it('rejects an editor attempting to self-promote to ne_admin, and does not change their own role', async () => {
+    setSupabase(supabaseFor(EDITOR, { profiles: [EDITOR] }));
+    const { supabase: admin } = adminMockFor({ profiles: [EDITOR] });
+    setAdmin(admin);
+
+    const res = await PATCH(patchReq({ id: EDITOR.id, role: 'ne_admin' }));
+
+    expect(res.status).toBe(403);
+    const { data: rows } = await admin.from('profiles').select('*').eq('id', EDITOR.id);
+    expect(rows![0].role).toBe('editor');
+  });
 });
