@@ -10,7 +10,7 @@ import {
 } from 'lucide-react';
 import type { Client, Collection, Role } from '@/lib/supabase/types';
 
-type NavItem = { label: string; href: string; icon: React.ElementType; soon?: boolean };
+type NavItem = { label: string; href: string; icon: React.ElementType; soon?: boolean; hideForEditor?: boolean };
 type NavGroup = { section: string; items: NavItem[] };
 
 // "All Collections" replaces the old static "Collections" link — it still
@@ -52,7 +52,13 @@ const NAV: NavGroup[] = [
     items: [
       { label: 'Site Settings', href: '/settings',         icon: Settings },
       { label: 'Site Globals',  href: '/settings/globals', icon: Sliders },
-      { label: 'Team Members',  href: '/team',             icon: Users, soon: true },
+      // Task 6.1: invitations + team management landed, so `soon` is gone.
+      // `hideForEditor` is the first role-gated sidebar item — a plain
+      // `editor` has no use for this page (RLS + the page's own
+      // not-authorized state already block them from doing anything
+      // there), so it's hidden entirely rather than shown-disabled like
+      // the old `soon` treatment.
+      { label: 'Team Members',  href: '/team',             icon: Users, hideForEditor: true },
     ],
   },
 ];
@@ -155,7 +161,7 @@ export default function Sidebar({
         {allNav.map((group) => (
           <div key={group.section}>
             <div className="sidebar-section-label">{group.section}</div>
-            {group.items.map((item) => {
+            {group.items.filter((item) => !(item.hideForEditor && role === 'editor')).map((item) => {
               const Icon = item.icon;
               const active = path === item.href || path.startsWith(item.href + '/');
               return (
