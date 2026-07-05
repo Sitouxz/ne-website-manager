@@ -412,7 +412,7 @@ Turns the CMS from "content" into "run the whole site."
 ### Task 6.2: Review workflow
 
 **Files:**
-- Create: `supabase/migrations/014_publish_rls.sql` — tighten `posts`/`pages`/`collection_items` write RLS: `WITH CHECK` requires `is_ne_admin() OR (client_id = my_client_id() AND (status NOT IN ('published','scheduled') OR EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role IN ('ne_admin','client_admin'))))` — pages have no `'scheduled'` status, use `status <> 'published'` for that table's condition instead.
+- Create: `supabase/migrations/015_publish_rls.sql` — tighten `posts`/`pages`/`collection_items` write RLS: `WITH CHECK` requires `is_ne_admin() OR (client_id = my_client_id() AND (status NOT IN ('published','scheduled') OR EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role IN ('ne_admin','client_admin'))))` — pages have no `'scheduled'` status, use `status <> 'published'` for that table's condition instead.
 - Modify: post/page/entry editors — `editor` role can set Draft/In review only in the UI (Publish/Schedule buttons hidden or disabled for `editor`, matching the RLS reality above so an editor never hits a confusing RLS-denial error); "Submit for review" action sets `status:'in_review'`.
 - Create: `src/components/dashboard/ReviewQueue.tsx` on dashboard — items with status `in_review` for admins
 - Modify: `src/app/(app)/dashboard/page.tsx` — add ReviewQueue + recent activity feed (reads `activity_log`)
