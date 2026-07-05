@@ -21,14 +21,31 @@
 --   - collection_items:  'draft'|'published'|'archived' — no
 --                        scheduled/in_review state exists here either
 --                        -> gated when status = 'published' ONLY.
---                           'archived' is deliberately NOT gated:
---                           archiving takes something down, it doesn't
---                           put anything live — per the "does this
---                           action alone change what the public sees"
---                           posture rule from Phase 5's review, only
---                           publishing does. So this table's condition
---                           matches pages' (status = 'published'), not
---                           the broader posts one.
+--                           'archived' is NOT gated by THIS policy's
+--                           own WITH CHECK in isolation: for a row that
+--                           is NOT currently published, archiving
+--                           doesn't take anything live down, so no
+--                           elevated role is required here — per the
+--                           "does this action alone change what the
+--                           public sees" posture rule from Phase 5's
+--                           review. IMPORTANT — this is not the whole
+--                           story for an ALREADY-published row: WITH
+--                           CHECK can only inspect the NEW row, so it
+--                           cannot by itself detect "this row used to
+--                           be published." Archiving an
+--                           ALREADY-published row IS a de-facto
+--                           unpublish, and is separately (and
+--                           correctly) blocked for a plain editor by
+--                           016_prevent_unauthorized_unpublish.sql's
+--                           elevated -> non-elevated transition
+--                           trigger, which compares OLD vs NEW status
+--                           (something this WITH CHECK cannot do on
+--                           its own). Combined, practical behavior:
+--                           editors can freely archive drafts, but
+--                           archiving a live/published entry requires
+--                           admin, same as any other unpublish. This
+--                           table's condition matches pages' (status =
+--                           'published'), not the broader posts one.
 --
 -- Deliberate, explicitly-confirmed side effect (not a bug, not
 -- something to "fix" with a trigger): because Postgres RLS WITH CHECK

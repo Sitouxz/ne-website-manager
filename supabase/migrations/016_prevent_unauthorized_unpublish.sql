@@ -21,13 +21,28 @@
 -- trigger, which can see both.
 --
 -- One shared trigger function, parameterized by TG_TABLE_NAME (each
--- table's elevated-status set differs — see 015_publish_rls.sql):
+-- table's set of "elevated" status VALUES differs — see
+-- 015_publish_rls.sql):
 --   - posts:            elevated = status IN ('published','scheduled')
 --   - pages:             elevated = status = 'published'
---   - collection_items:  elevated = status = 'published' (archived is
---                        deliberately not elevated, matching 015's own
---                        carve-out — archiving takes something down,
---                        it doesn't put anything live)
+--   - collection_items:  elevated = status = 'published' only —
+--                        'archived' itself is not a "live" status, so
+--                        it is correctly not counted as elevated.
+--                        IMPORTANT: this does NOT mean a
+--                        published -> archived transition is excluded
+--                        from the guard below — it is the opposite.
+--                        Because 'archived' isn't elevated, a
+--                        published -> archived write has
+--                        was_elevated = true and still_elevated =
+--                        false, so it hits the "elevated -> NOT
+--                        elevated" guard exactly like published ->
+--                        draft does, and is correctly BLOCKED for a
+--                        non-admin (archiving an ALREADY-published row
+--                        is a de-facto unpublish). Only archiving a
+--                        row that was NOT already published (e.g.
+--                        draft -> archived) is left untouched here,
+--                        because OLD.status isn't elevated in that
+--                        case to begin with.
 --
 -- This trigger ONLY intervenes on the specific transition
 -- elevated -> NOT elevated:
@@ -67,8 +82,11 @@ BEGIN
     still_elevated := NEW.status IN ('published', 'scheduled');
   ELSE
     -- pages, collection_items: only 'published' is elevated (see
-    -- header comment — collection_items' 'archived' is deliberately
-    -- excluded, matching 015_publish_rls.sql).
+    -- header comment above). For collection_items, 'archived' is not
+    -- itself an elevated status, but a published -> archived
+    -- transition still hits the guard below (was_elevated = true,
+    -- still_elevated = false) and is correctly BLOCKED for a
+    -- non-admin — it is NOT excluded from this trigger.
     was_elevated := OLD.status = 'published';
     still_elevated := NEW.status = 'published';
   END IF;

@@ -92,11 +92,17 @@ export default function CollectionEntryEditor({
   // from data actually loaded from (or successfully written to)
   // `collection_items`, never from `form.status` while a user is mid-edit.
   // Kept separate from `form.status` on purpose: an `editor` can freely
-  // flip the in-memory dropdown to `'draft'` while viewing an
-  // already-published entry, but that alone must never unlock a save
-  // action that would downgrade the row RLS (migration 015) reserves for
-  // client_admin/ne_admin — see `isElevatedLocked` below, which gates on
-  // this value. Doesn't apply to `archived`, which isn't gated by RLS.
+  // flip the in-memory dropdown to `'draft'` (or `'archived'`) while
+  // viewing an already-published entry, but that alone must never
+  // unlock a save action that would downgrade the row. `isElevatedLocked`
+  // below gates on this value, and also gates the "Archived" option in
+  // the status <select>: migration 015's own WITH CHECK doesn't block a
+  // NEW status of `archived` in isolation, but archiving a row whose
+  // *currently-persisted* status is already `published` is a de-facto
+  // unpublish, correctly blocked for a non-admin by migration 016's
+  // elevated -> non-elevated trigger guard. An editor viewing a
+  // currently-draft entry is unaffected — `isElevatedLocked` is false
+  // there, so archiving stays fully available.
   const [initialStatus, setInitialStatus] = useState<CollectionItemStatus | null>(null);
 
   const skipNextAutosaveRef = useRef(true);
@@ -299,13 +305,21 @@ export default function CollectionEntryEditor({
   }
 
   // A plain `editor` (not `canPublish`) can never downgrade an entry whose
-  // *currently-persisted* status is already published — matching migration
-  // 015_publish_rls.sql's `WITH CHECK` gated set for `collection_items`
-  // (archiving isn't gated, so it's excluded here). Keyed off
-  // `initialStatus` (the DB's last-known value), not `form.status`: an
-  // editor selecting "Draft" in the dropdown while viewing an
-  // already-published entry must not unlock either save action below.
-  // Never blocks client_admin/ne_admin.
+  // *currently-persisted* status is already published — this covers both
+  // an explicit `draft` and an explicit `archived` target status, since
+  // migration 016's trigger blocks the elevated -> non-elevated
+  // transition regardless of which non-elevated status is being written
+  // to (015's own `WITH CHECK` doesn't gate a NEW status of `archived` in
+  // isolation, but the combined, practical behavior is that archiving an
+  // already-published row requires admin, same as any other unpublish).
+  // Keyed off `initialStatus` (the DB's last-known value), not
+  // `form.status`: an editor selecting "Draft" or "Archived" in the
+  // dropdown while viewing an already-published entry must not unlock
+  // either save action below, and the "Archived" option itself is
+  // disabled in that case (see the status <select> below) so there's no
+  // dead, misleading control that would only fail at save time. Never
+  // blocks client_admin/ne_admin, and never disables "Archived" for an
+  // editor viewing a currently-draft entry (archiving that is allowed).
   const isElevatedLocked = !canPublish && initialStatus === 'published';
   const elevatedLockedTitle = isElevatedLocked
     ? 'Only an admin can change the status of an already-published entry.'
@@ -355,7 +369,12 @@ export default function CollectionEntryEditor({
                 (migration 015) rejects any save that leaves `status =
                 'published'` unless the caller is client_admin/ne_admin.
                 "Save Draft" above (and the "Archive Entry" action in the
-                sidebar below, which stays available) remain accessible. */}
+                sidebar below) remain accessible for an editor viewing a
+                currently-draft entry; both are disabled (`isElevatedLocked`)
+                when the entry's currently-persisted status is already
+                `published`, since any save in that state — including
+                picking "Archived" — is a de-facto unpublish, correctly
+                blocked for a non-admin by migration 016's trigger. */}
             {canPublish && (
               <button className="btn-ne" onClick={() => handleSave('published')} disabled={saving}>
                 {saving ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Send size={14} />}
@@ -409,14 +428,23 @@ export default function CollectionEntryEditor({
                 </div>
                 <div>
                   <label style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--fg3)', display: 'block', marginBottom: 5 }}>Status</label>
-                  {/* Draft and Archived stay available to `editor` — RLS
-                      (migration 015) only gates a NEW status of `published`
-                      for this table (archiving takes something down, it
-                      doesn't publish anything, so it isn't gated). Published
-                      is hidden for `editor`; if an admin already published
-                      this entry, a disabled option keeps the displayed
-                      status accurate instead of silently showing "Draft" as
-                      selected. */}
+                  {/* Draft is always available to `editor`. Published is
+                      hidden for `editor`; if an admin already published this
+                      entry, a disabled option keeps the displayed status
+                      accurate instead of silently showing "Draft" as
+                      selected. Archived is available to `editor` UNLESS
+                      `isElevatedLocked` — RLS's own WITH CHECK (migration
+                      015) doesn't gate a NEW status of `archived` for this
+                      table in isolation, but archiving an entry whose
+                      *currently-persisted* status is already `published` is
+                      a de-facto unpublish and is correctly blocked for a
+                      non-admin by migration 016's elevated -> non-elevated
+                      trigger guard — so the option is disabled here too,
+                      matching the save actions below, rather than leaving a
+                      selectable control that would only fail at save time.
+                      This never disables Archived for an editor viewing a
+                      currently-draft entry (`isElevatedLocked` is false
+                      there). */}
                   <select
                     value={form.status}
                     onChange={(e) => setForm({ ...form, status: e.target.value as CollectionItemStatus })}
@@ -428,7 +456,7 @@ export default function CollectionEntryEditor({
                     ) : form.status === 'published' && (
                       <option value="published" disabled>Published</option>
                     )}
-                    <option value="archived">Archived</option>
+                    <option value="archived" disabled={isElevatedLocked}>Archived</option>
                   </select>
                 </div>
                 <button
@@ -437,11 +465,16 @@ export default function CollectionEntryEditor({
                   onClick={() => handleSave()}
                   // Disabled whenever `isElevatedLocked` — keyed off
                   // `initialStatus` (the DB's currently-persisted value),
-                  // not `form.status`, so selecting "Draft" in the dropdown
-                  // above while viewing an already-published entry can't
-                  // unlock this button — mirrors the post/page editors'
-                  // equivalent guard. Doesn't apply to `archived`, which
-                  // stays editable for everyone.
+                  // not `form.status`, so selecting "Draft" (or "Archived")
+                  // in the dropdown above while viewing an already-published
+                  // entry can't unlock this button — mirrors the post/page
+                  // editors' equivalent guard. Archiving an already-published
+                  // entry is a de-facto unpublish and is correctly blocked
+                  // for a non-admin by migration 016's trigger, so this
+                  // button (and the Archived option itself, above) is
+                  // disabled in that case too. An editor viewing a
+                  // currently-draft entry is unaffected: `isElevatedLocked`
+                  // is false there, so archiving stays fully available.
                   disabled={saving || isElevatedLocked}
                   title={elevatedLockedTitle}
                 >
