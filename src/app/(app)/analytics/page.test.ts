@@ -1,15 +1,25 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { dailyBucketsFromRollup, dailyBuckets, utcWindowStart, type RollupRow, type AnalyticsEvent } from './page';
 
 // Regression test for the UTC-vs-local bucketing bug described in the Phase 8
 // whole-branch review: `analytics_daily.day` is always written as a UTC
 // calendar day by the rollup cron
 // (src/app/api/cron/rollup-analytics/route.ts), so bucket boundaries here
-// must be computed from UTC date parts, not local ones. This test's host
-// process runs with TZ=Asia/Makassar (UTC+8) — see `Intl.DateTimeFormat()
-// .resolvedOptions().timeZone` — which is exactly the kind of non-UTC
-// environment where the old `setHours`/`getDate`/`setDate`-based
-// construction produced the wrong calendar day.
+// must be computed from UTC date parts, not local ones. The old
+// `setHours`/`getDate`/`setDate`-based construction only produced the wrong
+// calendar day in a non-UTC timezone, so `TZ` is pinned to a non-UTC zone
+// (UTC+8) for this file rather than relying on whatever zone the test
+// runner happens to be in — a UTC CI runner would otherwise make this test
+// pass for both the fixed and the reverted-buggy implementation.
+const originalTz = process.env.TZ;
+
+beforeAll(() => {
+  process.env.TZ = 'Asia/Makassar';
+});
+
+afterAll(() => {
+  process.env.TZ = originalTz;
+});
 
 afterEach(() => {
   vi.useRealTimers();
