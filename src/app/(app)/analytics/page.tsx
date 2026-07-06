@@ -34,7 +34,7 @@ type CmsPage = {
   updated_at: string | null;
 };
 
-type AnalyticsEvent = {
+export type AnalyticsEvent = {
   id: string;
   event_name: string;
   path: string;
@@ -49,7 +49,7 @@ type AnalyticsEvent = {
 };
 
 /** One pre-aggregated row from `analytics_daily` (migration 020) — day/path granularity only, no referrer/device/browser/country (see Task 8.1 brief). */
-type RollupRow = {
+export type RollupRow = {
   day: string;
   path: string;
   views: number;
@@ -103,10 +103,25 @@ function topPathsFromRollup(rows: RollupRow[]) {
     .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
 }
 
-function dailyBuckets(events: AnalyticsEvent[], days: number) {
-  const start = new Date();
-  start.setHours(0, 0, 0, 0);
-  start.setDate(start.getDate() - (days - 1));
+/**
+ * Builds the UTC-midnight instant that begins the `days`-day window ending
+ * "today" (UTC). `analytics_daily.day` is written from
+ * `new Date(created_at).toISOString().slice(0, 10)` by the rollup cron
+ * (src/app/api/cron/rollup-analytics/route.ts) — i.e. always a UTC calendar
+ * day — so bucket boundaries here must be computed with UTC date methods
+ * (`getUTCFullYear`/`getUTCMonth`/`getUTCDate` via `Date.UTC`), never local
+ * `setHours`/`getDate`/`setDate`. Using local methods would shift the
+ * midnight instant (and therefore every bucket's UTC-day key) whenever the
+ * browser (or, for the dashboard's server component, the server process) is
+ * not running in UTC.
+ */
+export function utcWindowStart(days: number) {
+  const now = new Date();
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - (days - 1)));
+}
+
+export function dailyBuckets(events: AnalyticsEvent[], days: number) {
+  const start = utcWindowStart(days);
 
   const buckets = Array.from({ length: days }, (_, index) => {
     const date = new Date(start.getTime() + index * DAY_MS);
@@ -127,10 +142,8 @@ function dailyBuckets(events: AnalyticsEvent[], days: number) {
 }
 
 /** Rollup equivalent of `dailyBuckets` — sums `views` per day (keyed on the rollup's own `day` column) instead of counting raw events. */
-function dailyBucketsFromRollup(rows: RollupRow[], days: number) {
-  const start = new Date();
-  start.setHours(0, 0, 0, 0);
-  start.setDate(start.getDate() - (days - 1));
+export function dailyBucketsFromRollup(rows: RollupRow[], days: number) {
+  const start = utcWindowStart(days);
 
   const buckets = Array.from({ length: days }, (_, index) => {
     const date = new Date(start.getTime() + index * DAY_MS);
@@ -328,12 +341,21 @@ export default function AnalyticsPage() {
   // once per day) — an inherent limitation of a day/path rollup without
   // per-visitor rows; documented here rather than fetching raw events for
   // 90 days just to get an exact number.
-  const rangeViews = isRollupRange ? rollupRows.reduce((sum, row) => sum + row.views, 0) : pageViews7d.length;
+  const trendBuckets = isRollupRange ? dailyBucketsFromRollup(rollupRows, range) : dailyBuckets(pageViews7d, range);
+  // `rangeViews` is derived from the same bucketed window as the trend chart
+  // (rather than summing every fetched rollup row) so the two always agree:
+  // the `.gte('day', ...)` query below can return one extra day older than
+  // the UTC bucket window's start (its lower bound is computed with a plain
+  // `range`-day offset, not the `range - 1`-day, UTC-aligned offset the
+  // buckets use), and rows outside the bucket window are silently dropped by
+  // `dailyBucketsFromRollup`. Summing from the fetched rows directly would
+  // double-count that extra day into the stat card while the chart ignores
+  // it.
+  const rangeViews = isRollupRange ? trendBuckets.reduce((sum, bucket) => sum + bucket.count, 0) : pageViews7d.length;
   const rangeVisitors = isRollupRange
     ? rollupRows.reduce((sum, row) => sum + row.visitors, 0)
     : new Set(events.map((event) => event.visitor_id).filter(Boolean)).size;
   const topPages = isRollupRange ? topPathsFromRollup(rollupRows) : countBy(pageViews7d, (event) => event.path);
-  const trendBuckets = isRollupRange ? dailyBucketsFromRollup(rollupRows, range) : dailyBuckets(pageViews7d, range);
   const maxBucket = Math.max(1, ...trendBuckets.map((bucket) => bucket.count));
   const viewsByPath = new Map(topPages.map((row) => [row.name, row.count]));
 

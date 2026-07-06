@@ -177,9 +177,22 @@ export default async function DashboardPage() {
   // sparkline's bar count always matches the day count. Mirrors
   // `dailyBucketsFromRollup` in `analytics/page.tsx`, at day-only granularity
   // (no per-bucket date label needed for this compact a visualization).
-  const sparklineStart = new Date();
-  sparklineStart.setHours(0, 0, 0, 0);
-  sparklineStart.setDate(sparklineStart.getDate() - (SPARKLINE_DAYS - 1));
+  //
+  // Built with UTC date methods (`Date.UTC` + `getUTC*`), not local
+  // `setHours`/`getDate`/`setDate`: `analytics_daily.day` is always a UTC
+  // calendar day (written by the rollup cron via
+  // `new Date(created_at).toISOString().slice(0, 10)`), and this page runs
+  // as a server component. It happens to run in UTC on Vercel today, so the
+  // old local-time construction produced the right answer by accident — but
+  // that's fragile and inconsistent with the analytics page's client-side
+  // bucketing (which runs in the browser's timezone). Using UTC here makes
+  // the bucket keys correct regardless of the server's timezone.
+  const sparklineNow = new Date();
+  const sparklineStart = new Date(Date.UTC(
+    sparklineNow.getUTCFullYear(),
+    sparklineNow.getUTCMonth(),
+    sparklineNow.getUTCDate() - (SPARKLINE_DAYS - 1)
+  ));
   const sparklineBuckets = Array.from({ length: SPARKLINE_DAYS }, (_, i) => {
     const date = new Date(sparklineStart.getTime() + i * DAY_MS);
     return { key: date.toISOString().slice(0, 10), views: 0 };
