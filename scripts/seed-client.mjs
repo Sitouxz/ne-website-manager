@@ -54,7 +54,10 @@ async function selectOne(table, match) {
   return data
 }
 
-async function upsertBy(table, match, values) {
+// `insertOnlyValues` are applied only when inserting a brand-new row — they
+// are never sent on an update, so a routine re-seed can't clobber a value an
+// operator has deliberately changed out-of-band (e.g. clients.is_active).
+async function upsertBy(table, match, values, insertOnlyValues = {}) {
   const existing = await selectOne(table, match)
   if (DRY) {
     console.log(`[dry-run] ${existing ? 'update' : 'insert'} ${table}`, JSON.stringify(match))
@@ -68,16 +71,19 @@ async function upsertBy(table, match, values) {
     if (error) fail(`update ${table}`, error)
     return data
   }
-  const { data, error } = await db.from(table).insert({ ...match, ...values }).select().single()
+  const { data, error } = await db.from(table).insert({ ...match, ...values, ...insertOnlyValues }).select().single()
   if (error) fail(`insert ${table}`, error)
   return data
 }
 
 // 1. Client
+// is_active is insert-only: on re-seed of an existing client, leave whatever
+// the operator has set (e.g. a deliberate deactivation) untouched.
 const client = await upsertBy(
   'clients',
   { slug: seed.client.slug },
-  { name: seed.client.name, website_url: websiteUrl, is_active: true },
+  { name: seed.client.name, website_url: websiteUrl },
+  { is_active: true },
 )
 console.log(`client ${seed.client.slug} -> ${client.id}`)
 
@@ -92,7 +98,9 @@ if (!DRY) {
   const { error: delErr } = await db.from('menu_items').delete().match({ client_id: client.id, location: 'public' })
   if (delErr) fail('delete menu_items', delErr)
   for (const item of seed.menu_items) {
-    const { error } = await db.from('menu_items').insert({ ...item, client_id: client.id })
+    // Explicit location keeps the reinsert self-contained and in sync with
+    // the delete's own scoping above, regardless of what the seed JSON has.
+    const { error } = await db.from('menu_items').insert({ ...item, client_id: client.id, location: 'public' })
     if (error) fail('insert menu_items', error)
   }
 }
