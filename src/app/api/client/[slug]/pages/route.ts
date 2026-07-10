@@ -30,7 +30,7 @@ export async function GET(
 
   let query = supabase
     .from('pages')
-    .select('id, title, path, content, status, visibility, updated_at')
+    .select('id, title, path, content, status, visibility, seo_title, seo_description, updated_at')
     .eq('client_id', client.id)
     .eq('status', 'published')
     .eq('visibility', 'public')

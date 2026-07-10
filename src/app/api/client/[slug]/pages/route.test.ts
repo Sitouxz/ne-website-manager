@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { mockSupabase } from '@/test/supabase-mock';
 
 vi.mock('@/lib/supabase/server', () => ({
@@ -146,5 +147,12 @@ describe('GET /api/client/[slug]/pages — misc', () => {
     const res = await GET(getReq(), { params });
 
     expect(res.status).toBe(404);
+  });
+
+  it('selects SEO fields so client sites can render CMS-managed metadata', () => {
+    const source = readFileSync('src/app/api/client/[slug]/pages/route.ts', 'utf8');
+
+    expect(source).toContain('seo_title');
+    expect(source).toContain('seo_description');
   });
 });
