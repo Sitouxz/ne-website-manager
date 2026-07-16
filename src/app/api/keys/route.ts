@@ -103,6 +103,17 @@ export async function DELETE(req: Request) {
     return NextResponse.json({ error: 'id required' }, { status: 400 });
   }
 
+  // This SELECT runs on the user-scoped client, so `api_keys_manage` RLS
+  // (migration 004: `is_ne_admin() OR (client_id = my_client_id() AND
+  // caller is client_admin)`) already makes a cross-tenant row invisible
+  // at the database level — against the real database, a client_admin
+  // targeting another client's key gets `existing === null` here, i.e.
+  // 404, not 403. The `canManage()` check below is a second layer, not
+  // the primary gate: it only fires when a row *was* returned despite
+  // belonging to another client, which shouldn't happen under RLS but
+  // guards against this route ever being called with a client whose
+  // visibility is broader than intended. See route.test.ts for tests
+  // covering both the RLS-hidden (404) and defense-in-depth (403) cases.
   const { data: existing } = await supabase
     .from('api_keys')
     .select('id, client_id')
