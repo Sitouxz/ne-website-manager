@@ -278,7 +278,34 @@ describe('DELETE /api/keys', () => {
     expect(res.status).toBe(403);
   });
 
-  it('rejects a client_admin targeting a key belonging to a different client_id with 403', async () => {
+  // `mockSupabase` is a pure fixture filter — it doesn't model Postgres RLS.
+  // Against the real database, `api_keys_manage` RLS (migration 004) makes
+  // a cross-tenant row invisible to the SELECT in the DELETE handler before
+  // the app-level `canManage()` check ever runs, so the realistic outcome
+  // for "client_admin deletes another client's key" is 404 (not found),
+  // not 403. We simulate that here by omitting the other client's key from
+  // the fixtures, as RLS would.
+  it("returns 404 (not 403) for another client's key, matching what RLS hiding the row in production would produce", async () => {
+    setSupabase(
+      supabaseFor(CLIENT_ADMIN, {
+        profiles: [CLIENT_ADMIN],
+        api_keys: [],
+      })
+    );
+
+    const res = await DELETE(deleteReq('key-2'));
+
+    expect(res.status).toBe(404);
+  });
+
+  // Defense-in-depth: if the user-scoped SELECT ever returns a row despite
+  // it belonging to another client — e.g. this route being called with a
+  // client whose visibility is broader than intended — the explicit
+  // `canManage()` check still blocks the delete with 403. This does not
+  // reflect the normal RLS-enforced path (see the 404 test above); it
+  // exercises the second layer directly by handing the user-scoped mock a
+  // row real RLS would not have returned.
+  it("rejects the delete with 403 when a cross-tenant row is visible to canManage() anyway (defense-in-depth, not the normal RLS path)", async () => {
     setSupabase(
       supabaseFor(CLIENT_ADMIN, {
         profiles: [CLIENT_ADMIN],
