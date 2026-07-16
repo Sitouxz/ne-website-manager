@@ -6,7 +6,7 @@ import { createClient } from '@/lib/supabase/client';
 import {
   LayoutDashboard, FileText, FileEdit, Image, BarChart2,
   Search, Users, Settings, Megaphone, Mail,
-  ChevronDown, LogOut, Globe, ShieldCheck, Home, Boxes, Navigation, Sliders,
+  ChevronDown, LogOut, Globe, ShieldCheck, Home, Boxes, Navigation, Sliders, Share2,
 } from 'lucide-react';
 import type { Client, Collection, Role } from '@/lib/supabase/types';
 
@@ -26,6 +26,7 @@ const NAV: NavGroup[] = [
     items: [
       { label: 'Dashboard',  href: '/dashboard',  icon: LayoutDashboard },
       { label: 'Analytics',  href: '/analytics',  icon: BarChart2 },
+      { label: 'Social',     href: '/social',     icon: Share2 },
     ],
   },
   {
