@@ -10,7 +10,7 @@ import {
 } from 'lucide-react';
 import type { Client, Collection, Role } from '@/lib/supabase/types';
 
-type NavItem = { label: string; href: string; icon: React.ElementType; soon?: boolean; hideForEditor?: boolean };
+type NavItem = { label: string; href: string; icon: React.ElementType; soon?: boolean; hideForEditor?: boolean; hidden?: boolean };
 type NavGroup = { section: string; items: NavItem[] };
 
 // "All Collections" replaces the old static "Collections" link — it still
@@ -34,7 +34,7 @@ const NAV: NavGroup[] = [
     items: [
       { label: 'Blog Posts',      href: '/cms/posts',       icon: FileText },
       { label: 'Properties',      href: '/cms/properties',  icon: Home },
-      { label: 'Pages',           href: '/cms/pages',       icon: FileEdit },
+      { label: 'Pages',           href: '/cms/pages',       icon: FileEdit, hidden: true },
       { label: 'Media Library',   href: '/cms/media',       icon: Image },
       { label: 'All Collections', href: '/cms/collections', icon: Boxes },
       { label: 'Navigation',      href: '/cms/navigation',  icon: Navigation },
@@ -162,7 +162,7 @@ export default function Sidebar({
         {allNav.map((group) => (
           <div key={group.section}>
             <div className="sidebar-section-label">{group.section}</div>
-            {group.items.filter((item) => !(item.hideForEditor && role === 'editor')).map((item) => {
+            {group.items.filter((item) => !(item.hideForEditor && role === 'editor') && !item.hidden).map((item) => {
               const Icon = item.icon;
               const active = path === item.href || path.startsWith(item.href + '/');
               return (
