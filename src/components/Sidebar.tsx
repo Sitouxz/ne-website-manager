@@ -10,7 +10,12 @@ import {
 } from 'lucide-react';
 import type { Client, Collection, Role } from '@/lib/supabase/types';
 
-type NavItem = { label: string; href: string; icon: React.ElementType; soon?: boolean; hideForEditor?: boolean; hidden?: boolean };
+type NavItem = { label: string; href: string; icon: React.ElementType; soon?: boolean; hideForEditor?: boolean; hidden?: boolean; hideForClientSlugs?: string[] };
+
+// Kamal Karim runs a custom, properties-only menu — this real-estate client
+// has no use for blog/media/collections/navigation management, so those are
+// suppressed just for this one client rather than globally.
+const KAMAL_KARIM_SLUG = 'kamal-karim';
 type NavGroup = { section: string; items: NavItem[] };
 
 // "All Collections" replaces the old static "Collections" link — it still
@@ -35,9 +40,9 @@ const NAV: NavGroup[] = [
       { label: 'Blog Posts',      href: '/cms/posts',       icon: FileText },
       { label: 'Properties',      href: '/cms/properties',  icon: Home },
       { label: 'Pages',           href: '/cms/pages',       icon: FileEdit, hidden: true },
-      { label: 'Media Library',   href: '/cms/media',       icon: Image },
-      { label: 'All Collections', href: '/cms/collections', icon: Boxes },
-      { label: 'Navigation',      href: '/cms/navigation',  icon: Navigation },
+      { label: 'Media Library',   href: '/cms/media',       icon: Image, hideForClientSlugs: [KAMAL_KARIM_SLUG] },
+      { label: 'All Collections', href: '/cms/collections', icon: Boxes, hideForClientSlugs: [KAMAL_KARIM_SLUG] },
+      { label: 'Navigation',      href: '/cms/navigation',  icon: Navigation, hideForClientSlugs: [KAMAL_KARIM_SLUG] },
     ],
   },
   {
@@ -75,6 +80,7 @@ export default function Sidebar({
   clientName = 'Website Manager',
   clients = [],
   selectedClientId = null,
+  clientSlug = null,
   role = 'editor',
   isOpen = false,
   onClose,
@@ -83,6 +89,7 @@ export default function Sidebar({
   clientName?: string;
   clients?: Client[];
   selectedClientId?: string | null;
+  clientSlug?: string | null;
   role?: Role;
   isOpen?: boolean;
   onClose?: () => void;
@@ -162,7 +169,7 @@ export default function Sidebar({
         {allNav.map((group) => (
           <div key={group.section}>
             <div className="sidebar-section-label">{group.section}</div>
-            {group.items.filter((item) => !(item.hideForEditor && role === 'editor') && !item.hidden).map((item) => {
+            {group.items.filter((item) => !(item.hideForEditor && role === 'editor') && !item.hidden && !item.hideForClientSlugs?.includes(clientSlug ?? '')).map((item) => {
               const Icon = item.icon;
               const active = path === item.href || path.startsWith(item.href + '/');
               return (
@@ -187,7 +194,7 @@ export default function Sidebar({
                 sidebar list isn't worth it — every dynamic collection link
                 using the same icon as their shared parent "All Collections"
                 entry is a reasonable, low-cost simplification). */}
-            {group.section === 'Content' && genericCollections.map((c) => {
+            {group.section === 'Content' && clientSlug !== KAMAL_KARIM_SLUG && genericCollections.map((c) => {
               const href = `/cms/collections/${c.id}`;
               const active = path === href || path.startsWith(href + '/');
               return (

@@ -9,6 +9,7 @@ export default function AppShell({
   clientName,
   clients,
   selectedClientId,
+  clientSlug = null,
   role,
   genericCollections = [],
 }: {
@@ -16,6 +17,7 @@ export default function AppShell({
   clientName: string;
   clients: Client[];
   selectedClientId: string | null;
+  clientSlug?: string | null;
   role: Role;
   genericCollections?: Pick<Collection, 'id' | 'name'>[];
 }) {
@@ -33,6 +35,7 @@ export default function AppShell({
         clientName={clientName}
         clients={clients}
         selectedClientId={selectedClientId}
+        clientSlug={clientSlug}
         role={role}
         isOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}

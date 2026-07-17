@@ -36,6 +36,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
   const clientName = selectedClient?.name ?? 'Website Manager';
   const selectedClientId = selectedClient?.id ?? profile?.client_id ?? null;
+  const clientSlug = selectedClient?.slug ?? null;
 
   // Sidebar's dynamic "Collections" nav (Task 4.3) — only `storage='generic'`
   // collections get an entries list/editor at all (native/global collections
@@ -62,6 +63,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       clientName={clientName}
       clients={clients}
       selectedClientId={selectedClientId}
+      clientSlug={clientSlug}
       role={role}
       genericCollections={genericCollections}
     >
