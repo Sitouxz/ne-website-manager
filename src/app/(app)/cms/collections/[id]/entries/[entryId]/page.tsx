@@ -4,6 +4,9 @@ import Topbar from '@/components/Topbar';
 import Link from 'next/link';
 import { use, useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowLeft, Save, Send, Loader2, History, X, AlertCircle } from 'lucide-react';
+import { toast } from 'sonner';
+import { useConfirm } from '@/components/ConfirmDialog';
+import { errorMessage } from '@/lib/errors';
 import { createClient } from '@/lib/supabase/client';
 import { logActivity } from '@/lib/activity';
 import { firePublishNotify, computeLivePath } from '@/lib/publish-client';
@@ -226,7 +229,7 @@ export default function CollectionEntryEditor({
 
     const supabase = createClient();
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) { setError('Not authenticated'); setSaving(false); return; }
+    if (!user) { setError('You have been signed out. Please sign in again to save your work.'); setSaving(false); return; }
 
     const previousStatus = form.status;
     const payload: Record<string, unknown> = {
@@ -236,7 +239,7 @@ export default function CollectionEntryEditor({
     };
 
     const { error: err } = await supabase.from('collection_items').update(payload).eq('id', entryId);
-    if (err) { setError(err.message); setSaving(false); return; }
+    if (err) { setError(errorMessage(err, { entity: 'entry' })); setSaving(false); return; }
 
     if (status === 'published') {
       // Fresh publish (draft -> published) vs. an edit to already-published
@@ -244,6 +247,17 @@ export default function CollectionEntryEditor({
       firePublishNotify({
         clientId: clientId!,
         event: previousStatus === 'published' ? 'content.updated' : 'content.published',
+        entityType: 'collection_entry',
+        entityId: entryId,
+        slug: payload.slug as string,
+        path: computeLivePath('collection_entry', { slug: payload.slug as string, collectionSlug: collection.slug }),
+      });
+    } else if (previousStatus === 'published') {
+      // Unpublishing/archiving used to fire nothing, leaving the entry live
+      // on the client's website — see the matching comment in the post editor.
+      firePublishNotify({
+        clientId: clientId!,
+        event: 'content.deleted',
         entityType: 'collection_entry',
         entityId: entryId,
         slug: payload.slug as string,
@@ -529,6 +543,7 @@ function RevisionPanel({
   onRestore: (row: Record<string, unknown>) => void;
 }) {
   const [revisions, setRevisions] = useState<RevisionListItem[]>([]);
+  const confirm = useConfirm();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [restoringId, setRestoringId] = useState<string | null>(null);
@@ -546,7 +561,7 @@ function RevisionPanel({
         if (!res.ok) throw new Error(body?.error ?? 'Failed to load revision history');
         if (!cancelled) setRevisions(body);
       } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load revision history');
+        if (!cancelled) setError(errorMessage(err, { entity: 'entry', action: 'load' }));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -556,7 +571,17 @@ function RevisionPanel({
   }, [open, entryId]);
 
   async function handleRestore(revisionId: string) {
-    if (!window.confirm('Restore this version? The current state will be saved as a revision first, so this can be undone.')) return;
+    const ok = await confirm({
+      title: 'Go back to this earlier version?',
+      body: 'This entry will be replaced with how it looked at that time.',
+      consequences: [
+        'Your current version is saved first, so you can come back to it from this same list.',
+        'Nothing changes on your website until you publish again.',
+      ],
+      confirmLabel: 'Restore this version',
+      tone: 'normal',
+    });
+    if (!ok) return;
 
     setRestoringId(revisionId);
     setError('');
@@ -570,8 +595,9 @@ function RevisionPanel({
       if (!res.ok) throw new Error(body?.error ?? 'Failed to restore revision');
       onRestore(body);
       onClose();
+      toast.success('Earlier version restored.');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to restore revision');
+      setError(errorMessage(err, { entity: 'entry' }));
     } finally {
       setRestoringId(null);
     }

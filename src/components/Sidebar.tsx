@@ -42,14 +42,14 @@ const NAV: NavGroup[] = [
       { label: 'Pages',           href: '/cms/pages',       icon: FileEdit, hidden: true },
       { label: 'Media Library',   href: '/cms/media',       icon: Image, hideForClientSlugs: [KAMAL_KARIM_SLUG] },
       { label: 'All Collections', href: '/cms/collections', icon: Boxes, hideForClientSlugs: [KAMAL_KARIM_SLUG] },
-      { label: 'Navigation',      href: '/cms/navigation',  icon: Navigation, hideForClientSlugs: [KAMAL_KARIM_SLUG] },
+      { label: 'Website Menu',    href: '/cms/navigation',  icon: Navigation, hideForClientSlugs: [KAMAL_KARIM_SLUG] },
     ],
   },
   {
     section: 'Tools',
     items: [
       { label: 'SEO Manager',   href: '/seo',           icon: Search },
-      { label: 'Forms & Leads', href: '/forms',         icon: Mail },
+      { label: 'Forms & Enquiries', href: '/forms',     icon: Mail },
       { label: 'Announcements', href: '/announcements', icon: Megaphone },
     ],
   },
@@ -57,7 +57,7 @@ const NAV: NavGroup[] = [
     section: 'Settings',
     items: [
       { label: 'Site Settings', href: '/settings',         icon: Settings },
-      { label: 'Site Globals',  href: '/settings/globals', icon: Sliders },
+      { label: 'Site Details',  href: '/settings/globals', icon: Sliders },
       // Task 6.1: invitations + team management landed, so `soon` is gone.
       // `hideForEditor` is the first role-gated sidebar item — a plain
       // `editor` has no use for this page (RLS + the page's own

@@ -6,7 +6,10 @@ import { use, useCallback, useEffect, useState } from 'react';
 import {
   ArrowLeft, Loader2, Download, Check, Archive, Trash2, ChevronDown, ChevronUp, ShieldAlert, Circle,
 } from 'lucide-react';
+import { toast } from 'sonner';
 import { createClient } from '@/lib/supabase/client';
+import { useConfirm } from '@/components/ConfirmDialog';
+import { errorMessage } from '@/lib/errors';
 import type { Form, FormSubmission, FormSubmissionStatus } from '@/lib/supabase/types';
 
 type StatusFilter = 'all' | FormSubmissionStatus;
@@ -78,6 +81,7 @@ export default function FormSubmissionsPage({ params }: { params: Promise<{ id: 
   const [submissions,  setSubmissions] = useState<FormSubmission[]>([]);
   const [loading,      setLoading]     = useState(true);
   const [filter,       setFilter]      = useState<StatusFilter>('all');
+  const confirm = useConfirm();
   const [expandedId,   setExpandedId]  = useState<string | null>(null);
   const [error,        setError]       = useState('');
 
@@ -101,16 +105,27 @@ export default function FormSubmissionsPage({ params }: { params: Promise<{ id: 
   async function updateStatus(sub: FormSubmission, status: FormSubmissionStatus) {
     const supabase = createClient();
     const { error: err } = await supabase.from('form_submissions').update({ status }).eq('id', sub.id);
-    if (err) { setError(err.message); return; }
+    if (err) { setError(errorMessage(err, { entity: 'enquiry' })); return; }
     setSubmissions((prev) => prev.map((s) => (s.id === sub.id ? { ...s, status } : s)));
   }
 
   async function handleDelete(sub: FormSubmission) {
-    if (!window.confirm('Delete this submission? This cannot be undone.')) return;
+    const ok = await confirm({
+      title: 'Delete this enquiry?',
+      body: 'This permanently removes it. It cannot be undone.',
+      consequences: [
+        "You will lose this person's message and their contact details.",
+        'If you only want it out of your way, mark it as archived instead.',
+      ],
+      confirmLabel: 'Delete enquiry',
+    });
+    if (!ok) return;
+
     const supabase = createClient();
     const { error: err } = await supabase.from('form_submissions').delete().eq('id', sub.id);
-    if (err) { setError(err.message); return; }
+    if (err) { setError(errorMessage(err, { entity: 'enquiry', action: 'delete' })); return; }
     setSubmissions((prev) => prev.filter((s) => s.id !== sub.id));
+    toast.success('Enquiry deleted.');
   }
 
   function handleExport() {

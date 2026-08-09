@@ -7,6 +7,9 @@ import {
   GitBranch, ExternalLink, Copy, Check, Zap, Terminal,
   KeyRound, Plus, Trash2, X, AlertTriangle,
 } from 'lucide-react';
+import { toast } from 'sonner';
+import { useConfirm } from '@/components/ConfirmDialog';
+import { errorMessage } from '@/lib/errors';
 import { createClient } from '@/lib/supabase/client';
 import type { Client, ClientPublishConfig, WebhookDelivery } from '@/lib/supabase/types';
 
@@ -36,6 +39,7 @@ function CopyBtn({
 
 export default function SettingsPage() {
   const [client,   setClient]   = useState<Client | null>(null);
+  const confirm = useConfirm();
   const [clients,  setClients]  = useState<Client[]>([]);
   const [isAdmin,  setIsAdmin]  = useState(false);
   const [role,     setRole]     = useState<string | null>(null);
@@ -188,7 +192,7 @@ export default function SettingsPage() {
   async function testDeploy() {
     if (!form.deploy_hook) return;
     await fetch(form.deploy_hook, { method: 'POST' });
-    alert('Deploy hook triggered! Check Vercel dashboard.');
+    toast.success('Website rebuild started. It usually takes a minute or two to appear.');
   }
 
   const loadDeliveries = useCallback(async (clientId: string) => {
@@ -201,7 +205,7 @@ export default function SettingsPage() {
       .eq('client_id', clientId)
       .order('created_at', { ascending: false })
       .limit(20);
-    if (error) setDeliveriesErr(error.message);
+    if (error) setDeliveriesErr(errorMessage(error, { action: 'load' }));
     setDeliveries((data ?? []) as WebhookDelivery[]);
     setDeliveriesLoading(false);
   }, []);
@@ -231,7 +235,7 @@ export default function SettingsPage() {
         slug: null,
       }),
     });
-    alert('Revalidate webhook queued! Check the delivery log below in a few seconds.');
+    toast.success('Update sent to your website. The delivery log below will show the result shortly.');
     window.setTimeout(() => loadDeliveries(client.id), 1500);
   }
 
@@ -308,7 +312,16 @@ export default function SettingsPage() {
 
   async function handleRevokeKey(id: string) {
     if (!client) return;
-    if (!window.confirm('Revoke this API key? Any site using it will immediately lose keyed access.')) return;
+    const ok = await confirm({
+      title: 'Revoke this access key?',
+      body: 'This cannot be undone. A new key can be created at any time.',
+      consequences: [
+        'Any website or tool still using this key stops working immediately.',
+        'If your live website uses it, parts of it may stop loading until a new key is set up.',
+      ],
+      confirmLabel: 'Revoke key',
+    });
+    if (!ok) return;
     setRevokingId(id);
     try {
       const res = await fetch(`/api/keys?id=${id}`, { method: 'DELETE' });

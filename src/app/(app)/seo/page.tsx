@@ -6,6 +6,9 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   Plus, Trash2, Loader2, X, Pencil, Save, ArrowRight, AlertTriangle, FileText, FileEdit,
 } from 'lucide-react';
+import { toast } from 'sonner';
+import { useConfirm } from '@/components/ConfirmDialog';
+import { errorMessage } from '@/lib/errors';
 import { createClient } from '@/lib/supabase/client';
 import { useSelectedClient } from '@/components/AppShell';
 import type { Redirect } from '@/lib/supabase/types';
@@ -64,6 +67,7 @@ export default function SeoManagerPage() {
   // message after a round trip. The DB is the real enforcement point
   // regardless of what this flag says.
   const [isNeAdmin, setIsNeAdmin] = useState(false);
+  const confirm = useConfirm();
 
   const [redirects, setRedirects] = useState<Redirect[]>([]);
   const [audit, setAudit] = useState<AuditItem[]>([]);
@@ -101,9 +105,9 @@ export default function SeoManagerPage() {
       supabase.from('pages').select('id, title, seo_title, seo_description').eq('client_id', selectedClientId).eq('status', 'published'),
     ]);
 
-    if (redirectsErr) setLoadError(redirectsErr.message);
-    else if (postsErr) setLoadError(postsErr.message);
-    else if (pagesErr) setLoadError(pagesErr.message);
+    if (redirectsErr) setLoadError(errorMessage(redirectsErr, { action: 'load' }));
+    else if (postsErr) setLoadError(errorMessage(postsErr, { action: 'load' }));
+    else if (pagesErr) setLoadError(errorMessage(pagesErr, { action: 'load' }));
 
     setRedirects((redirectRows ?? []) as Redirect[]);
 
@@ -177,7 +181,7 @@ export default function SeoManagerPage() {
     });
     setAdding(false);
 
-    if (error) { setAddError(error.message); return; }
+    if (error) { setAddError(errorMessage(error, { entity: 'redirect' })); return; }
     resetAddForm();
     load();
   }
@@ -217,13 +221,22 @@ export default function SeoManagerPage() {
     // Only reflect the edit locally once the write is confirmed to have
     // succeeded — a failed update must leave the displayed row unchanged,
     // not silently show the (unpersisted) edited values.
-    if (error) { setEditError(error.message); return; }
+    if (error) { setEditError(errorMessage(error, { entity: 'redirect' })); return; }
     setRedirects((prev) => prev.map((r) => (r.id === id ? { ...r, from_path: fromPath, to_path: toPath, permanent: editForm.permanent } : r)));
     cancelEdit();
   }
 
   async function handleDelete(r: Redirect) {
-    if (!window.confirm(`Delete the redirect from "${r.from_path}"? This cannot be undone.`)) return;
+    const ok = await confirm({
+      title: `Delete the redirect from "${r.from_path}"?`,
+      body: 'This cannot be undone.',
+      consequences: [
+        `Anyone visiting ${r.from_path} will see a "page not found" error instead of being sent to ${r.to_path}.`,
+        'Old links to that address, including ones in Google, will stop working.',
+      ],
+      confirmLabel: 'Delete redirect',
+    });
+    if (!ok) return;
 
     setBusyId(r.id);
     setActionError('');
@@ -232,16 +245,17 @@ export default function SeoManagerPage() {
     setBusyId(null);
 
     if (error) {
-      setActionError(`Failed to delete "${r.from_path}": ${error.message}`);
+      setActionError(errorMessage(error, { entity: 'redirect', action: 'delete' }));
       return;
     }
     setRedirects((prev) => prev.filter((x) => x.id !== r.id));
     if (editingId === r.id) cancelEdit();
+    toast.success(`Redirect from "${r.from_path}" was deleted.`);
   }
 
   return (
     <>
-      <Topbar title="SEO Manager" subtitle="Redirects and content SEO audit" />
+      <Topbar title="SEO" subtitle="How your site appears in Google, and where old links should point" />
       <div className="page-body">
         {!selectedClientId ? (
           <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', padding: 32, color: 'var(--fg3)', fontSize: 13.5 }}>

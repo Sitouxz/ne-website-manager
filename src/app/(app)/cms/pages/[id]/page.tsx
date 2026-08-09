@@ -5,9 +5,14 @@ import Link from 'next/link';
 import { useEffect, useState, use, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  ArrowLeft, Save, Send, X, Loader2, History, Globe, Lock,
+  ArrowLeft, Save, Send, X, Loader2, History, Globe, Lock, ExternalLink,
 } from 'lucide-react';
+import { toast } from 'sonner';
 import { createClient } from '@/lib/supabase/client';
+import { useConfirm } from '@/components/ConfirmDialog';
+import { errorMessage } from '@/lib/errors';
+import { normalizePath } from '@/lib/slug';
+import { statusDescription, statusLabel, liveUrl } from '@/lib/content-status';
 import { useSelectedClient } from '@/components/AppShell';
 import { logActivity } from '@/lib/activity';
 import { firePublishNotify, computeLivePath } from '@/lib/publish-client';
@@ -83,6 +88,8 @@ export default function PageEditor({ params }: { params: Promise<{ id: string }>
   const [initialStatus, setInitialStatus] = useState<PageStatus | null>(null);
   const [autosaveState, setAutosaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [websiteUrl, setWebsiteUrl] = useState<string | null>(null);
+  const confirm = useConfirm();
   const { selectedClientId } = useSelectedClient();
 
   // Guards against autosave firing in response to *this component* setting
@@ -146,6 +153,15 @@ export default function PageEditor({ params }: { params: Promise<{ id: string }>
         if (page) {
           if (admin) setClientId(page.client_id);
           applyPageToForm(page);
+
+          // Needed for the "View live page" link — see the matching comment
+          // in the post editor.
+          const { data: client } = await supabase
+            .from('clients')
+            .select('website_url')
+            .eq('id', page.client_id)
+            .single();
+          setWebsiteUrl(client?.website_url ?? null);
         }
         setLoading(false);
       }
@@ -241,7 +257,7 @@ export default function PageEditor({ params }: { params: Promise<{ id: string }>
 
     const supabase = createClient();
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) { setError('Not authenticated'); setSaving(false); return; }
+    if (!user) { setError('You have been signed out. Please sign in again to save your work.'); setSaving(false); return; }
 
     const previousStatus = form.status;
 
@@ -258,7 +274,7 @@ export default function PageEditor({ params }: { params: Promise<{ id: string }>
         .select()
         .single();
 
-      if (err) { setError(err.message); setSaving(false); return; }
+      if (err) { setError(errorMessage(err, { entity: 'page' })); setSaving(false); return; }
 
       if (status === 'published') {
         // A brand-new page transitioning straight to published is always a
@@ -287,7 +303,7 @@ export default function PageEditor({ params }: { params: Promise<{ id: string }>
         .update(payload)
         .eq('id', id);
 
-      if (err) { setError(err.message); setSaving(false); return; }
+      if (err) { setError(errorMessage(err, { entity: 'page' })); setSaving(false); return; }
 
       if (status === 'published') {
         // Fresh publish (draft -> published) vs. an edit to already-
@@ -296,6 +312,18 @@ export default function PageEditor({ params }: { params: Promise<{ id: string }>
         firePublishNotify({
           clientId,
           event: previousStatus === 'published' ? 'content.updated' : 'content.published',
+          entityType: 'page',
+          entityId: id,
+          slug: payload.path,
+          path: computeLivePath('page', { path: payload.path }),
+        });
+      } else if (previousStatus === 'published') {
+        // Unpublishing used to fire nothing, leaving the page live on the
+        // client's website indefinitely — see the matching comment in the
+        // post editor.
+        firePublishNotify({
+          clientId,
+          event: 'content.deleted',
           entityType: 'page',
           entityId: id,
           slug: payload.path,
@@ -379,8 +407,23 @@ export default function PageEditor({ params }: { params: Promise<{ id: string }>
               </div>
             )}
             {saved && <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ne-success)', padding: '8px 14px', background: '#DCFCE7', borderRadius: 'var(--r-sm)' }}>Saved</div>}
+            {/* Only shown when the page is genuinely reachable by a visitor —
+                a published-but-private page would 404 or redirect. */}
+            {!isNew && initialStatus === 'published' && form.visibility === 'public'
+              && liveUrl(websiteUrl, computeLivePath('page', { path: form.path })) && (
+              <a
+                className="btn-outline-ne"
+                href={liveUrl(websiteUrl, computeLivePath('page', { path: form.path }))!}
+                target="_blank"
+                rel="noopener noreferrer"
+                title="Open this page on your website"
+                style={{ textDecoration: 'none' }}
+              >
+                <ExternalLink size={14} /> View live page
+              </a>
+            )}
             {!isNew && (
-              <button className="btn-outline-ne" onClick={() => setHistoryOpen(true)} title="Revision history">
+              <button className="btn-outline-ne" onClick={() => setHistoryOpen(true)} title="See earlier versions">
                 <History size={14} /> History
               </button>
             )}
@@ -418,14 +461,31 @@ export default function PageEditor({ params }: { params: Promise<{ id: string }>
                 placeholder="Page title..."
                 style={{ width: '100%', padding: '18px 20px', border: 'none', outline: 'none', fontSize: 22, fontWeight: 700, color: 'var(--fg1)', background: 'transparent' }}
               />
-              <div style={{ padding: '0 20px 14px', display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--fg3)' }}>
-                <span>Path:</span>
-                <input
-                  value={form.path}
-                  onChange={(e) => setForm({ ...form, path: e.target.value })}
-                  placeholder="/about"
-                  style={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', fontSize: 12, color: 'var(--ne-blue)', fontFamily: 'monospace' }}
-                />
+              {/* Was a bare "Path:" text box that accepted anything — typing
+                  "About Us" saved a broken address and only failed later, as a
+                  raw database error. Now labelled in plain language and
+                  normalised on blur (never mid-typing, which would fight the
+                  caret). */}
+              <div style={{ padding: '0 20px 14px' }}>
+                <label htmlFor="page-web-address" style={{ display: 'block', fontSize: 11.5, fontWeight: 600, color: 'var(--fg3)', marginBottom: 5 }}>
+                  Web address
+                </label>
+                <div style={{ display: 'flex', alignItems: 'center', fontSize: 12.5, border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', overflow: 'hidden', background: 'var(--surface-3)' }}>
+                  <span style={{ padding: '8px 0 8px 10px', color: 'var(--fg3)', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
+                    your-site.com
+                  </span>
+                  <input
+                    id="page-web-address"
+                    value={form.path}
+                    onChange={(e) => setForm({ ...form, path: e.target.value })}
+                    onBlur={(e) => setForm((f) => ({ ...f, path: normalizePath(e.target.value) }))}
+                    placeholder="/about"
+                    style={{ flex: 1, border: 'none', outline: 'none', background: 'var(--surface)', padding: '8px 10px', fontSize: 12.5, color: 'var(--ne-blue)', fontFamily: 'monospace' }}
+                  />
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--fg3)', marginTop: 5 }}>
+                  This is where the page will live on your website. Use lowercase words separated by hyphens.
+                </div>
               </div>
             </div>
 
@@ -480,13 +540,18 @@ export default function PageEditor({ params }: { params: Promise<{ id: string }>
                       instead of silently showing "Draft" as selected. */}
                   <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value as PageStatus })}
                     style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '8px 10px', fontSize: 13, color: 'var(--fg1)', background: 'var(--surface)' }}>
-                    <option value="draft">Draft</option>
+                    <option value="draft">{statusLabel('draft')}</option>
                     {canPublish ? (
                       <option value="published">Publish now</option>
                     ) : form.status === 'published' && (
-                      <option value="published" disabled>Published</option>
+                      <option value="published" disabled>{statusLabel('published')}</option>
                     )}
                   </select>
+                  <p style={{ fontSize: 11, color: 'var(--fg3)', margin: '6px 0 0', lineHeight: 1.5 }}>
+                    {form.status === 'published' && form.visibility === 'private'
+                      ? 'Published, but hidden from visitors because visibility is set to private.'
+                      : statusDescription(form.status)}
+                  </p>
                 </div>
                 <div>
                   <label style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--fg3)', display: 'block', marginBottom: 5 }}>Visibility</label>
@@ -555,6 +620,7 @@ function RevisionPanel({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [restoringId, setRestoringId] = useState<string | null>(null);
+  const confirm = useConfirm();
 
   useEffect(() => {
     if (!open) return;
@@ -569,7 +635,7 @@ function RevisionPanel({
         if (!res.ok) throw new Error(body?.error ?? 'Failed to load revision history');
         if (!cancelled) setRevisions(body);
       } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load revision history');
+        if (!cancelled) setError(errorMessage(err, { entity: 'page', action: 'load' }));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -579,7 +645,17 @@ function RevisionPanel({
   }, [open, pageId]);
 
   async function handleRestore(revisionId: string) {
-    if (!window.confirm('Restore this version? The current state will be saved as a revision first, so this can be undone.')) return;
+    const ok = await confirm({
+      title: 'Go back to this earlier version?',
+      body: 'Your page will be replaced with how it looked at that time.',
+      consequences: [
+        'Your current version is saved first, so you can come back to it from this same list.',
+        'Nothing changes on your website until you publish again.',
+      ],
+      confirmLabel: 'Restore this version',
+      tone: 'normal',
+    });
+    if (!ok) return;
 
     setRestoringId(revisionId);
     setError('');
@@ -594,7 +670,7 @@ function RevisionPanel({
       onRestore(body);
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to restore revision');
+      setError(errorMessage(err, { entity: 'page' }));
     } finally {
       setRestoringId(null);
     }

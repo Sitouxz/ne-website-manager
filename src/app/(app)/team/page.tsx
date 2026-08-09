@@ -5,6 +5,9 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   Plus, Trash2, Loader2, X, Users, ShieldAlert, Clock, Mail,
 } from 'lucide-react';
+import { toast } from 'sonner';
+import { useConfirm } from '@/components/ConfirmDialog';
+import { errorMessage } from '@/lib/errors';
 import { createClient } from '@/lib/supabase/client';
 import { useSelectedClient } from '@/components/AppShell';
 import type { Role } from '@/lib/supabase/types';
@@ -60,6 +63,7 @@ export default function TeamPage() {
   const { selectedClientId } = useSelectedClient();
 
   const [checkingRole, setCheckingRole] = useState(true);
+  const confirm = useConfirm();
   const [myRole, setMyRole] = useState<Role | null>(null);
 
   const [members, setMembers] = useState<Member[]>([]);
@@ -150,14 +154,24 @@ export default function TeamPage() {
     setBusyId(null);
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
-      window.alert(body.error || 'Failed to change role.');
+      toast.error(errorMessage(body.error, { entity: 'team member' }));
       return;
     }
     await fetchMembers();
   }
 
   async function handleRemove(member: Member) {
-    if (!window.confirm(`Remove ${member.full_name || 'this member'} from the team? They will lose access to this client but their account is not deleted.`)) return;
+    const who = member.full_name || 'this person';
+    const ok = await confirm({
+      title: `Remove ${who} from the team?`,
+      consequences: [
+        'They lose access to this website straight away.',
+        'Anything they already created stays exactly where it is.',
+        'Their account is not deleted — you can invite them back later.',
+      ],
+      confirmLabel: 'Remove from team',
+    });
+    if (!ok) return;
     setBusyId(member.id);
     const res = await fetch('/api/team/members', {
       method: 'PATCH',
@@ -167,7 +181,7 @@ export default function TeamPage() {
     setBusyId(null);
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
-      window.alert(body.error || 'Failed to remove member.');
+      toast.error(errorMessage(body.error, { entity: 'team member', action: 'delete' }));
       return;
     }
     await fetchMembers();

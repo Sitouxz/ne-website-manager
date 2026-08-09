@@ -183,7 +183,7 @@ export default function CollectionSchemaPage({ params }: { params: Promise<{ id:
   if (loading || !adminChecked) {
     return (
       <>
-        <Topbar title="Collection Schema" />
+        <Topbar title="Fields" />
         <div className="page-body" style={{ display: 'flex', justifyContent: 'center', paddingTop: 80 }}>
           <Loader2 size={24} color="var(--ne-blue)" style={{ animation: 'spin .6s linear infinite' }} />
         </div>
@@ -195,7 +195,7 @@ export default function CollectionSchemaPage({ params }: { params: Promise<{ id:
   if (!isAdmin) {
     return (
       <>
-        <Topbar title="Collection Schema" />
+        <Topbar title="Fields" />
         <div className="page-body">
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, padding: '64px 24px', color: 'var(--fg3)' }}>
             <ShieldAlert size={28} color="var(--ne-danger)" />
@@ -215,7 +215,7 @@ export default function CollectionSchemaPage({ params }: { params: Promise<{ id:
   if (!collection) {
     return (
       <>
-        <Topbar title="Collection Schema" />
+        <Topbar title="Fields" />
         <div className="page-body">
           <div style={{ padding: '64px 24px', textAlign: 'center', color: 'var(--fg3)' }}>
             Collection not found.
@@ -233,7 +233,7 @@ export default function CollectionSchemaPage({ params }: { params: Promise<{ id:
   if (collection.storage !== 'generic' || collection.client_id === null) {
     return (
       <>
-        <Topbar title={collection.name} subtitle="Collection Schema" />
+        <Topbar title={collection.name} subtitle="Fields" />
         <div className="page-body">
           <div style={{ padding: '64px 24px', textAlign: 'center', color: 'var(--fg3)' }}>
             Schema editing isn&apos;t available for {collection.client_id === null ? 'global/system' : 'native'} collections.
@@ -250,7 +250,7 @@ export default function CollectionSchemaPage({ params }: { params: Promise<{ id:
 
   return (
     <>
-      <Topbar title={collection.name} subtitle={`Schema · /${collection.slug}`} />
+      <Topbar title={collection.name} subtitle="What information each entry can hold" />
       <div className="page-body">
         <Link href="/cms/collections" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--fg3)', textDecoration: 'none', fontWeight: 500, marginBottom: 20, width: 'fit-content' }}>
           <ArrowLeft size={14} /> Back to Collections

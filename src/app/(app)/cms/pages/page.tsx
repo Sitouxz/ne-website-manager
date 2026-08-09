@@ -3,8 +3,14 @@
 import Topbar from '@/components/Topbar';
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
-import { Plus, Globe, Lock, MoreHorizontal, Edit, Trash2, Loader2 } from 'lucide-react';
+import { Plus, Globe, Lock, MoreHorizontal, Edit, Trash2, Loader2, FileEdit } from 'lucide-react';
+import { toast } from 'sonner';
 import { createClient } from '@/lib/supabase/client';
+import { useConfirm } from '@/components/ConfirmDialog';
+import { firePublishNotify, computeLivePath } from '@/lib/publish-client';
+import { errorMessage } from '@/lib/errors';
+import { statusDescription, statusLabel } from '@/lib/content-status';
+import { EmptyState } from '@/components/EmptyState';
 import { useSelectedClient } from '@/components/AppShell';
 import type { Page } from '@/lib/supabase/types';
 
@@ -18,6 +24,7 @@ export default function PagesPage() {
   const [loading,  setLoading]  = useState(true);
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const confirm = useConfirm();
   const { selectedClientId } = useSelectedClient();
 
   const fetchPages = useCallback(async () => {
@@ -40,14 +47,48 @@ export default function PagesPage() {
     return () => window.clearTimeout(timer);
   }, [fetchPages]);
 
-  async function handleDelete(id: string) {
-    if (!confirm('Delete this page? This cannot be undone.')) return;
-    setDeleting(id);
+  async function handleDelete(page: Page) {
+    const title = page.title || page.path || '(Untitled)';
+    const isLive = page.status === 'published' && page.visibility === 'public';
+
+    const ok = await confirm({
+      title: `Delete "${title}"?`,
+      body: 'This permanently removes the page from your CMS. It cannot be undone.',
+      consequences: isLive
+        ? [
+            `This page is live at ${page.path}, so it will disappear from your website.`,
+            'Any menu link or button pointing to it will lead to a "page not found" error.',
+          ]
+        : ['This page is not published, so nothing on your website will change.'],
+      confirmLabel: 'Delete page',
+    });
+    if (!ok) return;
+
+    setDeleting(page.id);
     const supabase = createClient();
-    await supabase.from('pages').delete().eq('id', id);
-    setPages((prev) => prev.filter((p) => p.id !== id));
+    const { error } = await supabase.from('pages').delete().eq('id', page.id);
     setDeleting(null);
     setOpenMenu(null);
+
+    if (error) {
+      toast.error(errorMessage(error, { entity: 'page', action: 'delete' }));
+      return;
+    }
+    // See the matching comment in the posts list — deleting live content used
+    // to leave it on the client's website.
+    if (isLive && page.client_id) {
+      firePublishNotify({
+        clientId: page.client_id,
+        event: 'content.deleted',
+        entityType: 'page',
+        entityId: page.id,
+        slug: page.path,
+        path: computeLivePath('page', { path: page.path }),
+      });
+    }
+
+    setPages((prev) => prev.filter((p) => p.id !== page.id));
+    toast.success(`"${title}" was deleted.`);
   }
 
   const publicCount = pages.filter((page) => page.status === 'published' && page.visibility === 'public').length;
@@ -94,8 +135,14 @@ export default function PagesPage() {
                   </tr>
                 ) : pages.length === 0 ? (
                   <tr>
-                    <td colSpan={6} style={{ textAlign: 'center', padding: 48, color: 'var(--fg3)' }}>
-                      No CMS-managed pages found for this site. Create your first page!
+                    <td colSpan={6} style={{ padding: 0 }}>
+                      <EmptyState
+                        icon={FileEdit}
+                        title="No pages yet"
+                        body="Pages are the fixed parts of your website, like About or Contact. Add one here and choose where it lives."
+                        actionLabel="Create your first page"
+                        actionHref="/cms/pages/new"
+                      />
                     </td>
                   </tr>
                 ) : pages.map((page) => (
@@ -108,7 +155,7 @@ export default function PagesPage() {
                     <td>
                       <code style={{ fontSize: 12, background: 'var(--surface-2)', padding: '2px 6px', borderRadius: 4, color: 'var(--fg2)' }}>{page.path}</code>
                     </td>
-                    <td><span className={`status-pill ${page.status}`}>{page.status}</span></td>
+                    <td><span className={`status-pill ${page.status}`} title={statusDescription(page.status)}>{statusLabel(page.status)}</span></td>
                     <td>
                       <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12.5, color: 'var(--fg3)' }}>
                         {page.visibility === 'public' ? <Globe size={13} /> : <Lock size={13} />}
@@ -132,7 +179,7 @@ export default function PagesPage() {
                           </Link>
                           <button
                             style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '10px 14px', fontSize: 13, color: 'var(--ne-danger)', background: 'none', border: 'none', cursor: 'pointer', width: '100%' }}
-                            onClick={() => handleDelete(page.id)}
+                            onClick={() => handleDelete(page)}
                             disabled={deleting === page.id}
                           >
                             {deleting === page.id ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Trash2 size={14} />}

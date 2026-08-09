@@ -113,18 +113,28 @@ function MediaGridCard({
 }
 
 export function MediaGrid({
-  items, onSelect, onDelete, onSaveAlt, deletingId,
+  items, onSelect, onDelete, onSaveAlt, deletingId, emptyTitle, emptyBody,
 }: {
   items: MediaItem[];
   onSelect?: (item: MediaItem) => void;
   onDelete?: (item: MediaItem) => void;
   onSaveAlt?: (item: MediaItem, alt: string) => void;
   deletingId?: string | null;
+  /** Overrides for the empty state, e.g. when a search returned nothing. */
+  emptyTitle?: string;
+  emptyBody?: string;
 }) {
   if (items.length === 0) {
+    // "No media found." read like an error. The library is more likely simply
+    // empty, and the upload control is directly above this — so point at it.
     return (
-      <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--fg3)', fontSize: 13 }}>
-        No media found.
+      <div style={{ padding: '44px 0', textAlign: 'center' }}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--fg1)', marginBottom: 4 }}>
+          {emptyTitle ?? 'No files yet'}
+        </div>
+        <p style={{ fontSize: 13, color: 'var(--fg3)', margin: '0 auto', maxWidth: 340, lineHeight: 1.6 }}>
+          {emptyBody ?? 'Drag images or documents onto the box above to upload them. Once uploaded you can use them anywhere on your website.'}
+        </p>
       </div>
     );
   }

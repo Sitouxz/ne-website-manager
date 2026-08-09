@@ -3,12 +3,18 @@
 import Topbar from '@/components/Topbar';
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Plus, Search, Filter, MoreHorizontal, Edit, Trash2, Loader2 } from 'lucide-react';
+import { Plus, Search, Filter, MoreHorizontal, Edit, Trash2, Loader2, FileText } from 'lucide-react';
+import { toast } from 'sonner';
 import { createClient } from '@/lib/supabase/client';
 import { useSelectedClient } from '@/components/AppShell';
+import { useConfirm } from '@/components/ConfirmDialog';
+import { firePublishNotify, computeLivePath } from '@/lib/publish-client';
+import { errorMessage } from '@/lib/errors';
+import { statusDescription, statusLabel } from '@/lib/content-status';
+import { EmptyState, NoResultsState } from '@/components/EmptyState';
 import type { Post } from '@/lib/supabase/types';
 
-const STATUSES = ['All', 'published', 'draft', 'archived'];
+const STATUSES = ['All', 'published', 'scheduled', 'in_review', 'draft', 'archived'];
 
 export default function PostsPage() {
   const [posts,    setPosts]    = useState<Post[]>([]);
@@ -19,6 +25,7 @@ export default function PostsPage() {
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
   const { selectedClientId } = useSelectedClient();
+  const confirm = useConfirm();
 
   const fetchPosts = useCallback(async () => {
     setLoading(true);
@@ -40,14 +47,52 @@ export default function PostsPage() {
     return () => window.clearTimeout(timer);
   }, [fetchPosts]);
 
-  async function handleDelete(id: string) {
-    if (!confirm('Delete this post? This cannot be undone.')) return;
-    setDeleting(id);
+  async function handleDelete(post: Post) {
+    const title = post.title || '(Untitled)';
+    const isLive = post.status === 'published';
+
+    const ok = await confirm({
+      title: `Delete "${title}"?`,
+      body: 'This permanently removes the post from your CMS. It cannot be undone.',
+      // Naming the visitor-facing effect is the whole point: "cannot be
+      // undone" tells someone the mechanism, not what their readers will see.
+      consequences: isLive
+        ? [
+            'This post is published, so it will disappear from your website.',
+            'Anyone who has the link, or finds it in Google, will see a "page not found" error.',
+          ]
+        : ['This post is not published, so nothing on your website will change.'],
+      confirmLabel: 'Delete post',
+    });
+    if (!ok) return;
+
+    setDeleting(post.id);
     const supabase = createClient();
-    await supabase.from('posts').delete().eq('id', id);
-    setPosts((prev) => prev.filter((p) => p.id !== id));
+    const { error } = await supabase.from('posts').delete().eq('id', post.id);
     setDeleting(null);
     setOpenMenu(null);
+
+    if (error) {
+      toast.error(errorMessage(error, { entity: 'post', action: 'delete' }));
+      return;
+    }
+    // Deleting live content is a change to the client's website, but used to
+    // fire no webhook at all — the post stayed cached and visible after it had
+    // been removed from the CMS. Only fired for content that was actually
+    // published; deleting a draft changes nothing a visitor can see.
+    if (isLive && post.client_id) {
+      firePublishNotify({
+        clientId: post.client_id,
+        event: 'content.deleted',
+        entityType: 'post',
+        entityId: post.id,
+        slug: post.slug,
+        path: computeLivePath('post', { slug: post.slug }),
+      });
+    }
+
+    setPosts((prev) => prev.filter((p) => p.id !== post.id));
+    toast.success(`"${title}" was deleted.`);
   }
 
   const filtered = posts.filter((p) =>
@@ -76,7 +121,7 @@ export default function PostsPage() {
                 color:      status === s ? '#fff'          : 'var(--fg2)',
                 boxShadow: 'var(--shadow-sm)',
               }}>
-                {s === 'All' ? 'All Posts' : s.charAt(0).toUpperCase() + s.slice(1)}
+                {s === 'All' ? 'All posts' : statusLabel(s)}
               </button>
             ))}
           </div>
@@ -129,8 +174,21 @@ export default function PostsPage() {
                 </tr>
               ) : filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={5} style={{ textAlign: 'center', padding: 48, color: 'var(--fg3)' }}>
-                    {posts.length === 0 ? 'No posts yet. Create your first post!' : 'No posts match your filters.'}
+                  <td colSpan={5} style={{ padding: 0 }}>
+                    {posts.length === 0 ? (
+                      <EmptyState
+                        icon={FileText}
+                        title="No blog posts yet"
+                        body="Posts you write here appear on your website's blog, in the order you publish them."
+                        actionLabel="Write your first post"
+                        actionHref="/cms/posts/new"
+                      />
+                    ) : (
+                      <NoResultsState
+                        noun="posts"
+                        onClear={() => { setSearch(''); setCat('All'); setStatus('All'); }}
+                      />
+                    )}
                   </td>
                 </tr>
               ) : filtered.map((p) => (
@@ -146,7 +204,7 @@ export default function PostsPage() {
                       <span style={{ fontSize: 12, background: 'var(--surface-3)', padding: '3px 8px', borderRadius: 99, color: 'var(--fg2)', fontWeight: 500 }}>{p.category}</span>
                     ) : <span style={{ color: 'var(--fg3)', fontSize: 12 }}>—</span>}
                   </td>
-                  <td><span className={`status-pill ${p.status}`}>{p.status}</span></td>
+                  <td><span className={`status-pill ${p.status}`} title={statusDescription(p.status)}>{statusLabel(p.status)}</span></td>
                   <td style={{ color: 'var(--fg3)', fontSize: 12 }}>
                     {/* Only trust published_at while the post is *currently* published — it can
                         hold a stale timestamp from an earlier publish after an unpublish/reschedule,
@@ -171,7 +229,7 @@ export default function PostsPage() {
                         </Link>
                         <button
                           style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '10px 14px', fontSize: 13, color: 'var(--ne-danger)', background: 'none', border: 'none', cursor: 'pointer', width: '100%' }}
-                          onClick={() => handleDelete(p.id)}
+                          onClick={() => handleDelete(p)}
                           disabled={deleting === p.id}
                         >
                           {deleting === p.id ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Trash2 size={14} />}

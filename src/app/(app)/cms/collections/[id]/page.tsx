@@ -5,8 +5,13 @@ import Link from 'next/link';
 import { use, useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  ArrowLeft, Plus, Trash2, ChevronUp, ChevronDown, Loader2, Settings,
+  ArrowLeft, Plus, Trash2, ChevronUp, ChevronDown, Loader2, Settings, Boxes,
 } from 'lucide-react';
+import { toast } from 'sonner';
+import { useConfirm } from '@/components/ConfirmDialog';
+import { errorMessage } from '@/lib/errors';
+import { statusDescription, statusLabel } from '@/lib/content-status';
+import { EmptyState } from '@/components/EmptyState';
 import { createClient } from '@/lib/supabase/client';
 import type { Collection, CollectionItem } from '@/lib/supabase/types';
 
@@ -48,6 +53,7 @@ export default function CollectionEntriesPage({ params }: { params: Promise<{ id
   const router = useRouter();
 
   const [loading,    setLoading]    = useState(true);
+  const confirm = useConfirm();
   const [collection, setCollection] = useState<Collection | null>(null);
   const [items,      setItems]      = useState<CollectionItem[]>([]);
   const [creating,   setCreating]   = useState(false);
@@ -110,18 +116,32 @@ export default function CollectionEntriesPage({ params }: { params: Promise<{ id
       .single();
     setCreating(false);
 
-    if (err) { setError(err.message); return; }
+    if (err) { setError(errorMessage(err, { entity: 'entry' })); return; }
     router.push(`/cms/collections/${collection.id}/entries/${created.id}`);
   }
 
   async function handleDelete(itemId: string) {
-    if (!window.confirm('Delete this entry? This cannot be undone.')) return;
+    const item = items.find((i) => i.id === itemId);
+    const name = item?.slug || 'this entry';
+    const isLive = item?.status === 'published';
+
+    const ok = await confirm({
+      title: `Delete "${name}"?`,
+      body: 'This permanently removes the entry. It cannot be undone.',
+      consequences: isLive
+        ? ['This entry is published, so it will disappear from your website.']
+        : ['This entry is not published, so nothing on your website will change.'],
+      confirmLabel: 'Delete entry',
+    });
+    if (!ok) return;
+
     setDeleting(itemId);
     const supabase = createClient();
     const { error: err } = await supabase.from('collection_items').delete().eq('id', itemId);
     setDeleting(null);
-    if (err) { setError(err.message); return; }
+    if (err) { setError(errorMessage(err, { entity: 'entry', action: 'delete' })); return; }
     setItems((prev) => prev.filter((i) => i.id !== itemId));
+    toast.success(`"${name}" was deleted.`);
   }
 
   async function moveItem(index: number, dir: -1 | 1) {
@@ -243,8 +263,14 @@ export default function CollectionEntriesPage({ params }: { params: Promise<{ id
               <tbody>
                 {items.length === 0 ? (
                   <tr>
-                    <td colSpan={5} style={{ textAlign: 'center', padding: 48, color: 'var(--fg3)' }}>
-                      No entries yet. Create your first one!
+                    <td colSpan={5} style={{ padding: 0 }}>
+                      <EmptyState
+                        icon={Boxes}
+                        title={`No ${collection.name.toLowerCase()} yet`}
+                        body={`Anything you add here appears on your website once you publish it.`}
+                        actionLabel={`Add your first ${collection.name_singular?.toLowerCase() || 'entry'}`}
+                        onAction={handleNewEntry}
+                      />
                     </td>
                   </tr>
                 ) : items.map((item, i) => (
@@ -275,7 +301,7 @@ export default function CollectionEntriesPage({ params }: { params: Promise<{ id
                       </Link>
                       <div style={{ fontSize: 11, color: 'var(--fg3)', marginTop: 1 }}>/{item.slug}</div>
                     </td>
-                    <td><span className={`status-pill ${item.status}`}>{item.status}</span></td>
+                    <td><span className={`status-pill ${item.status}`} title={statusDescription(item.status)}>{statusLabel(item.status)}</span></td>
                     <td style={{ color: 'var(--fg3)', fontSize: 12 }}>{fmtDate(item.updated_at)}</td>
                     <td>
                       <button

@@ -5,6 +5,9 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   Plus, Trash2, ChevronUp, ChevronDown, Loader2, Eye, EyeOff, X, Link2, Boxes, Type,
 } from 'lucide-react';
+import { toast } from 'sonner';
+import { useConfirm } from '@/components/ConfirmDialog';
+import { errorMessage } from '@/lib/errors';
 import { createClient } from '@/lib/supabase/client';
 import { useSelectedClient } from '@/components/AppShell';
 import { firePublishNotify } from '@/lib/publish-client';
@@ -60,6 +63,7 @@ const EMPTY_FORM: AddFormState = { label: '', linkType: 'url', collectionSlug: '
 export default function NavigationPage() {
   const { selectedClientId } = useSelectedClient();
   const [items, setItems] = useState<MenuItem[]>([]);
+  const confirm = useConfirm();
   const [collections, setCollections] = useState<Pick<Collection, 'id' | 'slug' | 'name'>[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -160,10 +164,19 @@ export default function NavigationPage() {
 
   async function handleRemove(item: MenuItem) {
     const childCount = childrenOf(item.id).length;
-    const msg = childCount > 0
-      ? `Delete "${item.label}" and its ${childCount} sub-item(s)? This cannot be undone.`
-      : `Delete "${item.label}"? This cannot be undone.`;
-    if (!window.confirm(msg)) return;
+    const ok = await confirm({
+      title: `Remove "${item.label}" from the menu?`,
+      body: 'This cannot be undone.',
+      consequences: [
+        ...(childCount > 0
+          ? [`Its ${childCount} sub-item${childCount === 1 ? '' : 's'} will be removed from the menu too.`]
+          : []),
+        'The link disappears from your website menu straight away.',
+        'The page itself is not deleted — only the menu link to it.',
+      ],
+      confirmLabel: childCount > 0 ? 'Remove menu items' : 'Remove menu item',
+    });
+    if (!ok) return;
 
     setBusyId(item.id);
     setActionError('');
@@ -172,7 +185,7 @@ export default function NavigationPage() {
     setBusyId(null);
 
     if (deleteError) {
-      setActionError(`Failed to delete "${item.label}": ${deleteError.message}`);
+      setActionError(errorMessage(deleteError, { entity: 'menu item', action: 'delete' }));
       return;
     }
     // `content.deleted` — a client site should treat this the same as
@@ -316,7 +329,7 @@ export default function NavigationPage() {
 
   return (
     <>
-      <Topbar title="Navigation" subtitle="Public site menu" />
+      <Topbar title="Website Menu" subtitle="The links visitors see at the top of your site" />
       <div className="page-body">
 
         {!selectedClientId ? (

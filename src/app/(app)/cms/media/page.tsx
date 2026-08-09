@@ -3,8 +3,13 @@
 import Topbar from '@/components/Topbar';
 import { useEffect, useRef, useState } from 'react';
 import { Search, UploadCloud, Loader2 } from 'lucide-react';
+import { toast } from 'sonner';
 import { createClient } from '@/lib/supabase/client';
 import { useSelectedClient } from '@/components/AppShell';
+import { useConfirm } from '@/components/ConfirmDialog';
+import { errorMessage } from '@/lib/errors';
+import { describeUsage } from '@/lib/media/usage';
+import type { MediaUsageResponse } from '@/app/api/media/usage/route';
 import { useMediaUpload } from '@/lib/hooks/useMediaUpload';
 import { useMediaList } from '@/lib/hooks/useMediaList';
 import { MediaGrid } from '@/components/MediaGrid';
@@ -34,7 +39,12 @@ export default function MediaLibraryPage() {
   const [search,      setSearch]      = useState('');
   const [dragOver,    setDragOver]    = useState(false);
   const [deletingId,  setDeletingId]  = useState<string | null>(null);
+  // Set while the "where is this used?" lookup runs, before the confirm
+  // dialog opens — the grid shows the same spinner as a delete, so the click
+  // never feels like it did nothing.
+  const [checkingUsageId, setCheckingUsageId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const confirm = useConfirm();
 
   const { uploading, error: uploadError, uploadFiles } = useMediaUpload(selectedClientId);
 
@@ -58,17 +68,52 @@ export default function MediaLibraryPage() {
   }
 
   async function handleDelete(item: MediaItem) {
-    if (!window.confirm(`Delete "${item.filename ?? 'this file'}"? This cannot be undone.`)) return;
+    const name = item.filename ?? 'this file';
+
+    // Look up where the file is actually used BEFORE asking. Someone deleting
+    // an image has no way of remembering which of forty pages it sits on, and
+    // a warning that only says "cannot be undone" doesn't help them decide.
+    setCheckingUsageId(item.id);
+    let consequences: string[];
+    try {
+      const params = new URLSearchParams({ id: item.id });
+      if (selectedClientId) params.set('client_id', selectedClientId);
+      const res = await fetch(`/api/media/usage?${params}`);
+      if (!res.ok) throw new Error(String(res.status));
+      const body = (await res.json()) as MediaUsageResponse;
+      consequences = describeUsage(body.usages);
+      if (body.truncated) {
+        consequences.push('You have a lot of content, so there may be other uses not listed here.');
+      }
+    } catch {
+      // A failed lookup must not block the delete — but it must not pretend
+      // the file is unused either.
+      consequences = ["We couldn't check where this file is used, so it may still be on your website."];
+    } finally {
+      setCheckingUsageId(null);
+    }
+
+    const ok = await confirm({
+      title: `Delete "${name}"?`,
+      body: 'This permanently removes the file. It cannot be undone.',
+      consequences,
+      confirmLabel: 'Delete file',
+    });
+    if (!ok) return;
+
     setDeletingId(item.id);
     try {
       const res = await fetch(`/api/media?id=${item.id}`, { method: 'DELETE' });
       if (res.ok) {
         setItems((prev) => prev.filter((i) => i.id !== item.id));
         setTotalCount((c) => Math.max(0, c - 1));
+        toast.success(`"${name}" was deleted.`);
       } else {
         const json = await res.json().catch(() => ({}));
-        alert(json.error ?? 'Failed to delete media');
+        toast.error(errorMessage(json?.error ?? new Error('delete failed'), { entity: 'image', action: 'delete' }));
       }
+    } catch (err) {
+      toast.error(errorMessage(err, { entity: 'image', action: 'delete' }));
     } finally {
       setDeletingId(null);
     }
@@ -81,8 +126,9 @@ export default function MediaLibraryPage() {
   async function handleSaveAlt(item: MediaItem, alt: string) {
     const supabase = createClient();
     const { error } = await supabase.from('media').update({ alt }).eq('id', item.id);
-    if (error) { alert(error.message); return; }
+    if (error) { toast.error(errorMessage(error, { entity: 'image' })); return; }
     setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, alt } : i)));
+    toast.success('Description saved.');
   }
 
   const filtered = items.filter((i) =>
@@ -153,7 +199,14 @@ export default function MediaLibraryPage() {
             <Loader2 size={22} color="var(--ne-blue)" style={{ animation: 'spin .6s linear infinite' }} />
           </div>
         ) : (
-          <MediaGrid items={filtered} onDelete={handleDelete} onSaveAlt={handleSaveAlt} deletingId={deletingId} />
+          <MediaGrid
+            items={filtered}
+            onDelete={handleDelete}
+            onSaveAlt={handleSaveAlt}
+            deletingId={deletingId ?? checkingUsageId}
+            emptyTitle={items.length > 0 ? 'No matching files' : undefined}
+            emptyBody={items.length > 0 ? 'Nothing here matches what you searched for. Try a different word.' : undefined}
+          />
         )}
 
         {!loading && !search && canLoadMore && (

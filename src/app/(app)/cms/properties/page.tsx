@@ -3,8 +3,13 @@
 import Topbar from '@/components/Topbar';
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
-import { Plus, Search, MoreHorizontal, Edit, Trash2, Loader2 } from 'lucide-react';
+import { Plus, Search, MoreHorizontal, Edit, Trash2, Loader2, Home } from 'lucide-react';
+import { toast } from 'sonner';
 import { createClient } from '@/lib/supabase/client';
+import { useConfirm } from '@/components/ConfirmDialog';
+import { errorMessage } from '@/lib/errors';
+import { statusDescription, statusLabel } from '@/lib/content-status';
+import { EmptyState, NoResultsState } from '@/components/EmptyState';
 import { useSelectedClient } from '@/components/AppShell';
 import type { Property } from '@/lib/supabase/types';
 
@@ -19,6 +24,7 @@ export default function PropertiesPage() {
   const [listing,    setListing]    = useState('All');
   const [openMenu,   setOpenMenu]   = useState<string | null>(null);
   const [deleting,   setDeleting]   = useState<string | null>(null);
+  const confirm = useConfirm();
   const { selectedClientId } = useSelectedClient();
 
   const fetchProperties = useCallback(async () => {
@@ -39,14 +45,36 @@ export default function PropertiesPage() {
     return () => window.clearTimeout(timer);
   }, [fetchProperties]);
 
-  async function handleDelete(id: string) {
-    if (!confirm('Delete this property? This cannot be undone.')) return;
-    setDeleting(id);
+  async function handleDelete(property: Property) {
+    const name = property.name || '(Untitled)';
+    const isLive = property.status === 'active';
+
+    const ok = await confirm({
+      title: `Delete "${name}"?`,
+      body: 'This permanently removes the listing from your CMS. It cannot be undone.',
+      consequences: isLive
+        ? [
+            'This listing is active, so it will disappear from your website.',
+            'Its photos, description and details are all removed with it.',
+            'Anyone with a direct link to it will see a "page not found" error.',
+          ]
+        : ['This listing is archived, so nothing on your website will change.'],
+      confirmLabel: 'Delete listing',
+    });
+    if (!ok) return;
+
+    setDeleting(property.id);
     const supabase = createClient();
-    await supabase.from('properties').delete().eq('id', id);
-    setProperties((prev) => prev.filter((p) => p.id !== id));
+    const { error } = await supabase.from('properties').delete().eq('id', property.id);
     setDeleting(null);
     setOpenMenu(null);
+
+    if (error) {
+      toast.error(errorMessage(error, { entity: 'property', action: 'delete' }));
+      return;
+    }
+    setProperties((prev) => prev.filter((p) => p.id !== property.id));
+    toast.success(`"${name}" was deleted.`);
   }
 
   const filtered = properties.filter((p) =>
@@ -126,8 +154,21 @@ export default function PropertiesPage() {
                   </tr>
                 ) : filtered.length === 0 ? (
                   <tr>
-                    <td colSpan={5} style={{ textAlign: 'center', padding: 48, color: 'var(--fg3)' }}>
-                      {properties.length === 0 ? 'No properties yet. Add your first listing!' : 'No listings match your filters.'}
+                    <td colSpan={5} style={{ padding: 0 }}>
+                      {properties.length === 0 ? (
+                        <EmptyState
+                          icon={Home}
+                          title="No listings yet"
+                          body="Listings you add here appear on your website, with their photos, price and details."
+                          actionLabel="Add your first listing"
+                          actionHref="/cms/properties/new"
+                        />
+                      ) : (
+                        <NoResultsState
+                          noun="listings"
+                          onClear={() => { setSearch(''); setStatus('All'); setListing('All'); }}
+                        />
+                      )}
                     </td>
                   </tr>
                 ) : filtered.map((p) => (
@@ -145,7 +186,7 @@ export default function PropertiesPage() {
                       </span>
                     </td>
                     <td style={{ color: 'var(--fg2)', fontSize: 13, fontWeight: 600 }}>{formatPrice(p)}</td>
-                    <td><span className={`status-pill ${p.status}`}>{p.status}</span></td>
+                    <td><span className={`status-pill ${p.status}`} title={statusDescription(p.status)}>{statusLabel(p.status)}</span></td>
                     <td style={{ position: 'relative' }}>
                       <button
                         onClick={() => setOpenMenu(openMenu === p.id ? null : p.id)}
@@ -162,7 +203,7 @@ export default function PropertiesPage() {
                           </Link>
                           <button
                             style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '10px 14px', fontSize: 13, color: 'var(--ne-danger)', background: 'none', border: 'none', cursor: 'pointer', width: '100%' }}
-                            onClick={() => handleDelete(p.id)}
+                            onClick={() => handleDelete(p)}
                             disabled={deleting === p.id}
                           >
                             {deleting === p.id ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Trash2 size={14} />}

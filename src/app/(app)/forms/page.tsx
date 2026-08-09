@@ -6,7 +6,10 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   Plus, Trash2, ChevronUp, ChevronDown, Loader2, Save, CheckCircle, X, Inbox, Mail,
 } from 'lucide-react';
+import { toast } from 'sonner';
 import { createClient } from '@/lib/supabase/client';
+import { useConfirm } from '@/components/ConfirmDialog';
+import { errorMessage } from '@/lib/errors';
 import { useSelectedClient } from '@/components/AppShell';
 import type { Form } from '@/lib/supabase/types';
 import type { FieldDef, FieldType } from '@/lib/collections/types';
@@ -63,6 +66,7 @@ export default function FormsPage() {
   const [createError,   setCreateError]   = useState('');
 
   const [editingId, setEditingId] = useState<string | null>(null);
+  const confirm = useConfirm();
 
   const fetchForms = useCallback(async () => {
     if (!selectedClientId) { setForms([]); setLoading(false); return; }
@@ -119,19 +123,34 @@ export default function FormsPage() {
       .single();
     setCreating(false);
 
-    if (error) { setCreateError(error.message); return; }
+    if (error) { setCreateError(errorMessage(error, { entity: 'form' })); return; }
     closeNewDialog();
     await fetchForms();
     setEditingId((created as Form).id);
   }
 
   async function handleDelete(form: Form) {
-    if (!window.confirm(`Delete "${form.name}"? This also deletes all of its submissions.`)) return;
+    const ok = await confirm({
+      title: `Delete the "${form.name}" form?`,
+      body: 'This cannot be undone.',
+      // Enquiries are the most valuable thing in this product — a form delete
+      // takes real customer leads with it, and the old wording buried that in
+      // a subordinate clause.
+      consequences: [
+        'Every enquiry anyone has ever submitted through this form is deleted too.',
+        'If you might need those enquiries later, export them to a spreadsheet first.',
+        'The form stops working anywhere it appears on your website.',
+      ],
+      confirmLabel: 'Delete form and enquiries',
+    });
+    if (!ok) return;
+
     const supabase = createClient();
     const { error } = await supabase.from('forms').delete().eq('id', form.id);
-    if (error) { window.alert(error.message); return; }
+    if (error) { toast.error(errorMessage(error, { entity: 'form', action: 'delete' })); return; }
     if (editingId === form.id) setEditingId(null);
     await fetchForms();
+    toast.success(`"${form.name}" was deleted.`);
   }
 
   return (

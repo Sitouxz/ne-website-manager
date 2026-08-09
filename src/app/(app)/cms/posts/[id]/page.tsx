@@ -5,10 +5,14 @@ import Link from 'next/link';
 import { useEffect, useState, use, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  ArrowLeft, Image as ImageIcon, Save, Send, X, Plus, Loader2, Eye, History,
+  ArrowLeft, Image as ImageIcon, Save, Send, X, Plus, Loader2, Eye, History, ExternalLink,
 } from 'lucide-react';
+import { toast } from 'sonner';
 import { createClient } from '@/lib/supabase/client';
 import { useSelectedClient } from '@/components/AppShell';
+import { useConfirm } from '@/components/ConfirmDialog';
+import { errorMessage } from '@/lib/errors';
+import { statusDescription, statusLabel, liveUrl } from '@/lib/content-status';
 import { logActivity } from '@/lib/activity';
 import { firePublishNotify, computeLivePath } from '@/lib/publish-client';
 import MediaPicker from '@/components/MediaPicker';
@@ -107,6 +111,7 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
   const [previewError, setPreviewError] = useState('');
   const [previewLoading, setPreviewLoading] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [websiteUrl, setWebsiteUrl] = useState<string | null>(null);
   const { selectedClientId } = useSelectedClient();
 
   // Guards against autosave firing in response to *this component* setting
@@ -173,6 +178,15 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
         if (post) {
           if (admin) setClientId(post.client_id);
           applyPostToForm(post);
+
+          // Needed to show "View live page" — a user's first question after
+          // publishing is "where is it?", and until now nothing answered it.
+          const { data: client } = await supabase
+            .from('clients')
+            .select('website_url')
+            .eq('id', post.client_id)
+            .single();
+          setWebsiteUrl(client?.website_url ?? null);
         }
         setLoading(false);
       }
@@ -293,7 +307,7 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
 
     const supabase = createClient();
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) { setError('Not authenticated'); setSaving(false); return; }
+    if (!user) { setError('You have been signed out. Please sign in again to save your work.'); setSaving(false); return; }
 
     const previousStatus = form.status;
     const published = status === 'published' ? new Date().toISOString() : null;
@@ -313,7 +327,7 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
         .select()
         .single();
 
-      if (err) { setError(err.message); setSaving(false); return; }
+      if (err) { setError(errorMessage(err, { entity: 'post' })); setSaving(false); return; }
 
       if (status === 'published') {
         // A brand-new post transitioning straight to published is always a
@@ -342,7 +356,7 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
         .update(payload)
         .eq('id', id);
 
-      if (err) { setError(err.message); setSaving(false); return; }
+      if (err) { setError(errorMessage(err, { entity: 'post' })); setSaving(false); return; }
 
       if (status === 'published') {
         // Fresh publish (draft/scheduled -> published) vs. an edit to
@@ -351,6 +365,23 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
         firePublishNotify({
           clientId,
           event: previousStatus === 'published' ? 'content.updated' : 'content.published',
+          entityType: 'post',
+          entityId: id,
+          slug: payload.slug,
+          path: computeLivePath('post', { slug: payload.slug }),
+        });
+      } else if (previousStatus === 'published') {
+        // Leaving `published` (unpublish to draft/in_review, or archive) is
+        // just as much a change to the live site as publishing was, but used
+        // to fire nothing at all — the CMS said "Draft" while the client's
+        // website happily kept serving the post. `content.deleted` is the
+        // right signal: from the site's point of view the content is gone,
+        // and a generated `createRevalidateHandler` treats it exactly like a
+        // removal. Mirrors what `navigation/page.tsx` already does when a
+        // menu item is removed.
+        firePublishNotify({
+          clientId,
+          event: 'content.deleted',
           entityType: 'post',
           entityId: id,
           slug: payload.slug,
@@ -419,7 +450,7 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
     });
 
     setPreviewLoading(false);
-    if (err) { setPreviewError(err.message); return; }
+    if (err) { setPreviewError(errorMessage(err, { entity: 'post' })); return; }
 
     window.open(`${websiteUrl.replace(/\/$/, '')}/api/preview?token=${token}`, '_blank');
   }
@@ -479,8 +510,23 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
               </div>
             )}
             {saved && <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ne-success)', padding: '8px 14px', background: '#DCFCE7', borderRadius: 'var(--r-sm)' }}>Saved</div>}
+            {/* "Where is it?" is the first thing anyone asks after publishing,
+                and nothing in the CMS answered it. Only shown once the post is
+                actually live, so the link can never 404. */}
+            {!isNew && initialStatus === 'published' && liveUrl(websiteUrl, computeLivePath('post', { slug: form.slug })) && (
+              <a
+                className="btn-outline-ne"
+                href={liveUrl(websiteUrl, computeLivePath('post', { slug: form.slug }))!}
+                target="_blank"
+                rel="noopener noreferrer"
+                title="Open this post on your website"
+                style={{ textDecoration: 'none' }}
+              >
+                <ExternalLink size={14} /> View live page
+              </a>
+            )}
             {!isNew && (
-              <button className="btn-outline-ne" onClick={() => setHistoryOpen(true)} title="Revision history">
+              <button className="btn-outline-ne" onClick={() => setHistoryOpen(true)} title="See earlier versions">
                 <History size={14} /> History
               </button>
             )}
@@ -525,13 +571,31 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
                 placeholder="Post title..."
                 style={{ width: '100%', padding: '18px 20px', border: 'none', outline: 'none', fontSize: 22, fontWeight: 700, color: 'var(--fg1)', background: 'transparent' }}
               />
-              <div style={{ padding: '0 20px 14px', display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--fg3)' }}>
-                <span>Slug:</span>
-                <input
-                  value={form.slug}
-                  onChange={(e) => setForm({ ...form, slug: e.target.value })}
-                  style={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', fontSize: 12, color: 'var(--ne-blue)', fontFamily: 'monospace' }}
-                />
+              {/* "Slug" meant nothing to the people using this. The label is
+                  now plain language and the field is shown in the context of
+                  the full address it produces, so it's obvious what typing
+                  here changes. Normalised on blur rather than on every
+                  keystroke, so the caret doesn't jump while typing. */}
+              <div style={{ padding: '0 20px 14px' }}>
+                <label htmlFor="post-web-address" style={{ display: 'block', fontSize: 11.5, fontWeight: 600, color: 'var(--fg3)', marginBottom: 5 }}>
+                  Web address
+                </label>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 0, fontSize: 12.5, border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', overflow: 'hidden', background: 'var(--surface-3)' }}>
+                  <span style={{ padding: '8px 0 8px 10px', color: 'var(--fg3)', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
+                    /blog/
+                  </span>
+                  <input
+                    id="post-web-address"
+                    value={form.slug}
+                    onChange={(e) => setForm({ ...form, slug: e.target.value })}
+                    onBlur={(e) => setForm((f) => ({ ...f, slug: slugify(e.target.value) }))}
+                    placeholder="ramadan-timings"
+                    style={{ flex: 1, border: 'none', outline: 'none', background: 'var(--surface)', padding: '8px 10px', fontSize: 12.5, color: 'var(--ne-blue)', fontFamily: 'monospace' }}
+                  />
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--fg3)', marginTop: 5 }}>
+                  This is the link people will use to open your post. It updates automatically from the title — change it only if you need to.
+                </div>
               </div>
             </div>
 
@@ -556,26 +620,43 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
 
             {/* SEO */}
             <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', padding: '18px 20px' }}>
-              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--fg2)', marginBottom: 14, textTransform: 'uppercase', letterSpacing: '.06em' }}>SEO Settings</div>
+              {/* Was "SEO Settings" / "SEO Title" / "Meta Description" — three
+                  pieces of jargon in one panel. Renamed to say what they
+                  actually control, with a note on what happens if left blank
+                  (they're both optional, and the empty state is sensible). */}
+              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--fg2)', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '.06em' }}>
+                How this looks on Google
+              </div>
+              <p style={{ fontSize: 12, color: 'var(--fg3)', margin: '0 0 14px', lineHeight: 1.5 }}>
+                Optional. Leave these blank and we&rsquo;ll use your title and excerpt.
+              </p>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                 <div>
-                  <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--fg3)', display: 'block', marginBottom: 5 }}>SEO Title</label>
+                  <label htmlFor="post-seo-title" style={{ fontSize: 12, fontWeight: 600, color: 'var(--fg3)', display: 'block', marginBottom: 5 }}>
+                    Headline shown in search results
+                  </label>
                   <input
+                    id="post-seo-title"
                     value={form.seoTitle || form.title}
                     onChange={(e) => setForm({ ...form, seoTitle: e.target.value })}
                     style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '9px 12px', fontSize: 13.5, color: 'var(--fg1)', outline: 'none' }}
                   />
                 </div>
                 <div>
-                  <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--fg3)', display: 'block', marginBottom: 5 }}>Meta Description</label>
+                  <label htmlFor="post-seo-desc" style={{ fontSize: 12, fontWeight: 600, color: 'var(--fg3)', display: 'block', marginBottom: 5 }}>
+                    Short description under the headline
+                  </label>
                   <textarea
+                    id="post-seo-desc"
                     value={form.seoDesc || form.excerpt}
                     onChange={(e) => setForm({ ...form, seoDesc: e.target.value })}
                     rows={2}
                     style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '9px 12px', fontSize: 13.5, color: 'var(--fg1)', resize: 'none', outline: 'none', fontFamily: 'inherit' }}
                   />
                   <div style={{ fontSize: 11, color: form.seoDesc.length > 160 ? 'var(--ne-danger)' : 'var(--fg3)', marginTop: 4 }}>
-                    {form.seoDesc.length}/160 chars
+                    {form.seoDesc.length > 160
+                      ? `${form.seoDesc.length} characters — Google will cut this off after about 160.`
+                      : `${form.seoDesc.length} of about 160 characters`}
                   </div>
                 </div>
               </div>
@@ -603,19 +684,24 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
                       showing "Draft" as selected. */}
                   <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value as PostStatus })}
                     style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '8px 10px', fontSize: 13, color: 'var(--fg1)', background: 'var(--surface)' }}>
-                    <option value="draft">Draft</option>
-                    <option value="in_review">In review</option>
+                    <option value="draft">{statusLabel('draft')}</option>
+                    <option value="in_review">Send for approval</option>
                     {canPublish ? (
                       <>
-                        <option value="scheduled">Schedule</option>
+                        <option value="scheduled">Schedule for later</option>
                         <option value="published">Publish now</option>
                       </>
                     ) : (form.status === 'scheduled' || form.status === 'published') && (
                       <option value={form.status} disabled>
-                        {form.status === 'scheduled' ? 'Scheduled' : 'Published'}
+                        {statusLabel(form.status)}
                       </option>
                     )}
                   </select>
+                  {/* The status word alone never told anyone whether visitors
+                      could see the post. This does. */}
+                  <p style={{ fontSize: 11, color: 'var(--fg3)', margin: '6px 0 0', lineHeight: 1.5 }}>
+                    {statusDescription(form.status)}
+                  </p>
                 </div>
                 {form.status === 'scheduled' && (
                   <div>
@@ -759,6 +845,7 @@ function RevisionPanel({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [restoringId, setRestoringId] = useState<string | null>(null);
+  const confirm = useConfirm();
 
   useEffect(() => {
     if (!open) return;
@@ -773,7 +860,7 @@ function RevisionPanel({
         if (!res.ok) throw new Error(body?.error ?? 'Failed to load revision history');
         if (!cancelled) setRevisions(body);
       } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load revision history');
+        if (!cancelled) setError(errorMessage(err, { entity: 'post', action: 'load' }));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -782,8 +869,18 @@ function RevisionPanel({
     return () => { cancelled = true; };
   }, [open, postId]);
 
-  async function handleRestore(revisionId: string) {
-    if (!window.confirm('Restore this version? The current state will be saved as a revision first, so this can be undone.')) return;
+  async function handleRestore(revisionId: string, savedAt: string) {
+    const ok = await confirm({
+      title: 'Go back to this earlier version?',
+      body: `Your post will be replaced with how it looked on ${new Date(savedAt).toLocaleString()}.`,
+      consequences: [
+        'Your current version is saved first, so you can come back to it from this same list.',
+        'Nothing changes on your website until you publish again.',
+      ],
+      confirmLabel: 'Restore this version',
+      tone: 'normal',
+    });
+    if (!ok) return;
 
     setRestoringId(revisionId);
     setError('');
@@ -794,11 +891,12 @@ function RevisionPanel({
         body: JSON.stringify({ entity_type: 'post', entity_id: postId, revision_id: revisionId }),
       });
       const body = await res.json();
-      if (!res.ok) throw new Error(body?.error ?? 'Failed to restore revision');
+      if (!res.ok) throw new Error(body?.error ?? 'restore failed');
       onRestore(body);
       onClose();
+      toast.success('Earlier version restored.');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to restore revision');
+      setError(errorMessage(err, { entity: 'post' }));
     } finally {
       setRestoringId(null);
     }
@@ -851,7 +949,7 @@ function RevisionPanel({
                 <button
                   className="btn-outline-ne"
                   style={{ fontSize: 12, padding: '5px 10px' }}
-                  onClick={() => handleRestore(rev.id)}
+                  onClick={() => handleRestore(rev.id, rev.created_at)}
                   disabled={restoringId === rev.id}
                 >
                   {restoringId === rev.id ? <Loader2 size={12} style={{ animation: 'spin .6s linear infinite' }} /> : null}
