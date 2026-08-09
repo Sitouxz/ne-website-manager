@@ -88,8 +88,14 @@ body { font-family: 'Inter', system-ui, -apple-system, sans-serif; background: v
 .data-table tr:hover td { background: var(--surface-2); }
 .status-pill { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600; padding: 3px 10px; border-radius: 99px; }
 .status-pill.published { background: #DCFCE7; color: #16A34A; }
+.status-pill.active { background: #DCFCE7; color: #16A34A; }
 .status-pill.draft { background: var(--ne-blue-muted); color: var(--ne-blue); }
 .status-pill.archived { background: var(--surface-3); color: var(--fg3); }
+/* `in_review` and `scheduled` had no rule at all, so posts in those states
+   rendered as unstyled text while every other status got a coloured pill.
+   Both are "not visible to visitors yet, but waiting on something" — amber. */
+.status-pill.in_review { background: #FFFBEB; color: #B45309; }
+.status-pill.scheduled { background: #FFFBEB; color: #B45309; }
 .editor-toolbar { display: flex; align-items: center; gap: 2px; padding: 8px 12px; background: var(--surface-2); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
 .toolbar-btn { padding: 5px 8px; border-radius: 5px; border: none; background: transparent; color: var(--fg2); cursor: pointer; font-size: 13px; font-weight: 600; transition: background .12s; }
 .toolbar-btn:hover { background: var(--ne-blue-muted); color: var(--ne-blue); }

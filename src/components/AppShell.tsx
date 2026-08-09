@@ -2,6 +2,8 @@
 
 import { useState } from 'react';
 import Sidebar from './Sidebar';
+import { ConfirmProvider } from './ConfirmDialog';
+import { Toaster } from './ui/sonner';
 import type { Client, Collection, Role } from '@/lib/supabase/types';
 
 export default function AppShell({
@@ -49,11 +51,17 @@ export default function AppShell({
           {/* Use a global custom event to communicate hamburger click */}
           <MobileMenuProvider onToggle={() => setSidebarOpen((o) => !o)}>
             <ClientSelectionProvider selectedClientId={selectedClientId} clientName={clientName}>
-              {children}
+              {/* Confirmation dialogs and toasts are app-wide: every CMS
+                  screen needs to ask "are you sure?" and to report the
+                  outcome of a save. Mounted once here so no screen has to
+                  fall back to `window.confirm`/`alert` again. */}
+              <ConfirmProvider>{children}</ConfirmProvider>
             </ClientSelectionProvider>
           </MobileMenuProvider>
         </div>
       </div>
+
+      <Toaster position="bottom-right" richColors closeButton />
     </div>
   );
 }
