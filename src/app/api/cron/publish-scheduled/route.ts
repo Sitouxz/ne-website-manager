@@ -10,8 +10,14 @@ import { computeLivePath } from '@/lib/publish-client';
  * Triggered by Vercel Cron every 5 minutes (see `vercel.json`), which sends
  * `Authorization: Bearer ${CRON_SECRET}`. Requires the `CRON_SECRET`
  * environment variable to be set on the deployment (Vercel dashboard / CLI
- * env vars) — there is no other documentation for this variable in the repo,
- * so note it here for whoever deploys this.
+ * env vars); see `.env.example` for what happens when it isn't.
+ *
+ * The 5-minute cadence is load-bearing, not incidental: the post editor tells
+ * the user their post "goes live within about 5 minutes of the time you pick".
+ * `vercel.json` previously scheduled this once a day at 03:00 UTC while this
+ * comment already claimed 5 minutes, so a post scheduled for 9am published up
+ * to ~24 hours late. If this schedule is ever relaxed, change that copy in
+ * `src/app/(app)/cms/posts/[id]/page.tsx` to match.
  *
  * Uses the service-role admin client (bypasses RLS) because this operation
  * is intentionally cross-tenant — every client's due posts get published in
