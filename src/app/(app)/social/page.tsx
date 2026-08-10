@@ -90,11 +90,13 @@ function ConnectPanel({ clientId, onSaved }: { clientId: string; onSaved: () => 
           performance data appears here — no per-platform Meta verification needed on your side.
         </p>
 
+        {/* Was two raw environment-variable names. A client reading this
+            screen can't act on those and shouldn't have to — it's work for
+            Neu Entity, so say who does it and what they can do meanwhile. */}
         {!accountConfigured ? (
           <div style={{ fontSize: 12.5, color: 'var(--fg2)', background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 8, padding: '12px 14px', lineHeight: 1.6 }}>
-            The Metricool account isn’t connected yet. Set <code>METRICOOL_USER_TOKEN</code> and{' '}
-            <code>METRICOOL_USER_ID</code> in the server environment, then reload. You can still paste a brand id
-            below to map this client ahead of time.
+            Social reporting isn’t switched on for your account yet. Neu Entity needs to connect it — contact your
+            account manager and they’ll set it up. You can still choose your brand below in the meantime.
           </div>
         ) : null}
 

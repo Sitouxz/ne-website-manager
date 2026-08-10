@@ -32,6 +32,11 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+# ...except the checked-in template of key names (no values).
+!.env.example
+
+# graphify knowledge-graph output (generated, ~4MB)
+graphify-out/
 
 # vercel
 .vercel
