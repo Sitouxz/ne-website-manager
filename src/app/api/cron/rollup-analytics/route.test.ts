@@ -7,6 +7,7 @@ vi.mock('@/lib/supabase/admin', () => ({
 
 import { createAdminClient } from '@/lib/supabase/admin';
 import { GET } from './route';
+import { DAY_MS } from '@/lib/dates';
 
 type Fixtures = Record<string, unknown[]>;
 
@@ -20,7 +21,7 @@ function getReq(headers: Record<string, string> = {}): Request {
   return new Request('https://example.com/api/cron/rollup-analytics', { headers });
 }
 
-const DAY_MS = 86_400_000;
+
 
 // A fixed "now" well inside the cron's re-aggregation window (yesterday +
 // today), used so fixtures don't depend on the actual wall-clock date.

@@ -1,6 +1,7 @@
 import Topbar from '@/components/Topbar';
 import { cookies } from 'next/headers';
 import { createClient } from '@/lib/supabase/server';
+import { DAY_MS, daysAgoKey, daysSince } from '@/lib/dates';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { FileText, Eye, Clock, TrendingUp, ArrowUpRight, History, AlertTriangle, CalendarClock, Search, Activity } from 'lucide-react';
 import Link from 'next/link';
@@ -9,7 +10,7 @@ import type { Profile } from '@/lib/supabase/types';
 import { countMissingSeo } from '@/lib/seo/audit';
 
 const SELECTED_CLIENT_COOKIE = 'ne_selected_client_id';
-const DAY_MS = 86_400_000;
+
 const DRAFT_AGE_DAYS = 14;
 const SPARKLINE_DAYS = 30;
 
@@ -91,7 +92,7 @@ export default async function DashboardPage() {
   // Task 8.2: 30-day pageview sparkline — reads the Task 8.1 rollup table
   // (`analytics_daily`, one row per client_id/day/path) rather than raw
   // `analytics_events`, same as the analytics page's 30/90-day views.
-  const sparklineSinceDay = new Date(Date.now() - (SPARKLINE_DAYS - 1) * DAY_MS).toISOString().slice(0, 10);
+  const sparklineSinceDay = daysAgoKey(SPARKLINE_DAYS - 1);
   let dailyQuery = supabase.from('analytics_daily').select('day, views').gte('day', sparklineSinceDay);
   if (clientId) dailyQuery = dailyQuery.eq('client_id', clientId);
   const { data: dailyRows = [] } = await dailyQuery;
@@ -155,10 +156,19 @@ export default async function DashboardPage() {
   // implies). `updated_at` is the "last touched" column per the
   // `handle_updated_at()` trigger convention (migration 001) — falls back to
   // `created_at` only for a row where `updated_at` somehow isn't set.
+  // `react-hooks/purity` flags `Date.now()` because an impure call during
+  // render can produce unstable results across re-renders. That hazard does
+  // not exist here: this is an async Server Component, rendered once per
+  // request on the server, never re-rendered and never memoized by the React
+  // Compiler. The rule has no way to distinguish server components from
+  // client ones. Suppressed narrowly on the one line rather than disabled in
+  // the ESLint config, and deliberately not laundered through a wrapper
+  // function whose only purpose would be to stop the linter looking.
+  // eslint-disable-next-line react-hooks/purity
   const nowMs = Date.now();
   const agingDrafts = (allPosts ?? [])
     .filter((p) => p.status === 'draft')
-    .map((p) => ({ ...p, ageDays: Math.floor((nowMs - new Date(p.updated_at ?? p.created_at).getTime()) / DAY_MS) }))
+    .map((p) => ({ ...p, ageDays: daysSince(p.updated_at ?? p.created_at, nowMs) }))
     .filter((p) => p.ageDays > DRAFT_AGE_DAYS)
     .sort((a, b) => b.ageDays - a.ageDays);
 

@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/admin';
-
-const DAY_MS = 86_400_000;
+import { DAY_MS, startOfUtcDay } from '@/lib/dates';
 
 /**
  * Analytics-rollup cron: aggregates raw `page_view` rows from
@@ -53,9 +52,7 @@ export async function GET(req: Request) {
   const supabase = createAdminClient();
 
   // Start of "yesterday" (UTC) through now — a 2-UTC-calendar-day window.
-  const now = new Date();
-  const todayStartUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-  const windowStart = new Date(todayStartUtc.getTime() - DAY_MS);
+  const windowStart = new Date(startOfUtcDay().getTime() - DAY_MS);
 
   const { data: eventsData, error } = await supabase
     .from('analytics_events')

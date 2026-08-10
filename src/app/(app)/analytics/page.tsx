@@ -10,7 +10,8 @@ import {
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 
-const DAY_MS = 86400000;
+import { DAY_MS, daysSince, utcDayKey } from '@/lib/dates';
+
 const RANGES = [7, 30, 90] as const;
 type RangeDays = (typeof RANGES)[number];
 
@@ -66,10 +67,14 @@ function fmtDateTime(iso: string | null | undefined) {
   return new Date(iso).toLocaleString('en-SG', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
 
-function daysSince(iso: string | null | undefined, nowMs: number) {
+/**
+ * Like `daysSince` from `lib/dates`, but distinguishes "no data" from "today":
+ * the Last CMS Update tile renders `null` as "-" and 0 as "0d", so collapsing
+ * the two would claim an update happened today when none ever has.
+ */
+function daysSinceOrNull(iso: string | null | undefined, nowMs: number): number | null {
   if (!iso) return null;
-  const days = Math.floor((nowMs - new Date(iso).getTime()) / DAY_MS);
-  return Math.max(0, days);
+  return daysSince(iso, nowMs);
 }
 
 function host(referrer: string | null) {
@@ -291,7 +296,7 @@ export default function AnalyticsPage() {
     // views read the much cheaper pre-aggregated `analytics_daily` table.
     let rollupQuery = null;
     if (range !== 7) {
-      const sinceRange = new Date(nowMs - range * DAY_MS).toISOString().slice(0, 10);
+      const sinceRange = utcDayKey(nowMs - range * DAY_MS);
       let q = supabase.from('analytics_daily').select('day, path, views, visitors').gte('day', sinceRange);
       if (selectedClientId) q = q.eq('client_id', selectedClientId);
       rollupQuery = q;
@@ -365,7 +370,7 @@ export default function AnalyticsPage() {
     .filter(Boolean)
     .sort()
     .at(-1);
-  const freshness = daysSince(lastUpdated, nowMs);
+  const freshness = daysSinceOrNull(lastUpdated, nowMs);
 
   // Per-post performance (Task 8.1): match each post's canonical live path
   // (via `computeLivePath`, the same helper the publish pipeline uses —
