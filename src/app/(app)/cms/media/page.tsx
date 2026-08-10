@@ -8,7 +8,8 @@ import { createClient } from '@/lib/supabase/client';
 import { useSelectedClient } from '@/components/AppShell';
 import { useConfirm } from '@/components/ConfirmDialog';
 import { errorMessage } from '@/lib/errors';
-import { describeUsage } from '@/lib/media/usage';
+import { describeUsage, type MediaUsage } from '@/lib/media/usage';
+import { firePublishNotify } from '@/lib/publish-client';
 import type { MediaUsageResponse } from '@/app/api/media/usage/route';
 import { useMediaUpload } from '@/lib/hooks/useMediaUpload';
 import { useMediaList } from '@/lib/hooks/useMediaList';
@@ -75,12 +76,14 @@ export default function MediaLibraryPage() {
     // a warning that only says "cannot be undone" doesn't help them decide.
     setCheckingUsageId(item.id);
     let consequences: string[];
+    let usages: MediaUsage[] = [];
     try {
       const params = new URLSearchParams({ id: item.id });
       if (selectedClientId) params.set('client_id', selectedClientId);
       const res = await fetch(`/api/media/usage?${params}`);
       if (!res.ok) throw new Error(String(res.status));
       const body = (await res.json()) as MediaUsageResponse;
+      usages = body.usages;
       consequences = describeUsage(body.usages);
       if (body.truncated) {
         consequences.push('You have a lot of content, so there may be other uses not listed here.');
@@ -107,6 +110,23 @@ export default function MediaLibraryPage() {
       if (res.ok) {
         setItems((prev) => prev.filter((i) => i.id !== item.id));
         setTotalCount((c) => Math.max(0, c - 1));
+
+        // Deleting a file used on a live page leaves a broken image there
+        // until something revalidates. Nothing did. We already know exactly
+        // which pages were affected from the usage lookup above, so only
+        // notify when at least one of them was actually live — deleting an
+        // unused file shouldn't trigger a rebuild of the client's site.
+        if (selectedClientId && usages.some((u) => u.isLive)) {
+          firePublishNotify({
+            clientId: selectedClientId,
+            event: 'content.updated',
+            entityType: 'media',
+            entityId: item.id,
+            slug: item.filename,
+            path: null,
+          });
+        }
+
         toast.success(`"${name}" was deleted.`);
       } else {
         const json = await res.json().catch(() => ({}));

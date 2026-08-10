@@ -9,6 +9,7 @@ import {
 import { toast } from 'sonner';
 import { useConfirm } from '@/components/ConfirmDialog';
 import { errorMessage } from '@/lib/errors';
+import { firePublishNotify } from '@/lib/publish-client';
 import { createClient } from '@/lib/supabase/client';
 import { useSelectedClient } from '@/components/AppShell';
 import type { Redirect } from '@/lib/supabase/types';
@@ -182,6 +183,20 @@ export default function SeoManagerPage() {
     setAdding(false);
 
     if (error) { setAddError(errorMessage(error, { entity: 'redirect' })); return; }
+
+    // Redirects are read by the client site's own middleware through
+    // `getRedirects()`, which is cached — without a revalidation the new rule
+    // simply never takes effect. `path: null` triggers a whole-site
+    // revalidation: a redirect isn't tied to one page, and `from_path` is by
+    // definition the address that should NOT resolve.
+    firePublishNotify({
+      clientId: selectedClientId,
+      event: 'content.updated',
+      entityType: 'redirect',
+      entityId: '',
+      slug: fromPath,
+      path: null,
+    });
     resetAddForm();
     load();
   }
@@ -223,6 +238,18 @@ export default function SeoManagerPage() {
     // not silently show the (unpersisted) edited values.
     if (error) { setEditError(errorMessage(error, { entity: 'redirect' })); return; }
     setRedirects((prev) => prev.map((r) => (r.id === id ? { ...r, from_path: fromPath, to_path: toPath, permanent: editForm.permanent } : r)));
+    const editedClientId = redirects.find((x) => x.id === id)?.client_id;
+    if (editedClientId) {
+      firePublishNotify({
+        clientId: editedClientId,
+        event: 'content.updated',
+        entityType: 'redirect',
+        entityId: id,
+        slug: fromPath,
+        path: null,
+      });
+    }
+
     cancelEdit();
   }
 
@@ -249,6 +276,15 @@ export default function SeoManagerPage() {
       return;
     }
     setRedirects((prev) => prev.filter((x) => x.id !== r.id));
+    firePublishNotify({
+      clientId: r.client_id,
+      event: 'content.deleted',
+      entityType: 'redirect',
+      entityId: r.id,
+      slug: r.from_path,
+      path: null,
+    });
+
     if (editingId === r.id) cancelEdit();
     toast.success(`Redirect from "${r.from_path}" was deleted.`);
   }

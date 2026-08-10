@@ -7,6 +7,7 @@ import { Plus, Search, MoreHorizontal, Edit, Trash2, Loader2, Home } from 'lucid
 import { toast } from 'sonner';
 import { createClient } from '@/lib/supabase/client';
 import { useConfirm } from '@/components/ConfirmDialog';
+import { firePublishNotify } from '@/lib/publish-client';
 import { errorMessage } from '@/lib/errors';
 import { statusDescription, statusLabel } from '@/lib/content-status';
 import { EmptyState, NoResultsState } from '@/components/EmptyState';
@@ -73,6 +74,20 @@ export default function PropertiesPage() {
       toast.error(errorMessage(error, { entity: 'property', action: 'delete' }));
       return;
     }
+    // Deleting a live listing changes the client's website; `path: null`
+    // triggers a whole-site revalidation (no canonical property path exists —
+    // see the editor's own comment).
+    if (isLive && property.client_id) {
+      firePublishNotify({
+        clientId: property.client_id,
+        event: 'content.deleted',
+        entityType: 'property',
+        entityId: property.id,
+        slug: property.slug,
+        path: null,
+      });
+    }
+
     setProperties((prev) => prev.filter((p) => p.id !== property.id));
     toast.success(`"${name}" was deleted.`);
   }

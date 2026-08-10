@@ -310,7 +310,14 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
     if (!user) { setError('You have been signed out. Please sign in again to save your work.'); setSaving(false); return; }
 
     const previousStatus = form.status;
-    const published = status === 'published' ? new Date().toISOString() : null;
+    // Only stamp `published_at` on the transition INTO published. Setting it
+    // on every save meant that fixing a typo on a year-old post re-dated it to
+    // today on the live site, and reshuffled the client's blog ordering. The
+    // scheduled-publish cron already follows this rule; the editor didn't.
+    const published =
+      status === 'published' && previousStatus !== 'published'
+        ? new Date().toISOString()
+        : null;
     const scheduledAtIso = status === 'scheduled' ? new Date(form.scheduledAt).toISOString() : null;
 
     const payload = {
@@ -712,6 +719,12 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
                       onChange={(e) => setForm({ ...form, scheduledAt: e.target.value })}
                       style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '8px 10px', fontSize: 13, color: 'var(--fg1)', background: 'var(--surface)' }}
                     />
+                    {/* Publishing is done by a background check, not at the
+                        exact second — saying so is more honest than implying
+                        to-the-minute precision. */}
+                    <p style={{ fontSize: 11, color: 'var(--fg3)', margin: '5px 0 0', lineHeight: 1.5 }}>
+                      Times are in your own timezone. Your post goes live within about 5 minutes of the time you pick.
+                    </p>
                   </div>
                 )}
                 <div>

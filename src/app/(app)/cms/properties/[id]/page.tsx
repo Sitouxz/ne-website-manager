@@ -8,6 +8,8 @@ import { ArrowLeft, Save, Send, Loader2, Plus, X, Image as ImageIcon } from 'luc
 import { createClient } from '@/lib/supabase/client';
 import { useSelectedClient } from '@/components/AppShell';
 import { logActivity } from '@/lib/activity';
+import { firePublishNotify } from '@/lib/publish-client';
+import { errorMessage } from '@/lib/errors';
 import MediaPicker from '@/components/MediaPicker';
 import type { MediaItem } from '@/app/api/media/route';
 
@@ -194,7 +196,7 @@ export default function PropertyEditor({ params }: { params: Promise<{ id: strin
         .from('properties')
         .insert({ ...payload, client_id: clientId })
         .select().single();
-      if (err) { setError(err.message); setSaving(false); return; }
+      if (err) { setError(errorMessage(err, { entity: 'property' })); setSaving(false); return; }
 
       const action = newStatus === 'archived' ? 'archived' : 'created';
       await logActivity(supabase, {
@@ -206,12 +208,36 @@ export default function PropertyEditor({ params }: { params: Promise<{ id: strin
         summary: `${ACTIVITY_LABELS[action]} "${payload.name}"`,
       });
 
+      // Properties are served to client sites via
+      // `/api/client/[slug]/properties`, but no save on this screen has ever
+      // told the live site anything — so a listing added or edited here stayed
+      // invisible until the next deploy. For the one client whose CMS is
+      // properties-only, that meant the CMS never reached their website at all.
+      //
+      // `path: null` deliberately: unlike posts/pages/entries, there is no
+      // canonical property path anywhere in this codebase (neither
+      // `computeLivePath` nor the preview route knows the shape a client site
+      // uses), and revalidating a guessed path would refresh the wrong URL
+      // while leaving the real one stale. `null` makes a generated
+      // `createRevalidateHandler` revalidate the whole site, which is correct
+      // if blunt — same fallback `site_globals` and `menu_item` already use.
+      if (newStatus === 'active') {
+        firePublishNotify({
+          clientId,
+          event: 'content.published',
+          entityType: 'property',
+          entityId: newProp.id,
+          slug: payload.slug,
+          path: null,
+        });
+      }
+
       setSaving(false); setSaved(true); setTimeout(() => setSaved(false), 2000);
       router.replace(`/cms/properties/${newProp.id}`);
     } else {
       const { error: err } = await supabase
         .from('properties').update(payload).eq('id', id);
-      if (err) { setError(err.message); setSaving(false); return; }
+      if (err) { setError(errorMessage(err, { entity: 'property' })); setSaving(false); return; }
       if (statusOverride) set('status', statusOverride);
 
       const action =
@@ -226,6 +252,29 @@ export default function PropertyEditor({ params }: { params: Promise<{ id: strin
         entityId: id,
         summary: `${ACTIVITY_LABELS[action]} "${payload.name}"`,
       });
+
+      // See the comment on the insert branch above. An archive is just as much
+      // a change to the live site as a publish, so it notifies too — as
+      // `content.deleted`, matching how posts/pages signal leaving `published`.
+      if (newStatus === 'active') {
+        firePublishNotify({
+          clientId,
+          event: previousStatus === 'active' ? 'content.updated' : 'content.published',
+          entityType: 'property',
+          entityId: id,
+          slug: payload.slug,
+          path: null,
+        });
+      } else if (previousStatus === 'active') {
+        firePublishNotify({
+          clientId,
+          event: 'content.deleted',
+          entityType: 'property',
+          entityId: id,
+          slug: payload.slug,
+          path: null,
+        });
+      }
 
       setSaving(false); setSaved(true); setTimeout(() => setSaved(false), 2000);
     }

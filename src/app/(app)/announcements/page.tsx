@@ -4,6 +4,7 @@ import Topbar from '@/components/Topbar';
 import { useCallback, useEffect, useState } from 'react';
 import { Save, Loader2, CheckCircle, Megaphone, Info, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { useSelectedClient } from '@/components/AppShell';
+import { firePublishNotify } from '@/lib/publish-client';
 import { loadGlobal, saveGlobal } from '@/lib/globals/client';
 import { DEFAULT_ANNOUNCEMENT, type AnnouncementGlobal, type AnnouncementVariant } from '@/lib/globals/types';
 
@@ -53,6 +54,22 @@ export default function AnnouncementsPage() {
     const err = await saveGlobal(selectedClientId, 'announcement', announcement);
     setSaving(false);
     if (err) { setError(err); return; }
+
+    // This screen writes the same `site_globals` table as Site Settings, but
+    // was the one globals writer that never notified the live site — so an
+    // announcement banner (the most time-sensitive content in the CMS) saved
+    // fine and then didn't appear until the next deploy. Mirrors
+    // `settings/globals/page.tsx` exactly, including `path: null`, since
+    // globals affect shared layout across the whole site.
+    firePublishNotify({
+      clientId: selectedClientId,
+      event: 'content.updated',
+      entityType: 'site_globals',
+      entityId: 'announcement',
+      slug: 'announcement',
+      path: null,
+    });
+
     setSaved(true);
     setTimeout(() => setSaved(false), 2500);
   }
