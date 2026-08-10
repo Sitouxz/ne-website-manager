@@ -1,5 +1,43 @@
 import { NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { createRateLimiter, getClientIp } from '@/lib/api/rate-limit';
+
+/**
+ * Rate limit: 120 events per rolling 60s per (IP, client) pair.
+ *
+ * This endpoint is public by necessity — it's a first-party analytics beacon
+ * called from client websites — but it writes with the service-role client and
+ * previously had no limiting at all, so a single caller could insert unbounded
+ * rows into `analytics_events` for any active client slug. The form-submission
+ * endpoint has had a honeypot and a limiter from the start; this one is now
+ * consistent with it.
+ *
+ * 120/min is deliberately generous: a real visitor browsing quickly generates
+ * a handful of page views a minute, so this only trips on automation. Over
+ * budget returns 204, not 429 — a beacon must never surface an error into a
+ * client's site, and a tracking call has nothing useful to say to the caller.
+ */
+const RATE_LIMIT = 120;
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const limiter = createRateLimiter(RATE_LIMIT, RATE_LIMIT_WINDOW_MS);
+
+/**
+ * Cap on the serialized `metadata` blob. The column is unbounded JSONB, so
+ * without this a caller can store arbitrarily large payloads through a public,
+ * unauthenticated endpoint.
+ */
+const MAX_METADATA_BYTES = 2_000;
+
+function boundedMetadata(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  try {
+    if (JSON.stringify(value).length > MAX_METADATA_BYTES) return {};
+  } catch {
+    // Circular or otherwise unserializable — not something to persist.
+    return {};
+  }
+  return value as Record<string, unknown>;
+}
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -55,6 +93,12 @@ export async function POST(
 
   if (!client) return json({ error: 'Client not found' }, { status: 404 });
 
+  // Silently drop over-budget events rather than erroring — see the limiter's
+  // comment above. The caller is a beacon on someone's live website.
+  if (!limiter.check(`${getClientIp(req)}:${client.id}`)) {
+    return new Response(null, { status: 204, headers: CORS_HEADERS });
+  }
+
   const body = await req.json().catch(() => ({}));
   const headers = req.headers;
   const userAgent = headers.get('user-agent') ?? '';
@@ -70,7 +114,7 @@ export async function POST(
     device: parseDevice(userAgent),
     browser: parseBrowser(userAgent),
     country: headers.get('x-vercel-ip-country') ?? headers.get('cf-ipcountry') ?? null,
-    metadata: body.metadata && typeof body.metadata === 'object' ? body.metadata : {},
+    metadata: boundedMetadata(body.metadata),
   });
 
   if (error) return json({ error: error.message }, { status: 500 });
