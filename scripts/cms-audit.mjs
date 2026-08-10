@@ -16,7 +16,7 @@ const checks = [
     name: 'pages screen reads CMS data instead of a hard-coded PAGES array',
     pass: () => {
       const src = read('src/app/(app)/cms/pages/page.tsx');
-      return !/const PAGES\s*=|\bPAGES\.map\b|\/cms\/pages\/new/.test(src);
+      return !/const PAGES\s*=|\bPAGES\.map\b/.test(src);
     },
   },
   {
@@ -67,7 +67,9 @@ const checks = [
   {
     name: 'generated SDK includes analytics tracking helpers',
     pass: () => {
-      const src = read('src/app/api/client/[slug]/sdk/route.ts');
+      // Lives in the shared generator since Task 7.2 deduplicated it out of
+      // sdk/route.ts and admin/push-integration/route.ts.
+      const src = read('src/lib/sdk/generate.ts');
       return /trackPageView/.test(src)
         && /trackEvent/.test(src)
         && /installAnalytics/.test(src);

@@ -109,26 +109,38 @@ export default function SettingsPage() {
     }));
   }
 
-  const loadPublishConfig = useCallback(async (clientId: string) => {
-    const supabase = createClient();
-    const { data } = await supabase
-      .from('client_publish_config')
-      .select('deploy_hook, revalidate_url, revalidate_secret')
-      .eq('client_id', clientId)
-      .maybeSingle();
-    const config = data as Pick<ClientPublishConfig, 'deploy_hook' | 'revalidate_url' | 'revalidate_secret'> | null;
-    setForm((f) => ({
-      ...f,
-      deploy_hook: config?.deploy_hook ?? '',
-      revalidate_url: config?.revalidate_url ?? '',
-      revalidate_secret: config?.revalidate_secret ?? '',
-    }));
-  }, []);
-
+  // Inlined into the effect rather than kept as a `useCallback` the effect
+  // calls: React's lint rules flagged the old shape as a synchronous setState
+  // inside an effect (a cascading-render hazard). Inlining also closes a real
+  // race it had — with no cancellation, switching clients twice quickly could
+  // let the first response land after the second and show one client's publish
+  // config under another's name. Same `cancelled` guard the revision panels use.
   useEffect(() => {
-    if (!client?.id) return;
-    loadPublishConfig(client.id);
-  }, [client?.id, loadPublishConfig]);
+    const clientId = client?.id;
+    if (!clientId) return;
+    let cancelled = false;
+
+    async function loadPublishConfig() {
+      const supabase = createClient();
+      const { data } = await supabase
+        .from('client_publish_config')
+        .select('deploy_hook, revalidate_url, revalidate_secret')
+        .eq('client_id', clientId)
+        .maybeSingle();
+      if (cancelled) return;
+
+      const config = data as Pick<ClientPublishConfig, 'deploy_hook' | 'revalidate_url' | 'revalidate_secret'> | null;
+      setForm((f) => ({
+        ...f,
+        deploy_hook: config?.deploy_hook ?? '',
+        revalidate_url: config?.revalidate_url ?? '',
+        revalidate_secret: config?.revalidate_secret ?? '',
+      }));
+    }
+
+    loadPublishConfig();
+    return () => { cancelled = true; };
+  }, [client?.id]);
 
   useEffect(() => {
     const originTimer = window.setTimeout(() => {

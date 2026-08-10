@@ -39,7 +39,7 @@ const NAV: NavGroup[] = [
     items: [
       { label: 'Blog Posts',      href: '/cms/posts',       icon: FileText },
       { label: 'Properties',      href: '/cms/properties',  icon: Home },
-      { label: 'Pages',           href: '/cms/pages',       icon: FileEdit, hidden: true },
+      { label: 'Pages',           href: '/cms/pages',       icon: FileEdit },
       { label: 'Media Library',   href: '/cms/media',       icon: Image, hideForClientSlugs: [KAMAL_KARIM_SLUG] },
       { label: 'All Collections', href: '/cms/collections', icon: Boxes, hideForClientSlugs: [KAMAL_KARIM_SLUG] },
       { label: 'Website Menu',    href: '/cms/navigation',  icon: Navigation, hideForClientSlugs: [KAMAL_KARIM_SLUG] },
