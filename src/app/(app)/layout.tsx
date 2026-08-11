@@ -1,42 +1,17 @@
 import { redirect } from 'next/navigation';
-import { cookies } from 'next/headers';
-import { createClient } from '@/lib/supabase/server';
 import AppShell from '@/components/AppShell';
-import type { Client, Collection, Profile } from '@/lib/supabase/types';
-
-const SELECTED_CLIENT_COOKIE = 'ne_selected_client_id';
+import { getActiveWorkspace } from '@/lib/workspace';
+import { getClientCapabilities } from '@/lib/client-capabilities';
+import type { Collection } from '@/lib/supabase/types';
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
-  const supabase = await createClient();
-
-  const { data: { user } } = await supabase.auth.getUser();
+  const { user, profile, clients, activeClient: selectedClient, supabase } = await getActiveWorkspace();
   if (!user) redirect('/login');
 
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('*, clients(*)')
-    .eq('id', user.id)
-    .single() as { data: Profile | null };
-
   const role       = profile?.role ?? 'editor';
-  const isAdmin    = role === 'ne_admin';
-  let clients: Client[] = [];
-  let selectedClient = profile?.clients ?? null;
-
-  if (isAdmin) {
-    const { data: rows } = await supabase
-      .from('clients')
-      .select('*')
-      .order('name', { ascending: true });
-    clients = (rows ?? []) as Client[];
-
-    const selectedId = (await cookies()).get(SELECTED_CLIENT_COOKIE)?.value;
-    selectedClient = clients.find((client) => client.id === selectedId) ?? clients[0] ?? null;
-  }
-
   const clientName = selectedClient?.name ?? 'Website Manager';
   const selectedClientId = selectedClient?.id ?? profile?.client_id ?? null;
-  const clientSlug = selectedClient?.slug ?? null;
+  const capabilities = getClientCapabilities(selectedClient);
 
   // Sidebar's dynamic "Collections" nav (Task 4.3) — only `storage='generic'`
   // collections get an entries list/editor at all (native/global collections
@@ -63,7 +38,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       clientName={clientName}
       clients={clients}
       selectedClientId={selectedClientId}
-      clientSlug={clientSlug}
+      websiteUrl={selectedClient?.website_url ?? null}
+      capabilities={capabilities}
       role={role}
       genericCollections={genericCollections}
     >

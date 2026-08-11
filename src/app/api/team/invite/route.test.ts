@@ -32,10 +32,13 @@ function setSupabase(supabase: unknown) {
 
 /** Stub service-role client whose `auth.admin.inviteUserByEmail` is a spy. */
 function adminMock(opts: { inviteError?: { message: string } } = {}) {
-  const inviteSpy = vi.fn(async (_email: string, _options?: unknown) => ({
-    data: { user: { id: 'invited-user-1' } },
-    error: opts.inviteError ?? null,
-  }));
+  const inviteSpy = vi.fn(async (...args: [string, unknown?]) => {
+    void args;
+    return {
+      data: { user: { id: 'invited-user-1' } },
+      error: opts.inviteError ?? null,
+    };
+  });
   const supabase = {
     auth: { admin: { inviteUserByEmail: inviteSpy } },
   };

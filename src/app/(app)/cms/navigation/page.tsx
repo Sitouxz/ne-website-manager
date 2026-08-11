@@ -2,16 +2,14 @@
 
 import Topbar from '@/components/Topbar';
 import { useCallback, useEffect, useState } from 'react';
-import {
-  Plus, Trash2, ChevronUp, ChevronDown, Loader2, Eye, EyeOff, X, Link2, Boxes, Type,
-} from 'lucide-react';
-import { toast } from 'sonner';
+import { Plus, Trash2, Loader2, Eye, EyeOff, X, Link2, Boxes, Type } from 'lucide-react';
 import { useConfirm } from '@/components/ConfirmDialog';
 import { errorMessage } from '@/lib/errors';
 import { createClient } from '@/lib/supabase/client';
 import { useSelectedClient } from '@/components/AppShell';
 import { firePublishNotify } from '@/lib/publish-client';
 import type { MenuItem, MenuItemLinkType, Collection } from '@/lib/supabase/types';
+import SortableList from '@/components/builder/SortableList';
 
 /**
  * Public navigation tree editor — Task 5.1. Manages `menu_items` rows
@@ -61,7 +59,7 @@ interface AddFormState {
 const EMPTY_FORM: AddFormState = { label: '', linkType: 'url', collectionSlug: '', url: '', parentId: '' };
 
 export default function NavigationPage() {
-  const { selectedClientId } = useSelectedClient();
+  const { selectedClientId, clientName } = useSelectedClient();
   const [items, setItems] = useState<MenuItem[]>([]);
   const confirm = useConfirm();
   const [collections, setCollections] = useState<Pick<Collection, 'id' | 'slug' | 'name'>[]>([]);
@@ -217,37 +215,25 @@ export default function NavigationPage() {
     setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, is_visible: !i.is_visible } : i)));
   }
 
-  async function handleMove(item: MenuItem, dir: -1 | 1) {
-    const siblings = item.parent_id ? childrenOf(item.parent_id) : topLevel;
-    const index = siblings.findIndex((s) => s.id === item.id);
-    const targetIndex = index + dir;
-    if (targetIndex < 0 || targetIndex >= siblings.length) return;
-    const other = siblings[targetIndex];
-
-    setBusyId(item.id);
+  async function reorderSiblings(next: MenuItem[]) {
+    const nextOrders = new Map(next.map((item, index) => [item.id, index]));
+    setItems((current) => current.map((item) => nextOrders.has(item.id) ? { ...item, sort_order: nextOrders.get(item.id)! } : item));
     setActionError('');
     const supabase = createClient();
-    const [{ error: itemError }, { error: otherError }] = await Promise.all([
-      supabase.from('menu_items').update({ sort_order: other.sort_order }).eq('id', item.id),
-      supabase.from('menu_items').update({ sort_order: item.sort_order }).eq('id', other.id),
-    ]);
-    setBusyId(null);
+    const results = await Promise.all(next.map((item, index) =>
+      supabase.from('menu_items').update({ sort_order: index }).eq('id', item.id),
+    ));
+    const failure = results.find((result) => result.error);
 
-    if (itemError || otherError) {
-      setActionError(`Failed to reorder "${item.label}": ${(itemError ?? otherError)!.message}`);
+    if (failure?.error) {
+      await load();
+      throw new Error(`Failed to reorder the menu: ${failure.error.message}`);
       // Re-fetch so local state matches the DB — one of the two writes may
       // have partially succeeded even though the pair failed as a whole.
-      load();
-      return;
     }
     if (selectedClientId) {
-      firePublishNotify({ clientId: selectedClientId, event: 'content.updated', entityType: 'menu_item', entityId: item.id, slug: item.label, path: null });
+      firePublishNotify({ clientId: selectedClientId, event: 'content.updated', entityType: 'menu_item', entityId: next[0]?.id ?? '', slug: next[0]?.label ?? 'navigation', path: null });
     }
-    setItems((prev) => prev.map((i) => {
-      if (i.id === item.id) return { ...i, sort_order: other.sort_order };
-      if (i.id === other.id) return { ...i, sort_order: item.sort_order };
-      return i;
-    }));
   }
 
   function describeLink(item: MenuItem): string {
@@ -262,38 +248,15 @@ export default function NavigationPage() {
   const labelStyle: React.CSSProperties = { display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--fg2)', marginBottom: 6 };
 
   function renderRow(item: MenuItem, opts: { indent: boolean }) {
-    const siblings = item.parent_id ? childrenOf(item.parent_id) : topLevel;
-    const index = siblings.findIndex((s) => s.id === item.id);
     const isBusy = busyId === item.id;
     return (
       <div
-        key={item.id}
         style={{
-          display: 'flex', alignItems: 'center', gap: 12, padding: '12px 20px',
-          paddingLeft: opts.indent ? 48 : 20,
-          borderTop: '1px solid var(--border)',
+          minHeight: 58, display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px',
+          paddingLeft: opts.indent ? 28 : 14,
           opacity: item.is_visible ? 1 : 0.55,
         }}
       >
-        <div style={{ display: 'flex', flexDirection: 'column' }}>
-          <button
-            onClick={() => handleMove(item, -1)}
-            disabled={index === 0 || isBusy}
-            style={{ background: 'none', border: 'none', cursor: index === 0 ? 'default' : 'pointer', color: index === 0 ? 'var(--border)' : 'var(--fg3)', padding: 2 }}
-            aria-label="Move up"
-          >
-            <ChevronUp size={14} />
-          </button>
-          <button
-            onClick={() => handleMove(item, 1)}
-            disabled={index === siblings.length - 1 || isBusy}
-            style={{ background: 'none', border: 'none', cursor: index === siblings.length - 1 ? 'default' : 'pointer', color: index === siblings.length - 1 ? 'var(--border)' : 'var(--fg3)', padding: 2 }}
-            aria-label="Move down"
-          >
-            <ChevronDown size={14} />
-          </button>
-        </div>
-
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
             <span style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--fg1)' }}>{item.label}</span>
@@ -461,14 +424,44 @@ export default function NavigationPage() {
                   No navigation items yet. Add your first one above.
                 </div>
               ) : (
-                topLevel.map((item) => (
-                  <div key={item.id}>
-                    {renderRow(item, { indent: false })}
-                    {childrenOf(item.id).map((child) => renderRow(child, { indent: true }))}
-                  </div>
-                ))
+                <SortableList
+                  items={topLevel}
+                  getId={(item) => item.id}
+                  getLabel={(item) => item.label}
+                  onReorder={reorderSiblings}
+                  renderItem={(item) => {
+                    const children = childrenOf(item.id);
+                    return (
+                      <div>
+                        {renderRow(item, { indent: false })}
+                        {children.length ? (
+                          <div className="navigation-children">
+                            <SortableList
+                              items={children}
+                              getId={(child) => child.id}
+                              getLabel={(child) => child.label}
+                              onReorder={reorderSiblings}
+                              renderItem={(child) => renderRow(child, { indent: true })}
+                            />
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  }}
+                />
               )}
             </div>
+            {topLevel.length ? (
+              <section className="navigation-preview" aria-labelledby="navigation-preview-title">
+                <div className="navigation-preview-heading"><h2 id="navigation-preview-title">Live header preview</h2><span>Desktop</span></div>
+                <div className="navigation-preview-bar">
+                  <strong>{clientName}</strong>
+                  <nav aria-label="Navigation preview">
+                    {topLevel.filter((item) => item.is_visible).map((item) => <span key={item.id}>{item.label}</span>)}
+                  </nav>
+                </div>
+              </section>
+            ) : null}
           </>
         )}
       </div>

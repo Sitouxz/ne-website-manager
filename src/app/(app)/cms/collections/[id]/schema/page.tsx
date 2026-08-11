@@ -3,13 +3,12 @@
 import Topbar from '@/components/Topbar';
 import Link from 'next/link';
 import { use, useState, useEffect } from 'react';
-import {
-  ArrowLeft, Plus, Trash2, ChevronUp, ChevronDown, Loader2, Save, CheckCircle, ShieldAlert,
-} from 'lucide-react';
+import { ArrowLeft, Plus, Trash2, Loader2, Save, CheckCircle, ShieldAlert } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import type { Collection } from '@/lib/supabase/types';
 import type { FieldDef, FieldType } from '@/lib/collections/types';
 import { validateFieldDefs } from '@/lib/collections/validate';
+import SortableList from '@/components/builder/SortableList';
 
 const FIELD_TYPES: { value: FieldType; label: string }[] = [
   { value: 'text',        label: 'Text' },
@@ -151,14 +150,8 @@ export default function CollectionSchemaPage({ params }: { params: Promise<{ id:
     setSaved(false);
   }
 
-  function moveField(index: number, dir: -1 | 1) {
-    setFields((prev) => {
-      const target = index + dir;
-      if (target < 0 || target >= prev.length) return prev;
-      const next = [...prev];
-      [next[index], next[target]] = [next[target], next[index]];
-      return next;
-    });
+  function reorderFields(next: FieldDef[]) {
+    setFields(next);
     setSaved(false);
   }
 
@@ -354,27 +347,13 @@ export default function CollectionSchemaPage({ params }: { params: Promise<{ id:
                 No fields yet. Add your first field above.
               </div>
             ) : (
-              <div>
-                {fields.map((f, i) => (
-                  <div key={f.key} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 20px', borderTop: i === 0 ? 'none' : '1px solid var(--border)' }}>
-                    <div style={{ display: 'flex', flexDirection: 'column' }}>
-                      <button
-                        onClick={() => moveField(i, -1)}
-                        disabled={i === 0}
-                        style={{ background: 'none', border: 'none', cursor: i === 0 ? 'default' : 'pointer', color: i === 0 ? 'var(--border)' : 'var(--fg3)', padding: 2 }}
-                        aria-label="Move up"
-                      >
-                        <ChevronUp size={14} />
-                      </button>
-                      <button
-                        onClick={() => moveField(i, 1)}
-                        disabled={i === fields.length - 1}
-                        style={{ background: 'none', border: 'none', cursor: i === fields.length - 1 ? 'default' : 'pointer', color: i === fields.length - 1 ? 'var(--border)' : 'var(--fg3)', padding: 2 }}
-                        aria-label="Move down"
-                      >
-                        <ChevronDown size={14} />
-                      </button>
-                    </div>
+              <SortableList
+                items={fields}
+                getId={(field) => field.key}
+                getLabel={(field) => field.label}
+                onReorder={reorderFields}
+                renderItem={(f) => (
+                  <div style={{ minHeight: 58, display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px' }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                         <span style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--fg1)' }}>{f.label}</span>
@@ -396,14 +375,14 @@ export default function CollectionSchemaPage({ params }: { params: Promise<{ id:
                     </div>
                     <button
                       onClick={() => handleRemoveField(f.key)}
-                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--ne-danger)', padding: 6, flexShrink: 0 }}
+                      style={{ width: 40, height: 40, display: 'grid', placeItems: 'center', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--ne-danger)', flexShrink: 0 }}
                       aria-label={`Remove ${f.label}`}
                     >
                       <Trash2 size={14} />
                     </button>
                   </div>
-                ))}
-              </div>
+                )}
+              />
             )}
           </div>
 

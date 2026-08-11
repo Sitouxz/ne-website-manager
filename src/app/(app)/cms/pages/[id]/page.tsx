@@ -7,7 +7,6 @@ import { useRouter } from 'next/navigation';
 import {
   ArrowLeft, Save, Send, X, Loader2, History, Globe, Lock, ExternalLink,
 } from 'lucide-react';
-import { toast } from 'sonner';
 import { createClient } from '@/lib/supabase/client';
 import { useConfirm } from '@/components/ConfirmDialog';
 import { errorMessage } from '@/lib/errors';
@@ -89,7 +88,6 @@ export default function PageEditor({ params }: { params: Promise<{ id: string }>
   const [autosaveState, setAutosaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [historyOpen, setHistoryOpen] = useState(false);
   const [websiteUrl, setWebsiteUrl] = useState<string | null>(null);
-  const confirm = useConfirm();
   const { selectedClientId } = useSelectedClient();
 
   // Guards against autosave firing in response to *this component* setting
@@ -387,7 +385,7 @@ export default function PageEditor({ params }: { params: Promise<{ id: string }>
       />
       <div className="page-body">
         {/* Breadcrumb + actions */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+        <div className="editor-action-bar">
           <Link href="/cms/pages" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--fg3)', textDecoration: 'none', fontWeight: 500 }}>
             <ArrowLeft size={14} /> Back to Pages
           </Link>
@@ -442,15 +440,15 @@ export default function PageEditor({ params }: { params: Promise<{ id: string }>
                 "Save Draft" above remains available. Pages have no
                 `in_review` state, so there's nothing else to submit into. */}
             {canPublish && (
-              <button className="btn-ne" onClick={() => handleSave('published')} disabled={saving}>
+              <button className="btn-ne" onClick={() => handleSave()} disabled={saving || isElevatedLocked} title={elevatedLockedTitle}>
                 {saving ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Send size={14} />}
-                {form.status === 'published' ? 'Update' : 'Publish'}
+                {form.status === 'published' ? 'Publish changes' : 'Save changes'}
               </button>
             )}
           </div>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: 20, alignItems: 'start' }}>
+        <div className="editor-layout">
           {/* Main editor */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             {/* Title + path */}
@@ -568,7 +566,7 @@ export default function PageEditor({ params }: { params: Promise<{ id: string }>
                   </div>
                 </div>
                 <button
-                  className="btn-ne"
+                  className="btn-ne editor-duplicate-action"
                   style={{ width: '100%', justifyContent: 'center' }}
                   onClick={() => handleSave()}
                   // Disabled whenever `isElevatedLocked` — keyed off

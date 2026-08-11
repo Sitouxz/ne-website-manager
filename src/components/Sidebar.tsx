@@ -1,107 +1,115 @@
 'use client';
 
+import NextImage from 'next/image';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import {
-  LayoutDashboard, FileText, FileEdit, Image, BarChart2,
-  Search, Users, Settings, Megaphone, Mail,
-  ChevronDown, LogOut, Globe, ShieldCheck, Home, Boxes, Navigation, Sliders, Share2,
+  BarChart2,
+  Boxes,
+  ChevronDown,
+  FileEdit,
+  FileText,
+  Globe,
+  Home,
+  Image,
+  LayoutDashboard,
+  LogOut,
+  Mail,
+  Megaphone,
+  Navigation,
+  Search,
+  Settings,
+  Share2,
+  ShieldCheck,
+  Sliders,
+  Users,
 } from 'lucide-react';
-import type { Client, Collection, Role } from '@/lib/supabase/types';
+import type { Client, ClientCapabilities, Collection, Role } from '@/lib/supabase/types';
 
-type NavItem = { label: string; href: string; icon: React.ElementType; soon?: boolean; hideForEditor?: boolean; hidden?: boolean; hideForClientSlugs?: string[] };
-
-// Kamal Karim runs a custom, properties-only menu — this real-estate client
-// has no use for blog/media/collections/navigation management, so those are
-// suppressed just for this one client rather than globally.
-const KAMAL_KARIM_SLUG = 'kamal-karim';
+type Capability = keyof ClientCapabilities;
+export type NavItem = {
+  label: string;
+  href: string;
+  icon: React.ElementType;
+  capability?: Capability;
+  access?: 'everyone' | 'manager' | 'operator';
+};
 type NavGroup = { section: string; items: NavItem[] };
 
-// "All Collections" replaces the old static "Collections" link — it still
-// points at `/cms/collections` (the list/management page: create a
-// collection, edit a schema, see native/global ones read-only) so that path
-// is never lost. Each of the client's actual `storage='generic'` collections
-// is rendered as its own nav item right below it (see the `genericCollections`
-// prop below), so a client with "Sermons" and "Team" collections gets both
-// names directly in the sidebar instead of only a generic "Collections" label.
-const NAV: NavGroup[] = [
-  {
-    section: 'Main',
-    items: [
-      { label: 'Dashboard',  href: '/dashboard',  icon: LayoutDashboard },
-      { label: 'Analytics',  href: '/analytics',  icon: BarChart2 },
-      { label: 'Social',     href: '/social',     icon: Share2 },
-    ],
-  },
+const NAVIGATION: NavGroup[] = [
+  { section: 'Workspace', items: [{ label: 'Home', href: '/dashboard', icon: LayoutDashboard }] },
   {
     section: 'Content',
     items: [
-      { label: 'Blog Posts',      href: '/cms/posts',       icon: FileText },
-      { label: 'Properties',      href: '/cms/properties',  icon: Home },
-      { label: 'Pages',           href: '/cms/pages',       icon: FileEdit },
-      { label: 'Media Library',   href: '/cms/media',       icon: Image, hideForClientSlugs: [KAMAL_KARIM_SLUG] },
-      { label: 'All Collections', href: '/cms/collections', icon: Boxes, hideForClientSlugs: [KAMAL_KARIM_SLUG] },
-      { label: 'Website Menu',    href: '/cms/navigation',  icon: Navigation, hideForClientSlugs: [KAMAL_KARIM_SLUG] },
+      { label: 'Blog posts', href: '/cms/posts', icon: FileText, capability: 'posts' },
+      { label: 'Pages', href: '/cms/pages', icon: FileEdit, capability: 'pages' },
+      { label: 'Properties', href: '/cms/properties', icon: Home, capability: 'properties' },
+      { label: 'Collection setup', href: '/cms/collections', icon: Boxes, capability: 'collections', access: 'operator' },
     ],
   },
   {
-    section: 'Tools',
+    section: 'Structure',
     items: [
-      { label: 'SEO Manager',   href: '/seo',           icon: Search },
-      { label: 'Forms & Enquiries', href: '/forms',     icon: Mail },
-      { label: 'Announcements', href: '/announcements', icon: Megaphone },
+      { label: 'Website navigation', href: '/cms/navigation', icon: Navigation, capability: 'navigation', access: 'manager' },
+      { label: 'Media', href: '/cms/media', icon: Image, capability: 'media' },
+      { label: 'Forms', href: '/forms', icon: Mail, capability: 'forms' },
     ],
   },
   {
-    section: 'Settings',
+    section: 'Measure',
     items: [
-      { label: 'Site Settings', href: '/settings',         icon: Settings },
-      { label: 'Site Details',  href: '/settings/globals', icon: Sliders },
-      // Task 6.1: invitations + team management landed, so `soon` is gone.
-      // `hideForEditor` is the first role-gated sidebar item — a plain
-      // `editor` has no use for this page (RLS + the page's own
-      // not-authorized state already block them from doing anything
-      // there), so it's hidden entirely rather than shown-disabled like
-      // the old `soon` treatment.
-      { label: 'Team Members',  href: '/team',             icon: Users, hideForEditor: true },
+      { label: 'Analytics', href: '/analytics', icon: BarChart2, capability: 'analytics', access: 'manager' },
+      { label: 'Social', href: '/social', icon: Share2, capability: 'social', access: 'manager' },
+      { label: 'SEO', href: '/seo', icon: Search, capability: 'seo', access: 'manager' },
+    ],
+  },
+  {
+    section: 'Configure',
+    items: [
+      { label: 'Announcements', href: '/announcements', icon: Megaphone, capability: 'announcements' },
+      { label: 'Site details', href: '/settings/globals', icon: Sliders, access: 'manager' },
+      { label: 'Team members', href: '/team', icon: Users, capability: 'team', access: 'manager' },
+      { label: 'Settings', href: '/settings', icon: Settings, access: 'manager' },
     ],
   },
 ];
 
-const ADMIN_NAV: NavGroup = {
-  section: 'NE Admin',
-  items: [
-    { label: 'All Clients', href: '/admin', icon: ShieldCheck },
-  ],
-};
+export function canShowSidebarItem(item: NavItem, role: Role, capabilities: ClientCapabilities) {
+  if (item.capability && !capabilities[item.capability]) return false;
+  if (item.access === 'operator') return role === 'ne_admin';
+  if (item.access === 'manager') return role !== 'editor';
+  return true;
+}
 
 export default function Sidebar({
   clientName = 'Website Manager',
   clients = [],
   selectedClientId = null,
-  clientSlug = null,
   role = 'editor',
   isOpen = false,
   onClose,
   genericCollections = [],
+  capabilities,
 }: {
   clientName?: string;
   clients?: Client[];
   selectedClientId?: string | null;
-  clientSlug?: string | null;
   role?: Role;
   isOpen?: boolean;
   onClose?: () => void;
   genericCollections?: Pick<Collection, 'id' | 'name'>[];
+  capabilities: ClientCapabilities;
 }) {
-  const path   = usePathname();
+  const path = usePathname();
   const router = useRouter();
   const isAdmin = role === 'ne_admin';
+  const groups: NavGroup[] = isAdmin
+    ? [...NAVIGATION, { section: 'NE Admin', items: [{ label: 'All clients', href: '/admin', icon: ShieldCheck }] }]
+    : NAVIGATION;
 
   async function handleLogout() {
-    const supabase = createClient();
-    await supabase.auth.signOut();
+    await createClient().auth.signOut();
     router.push('/login');
     router.refresh();
   }
@@ -111,138 +119,63 @@ export default function Sidebar({
     router.refresh();
   }
 
-  const allNav = isAdmin ? [...NAV, ADMIN_NAV] : NAV;
-
   return (
-    <aside className={`sidebar${isOpen ? ' sidebar-open' : ''}`}>
-      {/* Logo */}
+    <aside className={`sidebar${isOpen ? ' sidebar-open' : ''}`} aria-label="Primary navigation">
       <div className="sidebar-logo">
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <img src="/logo-ne.png" alt="Neu Entity" style={{ height: 36, width: 'auto', flexShrink: 0, display: 'block' }} />
-          <div>
-            <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--fg1)', lineHeight: 1.1 }}>Website Manager</div>
-            <div style={{ fontSize: 10, color: 'var(--fg3)', marginTop: 2 }}>by Neu Entity</div>
-          </div>
+        <div className="sidebar-brand">
+          <NextImage src="/logo-ne.png" alt="Neu Entity" width={38} height={38} priority />
+          <span><strong>Website Manager</strong><small>by Neu Entity</small></span>
         </div>
-
-        {/* Client selector */}
-        <div style={{
-          marginTop: 14, padding: '9px 12px', background: 'var(--surface-2)',
-          borderRadius: 8, display: 'flex', alignItems: 'center', gap: 8,
-          border: '1px solid var(--border)',
-        }}>
-          <Globe size={14} color="var(--fg3)" />
-          {isAdmin && clients.length > 0 ? (
-            <select
-              value={selectedClientId ?? ''}
-              onChange={(event) => handleClientChange(event.target.value)}
-              aria-label="Select client"
-              style={{
-                flex: 1,
-                minWidth: 0,
-                border: 'none',
-                background: 'transparent',
-                color: 'var(--fg1)',
-                fontSize: 12,
-                fontWeight: 600,
-                outline: 'none',
-                cursor: 'pointer',
-              }}
-            >
-              {clients.map((client) => (
-                <option key={client.id} value={client.id}>{client.name}</option>
-              ))}
+        <div className="workspace-switcher">
+          <Globe size={15} aria-hidden="true" />
+          {isAdmin && clients.length ? (
+            <select value={selectedClientId ?? ''} onChange={(event) => handleClientChange(event.target.value)} aria-label="Select website workspace">
+              {clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}
             </select>
-          ) : (
-            <>
-              <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--fg1)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {clientName}
-              </span>
-              <ChevronDown size={13} color="var(--fg3)" />
-            </>
-          )}
+          ) : <span title={clientName}>{clientName}</span>}
+          <ChevronDown size={14} aria-hidden="true" />
         </div>
       </div>
 
-      {/* Nav */}
-      <nav style={{ flex: 1, paddingBottom: 16 }}>
-        {allNav.map((group) => (
-          <div key={group.section}>
-            <div className="sidebar-section-label">{group.section}</div>
-            {group.items.filter((item) => !(item.hideForEditor && role === 'editor') && !item.hidden && !item.hideForClientSlugs?.includes(clientSlug ?? '')).map((item) => {
-              const Icon = item.icon;
-              const active = path === item.href || path.startsWith(item.href + '/');
-              return (
-                <Link
-                  key={item.href}
-                  href={'soon' in item && item.soon ? '#' : item.href}
-                  className={`sidebar-link${active ? ' active' : ''}`}
-                  style={'soon' in item && item.soon ? { opacity: 0.5, cursor: 'default' } : {}}
-                  onClick={'soon' in item && item.soon ? (e) => e.preventDefault() : () => onClose?.()}
-                >
-                  <Icon size={16} />
-                  {item.label}
-                  {'soon' in item && item.soon && <span className="badge-cs">Soon</span>}
-                </Link>
-              );
-            })}
-            {/* Dynamic per-client collections — rendered right after "All
-                Collections" within the same Content section, indented and
-                using a generic Boxes icon for all of them (this app has no
-                existing name->lucide-icon lookup for the arbitrary strings
-                `collections.icon` stores, and building one for a single
-                sidebar list isn't worth it — every dynamic collection link
-                using the same icon as their shared parent "All Collections"
-                entry is a reasonable, low-cost simplification). */}
-            {group.section === 'Content' && clientSlug !== KAMAL_KARIM_SLUG && genericCollections.map((c) => {
-              const href = `/cms/collections/${c.id}`;
-              const active = path === href || path.startsWith(href + '/');
-              return (
-                <Link
-                  key={c.id}
-                  href={href}
-                  className={`sidebar-link${active ? ' active' : ''}`}
-                  style={{ paddingLeft: 40, fontSize: 12.5 }}
-                  onClick={() => onClose?.()}
-                >
-                  <Boxes size={14} />
-                  {c.name}
-                </Link>
-              );
-            })}
-          </div>
-        ))}
+      <nav className="sidebar-nav">
+        {groups.map((group) => {
+          const items = group.items.filter((item) =>
+            canShowSidebarItem(item, role, capabilities),
+          );
+          if (!items.length) return null;
+          return (
+            <div key={group.section} className="sidebar-group">
+              <div className="sidebar-section-label">{group.section}</div>
+              {items.map((item) => {
+                const Icon = item.icon;
+                const active = path === item.href || path.startsWith(`${item.href}/`);
+                return (
+                  <Link key={item.href} href={item.href} className={`sidebar-link${active ? ' active' : ''}`} aria-current={active ? 'page' : undefined} onClick={onClose}>
+                    <Icon size={17} />
+                    <span>{item.label}</span>
+                  </Link>
+                );
+              })}
+              {group.section === 'Content' && capabilities.collections && genericCollections.map((collection) => {
+                const href = `/cms/collections/${collection.id}`;
+                const active = path === href || path.startsWith(`${href}/`);
+                return (
+                  <Link key={collection.id} href={href} className={`sidebar-link${isAdmin ? ' sidebar-child-link' : ''}${active ? ' active' : ''}`} aria-current={active ? 'page' : undefined} onClick={onClose}>
+                    <Boxes size={15} />
+                    <span>{collection.name}</span>
+                  </Link>
+                );
+              })}
+            </div>
+          );
+        })}
       </nav>
 
-      {/* Footer */}
-      <div style={{ padding: '14px 20px', borderTop: '1px solid var(--sidebar-border)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-          <div style={{
-            width: 32, height: 32, borderRadius: '50%',
-            background: 'var(--ne-blue-bg)',
-            border: '1.5px solid var(--ne-blue-muted)',
-            display: 'grid', placeItems: 'center',
-            fontSize: 13, fontWeight: 700, color: 'var(--ne-blue)',
-          }}>
-            {isAdmin ? 'NE' : 'A'}
-          </div>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--fg1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {isAdmin ? 'Neu Entity' : 'Admin'}
-            </div>
-            <div style={{ fontSize: 10, color: 'var(--fg3)' }}>
-              {isAdmin ? 'Super Admin' : 'Content Manager'}
-            </div>
-          </div>
-          <button onClick={handleLogout} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg3)', padding: 4 }}>
-            <LogOut size={15} />
-          </button>
-        </div>
-        <div style={{ fontSize: 10, color: 'var(--fg3)', textAlign: 'center' }}>
-          Powered by{' '}
-          <a href="https://neuentity.com" target="_blank" rel="noopener" style={{ color: 'var(--ne-blue)', fontWeight: 600, textDecoration: 'none' }}>
-            Neu Entity
-          </a>
+      <div className="sidebar-footer">
+        <div className="sidebar-account">
+          <span className="sidebar-avatar">{isAdmin ? 'NE' : 'A'}</span>
+          <span><strong>{isAdmin ? 'Neu Entity' : 'Client team'}</strong><small>{isAdmin ? 'Administrator' : role.replace('_', ' ')}</small></span>
+          <button onClick={handleLogout} aria-label="Log out" title="Log out"><LogOut size={17} /></button>
         </div>
       </div>
     </aside>

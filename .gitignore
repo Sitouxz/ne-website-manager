@@ -50,5 +50,8 @@ next-env.d.ts
 # superpowers scratch (subagent-driven-development progress ledger)
 .superpowers/
 
+# local Impeccable design-tool state
+.impeccable/
+
 # worktrees
 .worktrees/

@@ -9,6 +9,35 @@ import Placeholder from '@tiptap/extension-placeholder';
 import { EditorToolbar } from './EditorToolbar';
 import MediaPicker from '@/components/MediaPicker';
 import type { MediaItem } from '@/app/api/media/route';
+import SortableList from '@/components/builder/SortableList';
+import { Copy, Trash2 } from 'lucide-react';
+
+type EditorBlock = {
+  type?: string;
+  attrs?: Record<string, unknown>;
+  content?: EditorBlock[];
+  text?: string;
+  [key: string]: unknown;
+};
+
+function blocksFrom(value: object | string | null): EditorBlock[] {
+  if (!value || typeof value === 'string' || !('content' in value)) return [];
+  const content = (value as { content?: unknown }).content;
+  return Array.isArray(content) ? content as EditorBlock[] : [];
+}
+
+function blockText(block: EditorBlock): string {
+  if (block.text) return block.text;
+  return block.content?.map(blockText).join('') ?? '';
+}
+
+function blockLabel(block: EditorBlock): string {
+  const names: Record<string, string> = {
+    paragraph: 'Paragraph', heading: `Heading ${block.attrs?.level ?? ''}`.trim(), image: 'Image',
+    bulletList: 'Bullet list', orderedList: 'Numbered list', blockquote: 'Quote', codeBlock: 'Code block', horizontalRule: 'Divider',
+  };
+  return names[block.type ?? ''] ?? 'Content block';
+}
 
 /**
  * Narrow imperative surface exposed via `ref`, instead of the raw Tiptap
@@ -114,6 +143,7 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(fun
   ref,
 ) {
   const [imagePickerOpen, setImagePickerOpen] = useState(false);
+  const [documentBlocks, setDocumentBlocks] = useState<EditorBlock[]>(() => blocksFrom(valueJson));
   const lastSyncedContentRef = useRef<string>(JSON.stringify(valueJson ?? fallbackHtml));
 
   const editor = useEditor({
@@ -144,6 +174,7 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(fun
     onUpdate: ({ editor }) => {
       const json = editor.getJSON();
       const html = editor.getHTML();
+      setDocumentBlocks((json.content ?? []) as EditorBlock[]);
       // Record this as "known" content before calling onChange, so that if
       // the parent stores it and passes it straight back as `valueJson`, the
       // resync effect below recognizes it as an echo rather than external
@@ -172,6 +203,7 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(fun
     // suppressed, so `lastSyncedContentRef` (already updated above) keeps
     // working for echo-detection.
     editor.commands.setContent(incoming, { emitUpdate: false });
+    setDocumentBlocks(blocksFrom(incoming));
   }, [editor, valueJson, fallbackHtml]);
 
   useImperativeHandle<RichTextEditorHandle, RichTextEditorHandle>(
@@ -200,6 +232,20 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(fun
     editor?.chain().focus().setImage({ src: item.url, alt: item.alt ?? undefined }).run();
   }
 
+  function applyBlocks(blocks: EditorBlock[]) {
+    editor?.commands.setContent({ type: 'doc', content: blocks }, { emitUpdate: true });
+  }
+
+  function duplicateBlock(index: number) {
+    const next = [...documentBlocks];
+    next.splice(index + 1, 0, structuredClone(documentBlocks[index]));
+    applyBlocks(next);
+  }
+
+  function removeBlock(index: number) {
+    applyBlocks(documentBlocks.filter((_, currentIndex) => currentIndex !== index));
+  }
+
   return (
     <div
       style={{
@@ -209,6 +255,24 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(fun
         overflow: 'hidden',
       }}
     >
+      {documentBlocks.length > 0 ? (
+        <div className="editor-block-outline" aria-label="Content block outline">
+          <div className="editor-block-outline-heading"><strong>Content blocks</strong><span>Drag to restructure the page</span></div>
+          <SortableList
+            items={documentBlocks}
+            getId={(_, index) => `content-block-${index}`}
+            getLabel={blockLabel}
+            onReorder={applyBlocks}
+            renderItem={(block, index) => (
+              <div className="editor-block-row">
+                <span><strong>{blockLabel(block)}</strong><small>Preview: {block.type === 'image' ? String(block.attrs?.alt || block.attrs?.src || 'Selected image') : blockText(block).trim().slice(0, 80) || 'Empty block'}</small></span>
+                <button type="button" onClick={() => duplicateBlock(index)} aria-label={`Duplicate ${blockLabel(block)}`} title="Duplicate block"><Copy size={14} /></button>
+                <button type="button" onClick={() => removeBlock(index)} aria-label={`Remove ${blockLabel(block)}`} title="Remove block"><Trash2 size={14} /></button>
+              </div>
+            )}
+          />
+        </div>
+      ) : null}
       <EditorToolbar editor={editor} onImageClick={() => setImagePickerOpen(true)} />
       <div style={{ padding: '14px 16px', minHeight: 200, color: 'var(--fg1)', fontSize: 14 }}>
         <EditorContent editor={editor} />

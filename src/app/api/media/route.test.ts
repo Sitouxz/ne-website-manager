@@ -48,9 +48,10 @@ function setSupabase(supabase: unknown) {
  */
 function adminMockFor(fixtures: Fixtures, opts: { uploadError?: { message: string } } = {}) {
   const base = mockSupabase(fixtures);
-  const uploadSpy = vi.fn(async (_path: string, _file: unknown, _options?: unknown) => ({
-    error: opts.uploadError ?? null,
-  }));
+  const uploadSpy = vi.fn(async (...args: [string, unknown, unknown?]) => {
+    void args;
+    return { error: opts.uploadError ?? null };
+  });
   const removeSpy = vi.fn(async () => ({ error: null }));
   const getPublicUrlSpy = vi.fn((path: string) => ({
     data: { publicUrl: `https://project.supabase.co/storage/v1/object/public/media/${path}` },
@@ -59,11 +60,10 @@ function adminMockFor(fixtures: Fixtures, opts: { uploadError?: { message: strin
   const supabase = {
     ...base,
     storage: {
-      from: (_bucket: string) => ({
-        upload: uploadSpy,
-        remove: removeSpy,
-        getPublicUrl: getPublicUrlSpy,
-      }),
+      from: (bucket: string) => {
+        void bucket;
+        return { upload: uploadSpy, remove: removeSpy, getPublicUrl: getPublicUrlSpy };
+      },
     },
   };
 

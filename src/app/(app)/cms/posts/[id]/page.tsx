@@ -2,6 +2,7 @@
 
 import Topbar from '@/components/Topbar';
 import Link from 'next/link';
+import Image from 'next/image';
 import { useEffect, useState, use, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import {
@@ -496,7 +497,7 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
       />
       <div className="page-body">
         {/* Breadcrumb + actions */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+        <div className="editor-action-bar">
           <Link href="/cms/posts" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--fg3)', textDecoration: 'none', fontWeight: 500 }}>
             <ArrowLeft size={14} /> Back to Posts
           </Link>
@@ -559,15 +560,15 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
                 confusing RLS-denial error. "Save Draft" above and the
                 sidebar's status-aware action button below remain available. */}
             {canPublish && (
-              <button className="btn-ne" onClick={() => handleSave('published')} disabled={saving}>
+              <button className="btn-ne" onClick={() => handleSave()} disabled={saving || isElevatedLocked} title={elevatedLockedTitle}>
                 {saving ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Send size={14} />}
-                {form.status === 'published' ? 'Update' : 'Publish'}
+                {form.status === 'scheduled' ? 'Schedule post' : form.status === 'in_review' ? 'Submit for review' : form.status === 'published' ? 'Publish changes' : 'Save changes'}
               </button>
             )}
           </div>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: 20, alignItems: 'start' }}>
+        <div className="editor-layout">
           {/* Main editor */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             {/* Title + slug */}
@@ -733,7 +734,7 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
                     style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '8px 10px', fontSize: 13, color: 'var(--fg1)', background: 'var(--surface)' }} />
                 </div>
                 <button
-                  className="btn-ne"
+                  className="btn-ne editor-duplicate-action"
                   style={{ width: '100%', justifyContent: 'center' }}
                   onClick={() => handleSave()}
                   // Disabled (not just hidden) whenever `isElevatedLocked` —
@@ -764,7 +765,7 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
               <div style={{ padding: '14px 16px' }}>
                 {form.featuredImg ? (
                   <div style={{ position: 'relative' }}>
-                    <img src={form.featuredImg} alt="" style={{ width: '100%', borderRadius: 'var(--r-sm)', objectFit: 'cover', height: 140 }} />
+                    <Image unoptimized src={form.featuredImg} alt="" width={480} height={140} style={{ width: '100%', borderRadius: 'var(--r-sm)', objectFit: 'cover', height: 140 }} />
                     <button onClick={() => setShowImagePicker(true)}
                       style={{ position: 'absolute', bottom: 6, left: 6, background: 'rgba(0,0,0,.6)', border: 'none', borderRadius: 'var(--r-sm)', padding: '4px 10px', cursor: 'pointer', color: '#fff', fontSize: 11, fontWeight: 600 }}>
                       Change

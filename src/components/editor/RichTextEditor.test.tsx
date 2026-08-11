@@ -169,4 +169,21 @@ describe('RichTextEditor', () => {
     expect(await screen.findByText('Hello world!')).toBeTruthy();
     expect(screen.queryByText('Hello world')).toBeNull();
   });
+
+  it('duplicates and removes approved content blocks through the outline', async () => {
+    const onChange = vi.fn();
+    const valueJson = {
+      type: 'doc',
+      content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Reusable block' }] }],
+    };
+    render(<RichTextEditor valueJson={valueJson} fallbackHtml="" onChange={onChange} />);
+
+    (await screen.findByRole('button', { name: 'Duplicate Paragraph' })).click();
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    expect(onChange.mock.calls.at(-1)?.[0].content).toHaveLength(2);
+
+    const removeButtons = await screen.findAllByRole('button', { name: 'Remove Paragraph' });
+    removeButtons[0].click();
+    await waitFor(() => expect(onChange.mock.calls.at(-1)?.[0].content).toHaveLength(1));
+  });
 });

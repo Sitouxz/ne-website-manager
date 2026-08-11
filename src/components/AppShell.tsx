@@ -4,14 +4,15 @@ import { useState } from 'react';
 import Sidebar from './Sidebar';
 import { ConfirmProvider } from './ConfirmDialog';
 import { Toaster } from './ui/sonner';
-import type { Client, Collection, Role } from '@/lib/supabase/types';
+import type { Client, ClientCapabilities, Collection, Role } from '@/lib/supabase/types';
 
 export default function AppShell({
   children,
   clientName,
   clients,
   selectedClientId,
-  clientSlug = null,
+  websiteUrl = null,
+  capabilities,
   role,
   genericCollections = [],
 }: {
@@ -19,7 +20,8 @@ export default function AppShell({
   clientName: string;
   clients: Client[];
   selectedClientId: string | null;
-  clientSlug?: string | null;
+  websiteUrl?: string | null;
+  capabilities: ClientCapabilities;
   role: Role;
   genericCollections?: Pick<Collection, 'id' | 'name'>[];
 }) {
@@ -37,11 +39,11 @@ export default function AppShell({
         clientName={clientName}
         clients={clients}
         selectedClientId={selectedClientId}
-        clientSlug={clientSlug}
         role={role}
         isOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
         genericCollections={genericCollections}
+        capabilities={capabilities}
       />
 
       <div className="app-layout">
@@ -50,7 +52,7 @@ export default function AppShell({
         <div data-sidebar-toggle="true" style={{ display: 'contents' }}>
           {/* Use a global custom event to communicate hamburger click */}
           <MobileMenuProvider onToggle={() => setSidebarOpen((o) => !o)}>
-            <ClientSelectionProvider selectedClientId={selectedClientId} clientName={clientName}>
+            <ClientSelectionProvider selectedClientId={selectedClientId} clientName={clientName} websiteUrl={websiteUrl}>
               {/* Confirmation dialogs and toasts are app-wide: every CMS
                   screen needs to ask "are you sure?" and to report the
                   outcome of a save. Mounted once here so no screen has to
@@ -72,9 +74,10 @@ import { createContext, useContext } from 'react';
 const MobileMenuContext = createContext<{ onToggle: () => void }>({ onToggle: () => {} });
 export function useMobileMenu() { return useContext(MobileMenuContext); }
 
-const ClientSelectionContext = createContext<{ selectedClientId: string | null; clientName: string }>({
+const ClientSelectionContext = createContext<{ selectedClientId: string | null; clientName: string; websiteUrl: string | null }>({
   selectedClientId: null,
   clientName: 'Website Manager',
+  websiteUrl: null,
 });
 export function useSelectedClient() { return useContext(ClientSelectionContext); }
 
@@ -90,13 +93,15 @@ function ClientSelectionProvider({
   children,
   selectedClientId,
   clientName,
+  websiteUrl,
 }: {
   children: React.ReactNode;
   selectedClientId: string | null;
   clientName: string;
+  websiteUrl: string | null;
 }) {
   return (
-    <ClientSelectionContext.Provider value={{ selectedClientId, clientName }}>
+    <ClientSelectionContext.Provider value={{ selectedClientId, clientName, websiteUrl }}>
       {children}
     </ClientSelectionContext.Provider>
   );

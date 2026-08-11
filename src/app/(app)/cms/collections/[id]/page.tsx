@@ -4,9 +4,7 @@ import Topbar from '@/components/Topbar';
 import Link from 'next/link';
 import { use, useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import {
-  ArrowLeft, Plus, Trash2, ChevronUp, ChevronDown, Loader2, Settings, Boxes,
-} from 'lucide-react';
+import { ArrowLeft, Plus, Trash2, Loader2, Settings, Boxes, Copy } from 'lucide-react';
 import { toast } from 'sonner';
 import { useConfirm } from '@/components/ConfirmDialog';
 import { errorMessage } from '@/lib/errors';
@@ -14,6 +12,7 @@ import { statusDescription, statusLabel } from '@/lib/content-status';
 import { EmptyState } from '@/components/EmptyState';
 import { createClient } from '@/lib/supabase/client';
 import type { Collection, CollectionItem } from '@/lib/supabase/types';
+import SortableList from '@/components/builder/SortableList';
 
 function fmtDate(iso: string) {
   return new Date(iso).toLocaleDateString('en-SG', { day: 'numeric', month: 'short', year: 'numeric' });
@@ -58,6 +57,7 @@ export default function CollectionEntriesPage({ params }: { params: Promise<{ id
   const [items,      setItems]      = useState<CollectionItem[]>([]);
   const [creating,   setCreating]   = useState(false);
   const [deleting,   setDeleting]   = useState<string | null>(null);
+  const [duplicating, setDuplicating] = useState<string | null>(null);
   const [error,      setError]      = useState('');
   const [clientId,   setClientId]   = useState<string | null>(null);
 
@@ -144,12 +144,37 @@ export default function CollectionEntriesPage({ params }: { params: Promise<{ id
     toast.success(`"${name}" was deleted.`);
   }
 
-  async function moveItem(index: number, dir: -1 | 1) {
-    const target = index + dir;
-    if (target < 0 || target >= items.length) return;
+  async function handleDuplicate(item: CollectionItem) {
+    setDuplicating(item.id);
+    setError('');
+    const supabase = createClient();
+    const maxSort = items.reduce((max, current) => Math.max(max, current.sort_order), -1);
+    const copyNumber = items.reduce((max, current) => {
+      const match = new RegExp(`^${item.slug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-copy-(\\d+)$`).exec(current.slug);
+      return Math.max(max, match ? Number(match[1]) : 0);
+    }, 0) + 1;
+    const { data: created, error: duplicateError } = await supabase
+      .from('collection_items')
+      .insert({
+        collection_id: item.collection_id,
+        client_id: item.client_id,
+        slug: `${item.slug}-copy-${copyNumber}`,
+        status: 'draft',
+        data: item.data,
+        sort_order: maxSort + 1,
+      })
+      .select()
+      .single();
+    setDuplicating(null);
+    if (duplicateError) {
+      setError(errorMessage(duplicateError, { entity: 'entry', action: 'save' }));
+      return;
+    }
+    toast.success(`Duplicated “${deriveTitle(item, collection?.options?.title_field)}” as a draft.`);
+    router.push(`/cms/collections/${item.collection_id}/entries/${created.id}`);
+  }
 
-    const next = [...items];
-    [next[index], next[target]] = [next[target], next[index]];
+  async function reorderItems(next: CollectionItem[]) {
     setItems(next);
 
     // Persist EVERY item's sort_order as its new array index, not just the
@@ -163,9 +188,11 @@ export default function CollectionEntriesPage({ params }: { params: Promise<{ id
     // to N writes per move — an acceptable tradeoff for collection sizes
     // this UI is meant for.
     const supabase = createClient();
-    await Promise.all(
+    const results = await Promise.all(
       next.map((item, i) => supabase.from('collection_items').update({ sort_order: i }).eq('id', item.id))
     );
+    const failed = results.find((result) => result.error);
+    if (failed?.error) throw new Error(errorMessage(failed.error, { entity: 'entry', action: 'save' }));
   }
 
   if (loading) {
@@ -248,76 +275,44 @@ export default function CollectionEntriesPage({ params }: { params: Promise<{ id
           </div>
         )}
 
-        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
-          <div className="table-responsive">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th style={{ width: 60 }}></th>
-                  <th style={{ paddingLeft: 0 }}>Title</th>
-                  <th>Status</th>
-                  <th>Updated</th>
-                  <th style={{ width: 40 }}></th>
-                </tr>
-              </thead>
-              <tbody>
-                {items.length === 0 ? (
-                  <tr>
-                    <td colSpan={5} style={{ padding: 0 }}>
-                      <EmptyState
-                        icon={Boxes}
-                        title={`No ${collection.name.toLowerCase()} yet`}
-                        body={`Anything you add here appears on your website once you publish it.`}
-                        actionLabel={`Add your first ${collection.name_singular?.toLowerCase() || 'entry'}`}
-                        onAction={handleNewEntry}
-                      />
-                    </td>
-                  </tr>
-                ) : items.map((item, i) => (
-                  <tr key={item.id}>
-                    <td>
-                      <div style={{ display: 'flex', flexDirection: 'column' }}>
-                        <button
-                          onClick={() => moveItem(i, -1)}
-                          disabled={i === 0}
-                          aria-label="Move up"
-                          style={{ background: 'none', border: 'none', cursor: i === 0 ? 'default' : 'pointer', color: i === 0 ? 'var(--border)' : 'var(--fg3)', padding: 2 }}
-                        >
-                          <ChevronUp size={14} />
-                        </button>
-                        <button
-                          onClick={() => moveItem(i, 1)}
-                          disabled={i === items.length - 1}
-                          aria-label="Move down"
-                          style={{ background: 'none', border: 'none', cursor: i === items.length - 1 ? 'default' : 'pointer', color: i === items.length - 1 ? 'var(--border)' : 'var(--fg3)', padding: 2 }}
-                        >
-                          <ChevronDown size={14} />
-                        </button>
-                      </div>
-                    </td>
-                    <td style={{ paddingLeft: 0 }}>
-                      <Link href={`/cms/collections/${collection.id}/entries/${item.id}`} style={{ color: 'var(--fg1)', textDecoration: 'none', fontWeight: 600, fontSize: 13.5 }}>
-                        {deriveTitle(item, titleField)}
-                      </Link>
-                      <div style={{ fontSize: 11, color: 'var(--fg3)', marginTop: 1 }}>/{item.slug}</div>
-                    </td>
-                    <td><span className={`status-pill ${item.status}`} title={statusDescription(item.status)}>{statusLabel(item.status)}</span></td>
-                    <td style={{ color: 'var(--fg3)', fontSize: 12 }}>{fmtDate(item.updated_at)}</td>
-                    <td>
-                      <button
-                        onClick={() => handleDelete(item.id)}
-                        disabled={deleting === item.id}
-                        aria-label={`Delete ${deriveTitle(item, titleField)}`}
-                        style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--ne-danger)', padding: 6 }}
-                      >
-                        {deleting === item.id ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Trash2 size={14} />}
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+        <div className="entry-sort-list">
+          {items.length === 0 ? (
+            <EmptyState
+              icon={Boxes}
+              title={`No ${collection.name.toLowerCase()} yet`}
+              body="Start from a blank entry. Once it exists, you can duplicate it as a reusable starting point for similar content."
+              actionLabel={`Add your first ${collection.name_singular?.toLowerCase() || 'entry'}`}
+              onAction={handleNewEntry}
+            />
+          ) : (
+            <>
+              <div className="entry-sort-header"><span>Entry</span><span>Status</span><span>Updated</span><span /></div>
+              <SortableList
+                items={items}
+                getId={(item) => item.id}
+                getLabel={(item) => deriveTitle(item, titleField)}
+                onReorder={reorderItems}
+                renderItem={(item) => (
+                  <div className="entry-sort-row">
+                    <span>
+                      <Link href={`/cms/collections/${collection.id}/entries/${item.id}`}>{deriveTitle(item, titleField)}</Link>
+                      <small>/{item.slug}</small>
+                    </span>
+                    <span><span className={`status-pill ${item.status}`} title={statusDescription(item.status)}>{statusLabel(item.status)}</span></span>
+                    <span className="entry-updated">{fmtDate(item.updated_at)}</span>
+                    <span className="entry-row-actions">
+                    <button onClick={() => handleDuplicate(item)} disabled={duplicating === item.id} aria-label={`Duplicate ${deriveTitle(item, titleField)}`} title="Duplicate as draft">
+                      {duplicating === item.id ? <Loader2 size={15} style={{ animation: 'spin .6s linear infinite' }} /> : <Copy size={15} />}
+                    </button>
+                    <button onClick={() => handleDelete(item.id)} disabled={deleting === item.id} aria-label={`Delete ${deriveTitle(item, titleField)}`}>
+                      {deleting === item.id ? <Loader2 size={15} style={{ animation: 'spin .6s linear infinite' }} /> : <Trash2 size={15} />}
+                    </button>
+                    </span>
+                  </div>
+                )}
+              />
+            </>
+          )}
         </div>
       </div>
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>

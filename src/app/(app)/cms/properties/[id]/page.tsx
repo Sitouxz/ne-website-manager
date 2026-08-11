@@ -2,6 +2,7 @@
 
 import Topbar from '@/components/Topbar';
 import Link from 'next/link';
+import Image from 'next/image';
 import { useState, useEffect, use } from 'react';
 import { useRouter } from 'next/navigation';
 import { ArrowLeft, Save, Send, Loader2, Plus, X, Image as ImageIcon } from 'lucide-react';
@@ -11,6 +12,7 @@ import { logActivity } from '@/lib/activity';
 import { firePublishNotify } from '@/lib/publish-client';
 import { errorMessage } from '@/lib/errors';
 import MediaPicker from '@/components/MediaPicker';
+import SortableList from '@/components/builder/SortableList';
 import type { MediaItem } from '@/app/api/media/route';
 
 const ACTIVITY_LABELS: Record<string, string> = {
@@ -78,7 +80,12 @@ export default function PropertyEditor({ params }: { params: Promise<{ id: strin
   // MediaPicker: one instance, `pickerMode` tracks which field it's filling.
   const [pickerMode, setPickerMode] = useState<'hero' | 'gallery' | null>(null);
 
-  const { selectedClientId } = useSelectedClient();
+  const { selectedClientId, websiteUrl } = useSelectedClient();
+
+  const resolveMediaUrl = (value: string) => {
+    if (!value.startsWith('/') || !websiteUrl) return value;
+    return `${websiteUrl.replace(/\/$/, '')}${value}`;
+  };
 
   const slugify = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 
@@ -280,6 +287,9 @@ export default function PropertyEditor({ params }: { params: Promise<{ id: strin
     }
   }
 
+  const completionChecks = [form.name, form.address, form.property_type, form.price, form.size_sqft, form.story, form.hero_url, form.seo_title || form.name];
+  const completionPercent = Math.round((completionChecks.filter((value) => String(value).trim()).length / completionChecks.length) * 100);
+
   if (loading) {
     return (
       <>
@@ -328,12 +338,20 @@ export default function PropertyEditor({ params }: { params: Promise<{ id: strin
           </div>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: 20, alignItems: 'start' }}>
+        <div className="editor-layout">
           {/* Main column */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
 
+            <nav className="property-workflow-nav" aria-label="Listing editor sections">
+              <div><strong>{completionPercent}% complete</strong><span>Finish the essentials before publishing.</span></div>
+              <div className="property-workflow-links">
+                <a href="#property-overview">Overview</a><a href="#property-location">Location</a><a href="#property-details">Details</a><a href="#property-features">Features</a><a href="#property-media">Media</a><a href="#property-seo">SEO</a>
+              </div>
+              <span className="property-progress"><i style={{ width: `${completionPercent}%` }} /></span>
+            </nav>
+
             {/* Name + slug */}
-            <div style={cardStyle}>
+            <div id="property-overview" className="property-editor-section" style={cardStyle}>
               <input
                 value={form.name}
                 onChange={(e) => setForm((f) => ({ ...f, name: e.target.value, slug: slugify(e.target.value) }))}
@@ -348,7 +366,7 @@ export default function PropertyEditor({ params }: { params: Promise<{ id: strin
             </div>
 
             {/* Location */}
-            <div style={cardStyle}>
+            <div id="property-location" className="property-editor-section" style={cardStyle}>
               <div style={sectionTitle}>Location</div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                 <Field label="Address">
@@ -367,7 +385,7 @@ export default function PropertyEditor({ params }: { params: Promise<{ id: strin
             </div>
 
             {/* Specs */}
-            <div style={cardStyle}>
+            <div id="property-details" className="property-editor-section" style={cardStyle}>
               <div style={sectionTitle}>Specifications</div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
                 <Field label="Property Type">
@@ -401,7 +419,7 @@ export default function PropertyEditor({ params }: { params: Promise<{ id: strin
             </div>
 
             {/* Description */}
-            <div style={cardStyle}>
+            <div className="property-editor-section" style={cardStyle}>
               <div style={sectionTitle}>Description</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                 <Field label="Story (main narrative)">
@@ -421,10 +439,15 @@ export default function PropertyEditor({ params }: { params: Promise<{ id: strin
             </div>
 
             {/* Highlights */}
-            <div style={cardStyle}>
+            <div id="property-features" className="property-editor-section" style={cardStyle}>
               <div style={sectionTitle}>Highlights</div>
-              {form.highlights.map((h, i) => (
-                <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginBottom: 8 }}>
+              <SortableList
+                items={form.highlights}
+                getId={(_, index) => `highlight-${index}`}
+                getLabel={(highlight) => highlight.label || 'highlight'}
+                onReorder={(highlights) => set('highlights', highlights)}
+                renderItem={(h, i) => (
+                <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', padding: 8 }}>
                   <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '140px 1fr', gap: 8 }}>
                     <input value={h.label} onChange={(e) => {
                       const hl = [...form.highlights]; hl[i] = { ...hl[i], label: e.target.value };
@@ -440,7 +463,8 @@ export default function PropertyEditor({ params }: { params: Promise<{ id: strin
                     <X size={14} />
                   </button>
                 </div>
-              ))}
+                )}
+              />
               <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
                 <input value={newHlLabel} onChange={(e) => setNewHlLabel(e.target.value)} style={{ ...inputStyle, flex: '0 0 140px' }} placeholder="Label" />
                 <input value={newHlBody} onChange={(e) => setNewHlBody(e.target.value)} style={{ ...inputStyle, flex: 1 }} placeholder="Description"
@@ -502,14 +526,14 @@ export default function PropertyEditor({ params }: { params: Promise<{ id: strin
             </div>
 
             {/* Media */}
-            <div style={cardStyle}>
+            <div id="property-media" className="property-editor-section" style={cardStyle}>
               <div style={sectionTitle}>Media</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                 <div>
                   <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--fg3)', marginBottom: 5 }}>Hero Image</div>
                   {form.hero_url ? (
                     <div style={{ position: 'relative', marginBottom: 12 }}>
-                      <img src={form.hero_url} alt={form.hero_alt} style={{ width: '100%', maxHeight: 200, objectFit: 'cover', borderRadius: 'var(--r-sm)', display: 'block' }} />
+                      <Image unoptimized src={resolveMediaUrl(form.hero_url)} alt={form.hero_alt} width={900} height={200} style={{ width: '100%', height: 200, objectFit: 'cover', borderRadius: 'var(--r-sm)', display: 'block' }} />
                       <button onClick={() => setPickerMode('hero')}
                         style={{ position: 'absolute', bottom: 8, left: 8, background: 'rgba(0,0,0,.6)', border: 'none', borderRadius: 'var(--r-sm)', padding: '5px 12px', cursor: 'pointer', color: '#fff', fontSize: 11.5, fontWeight: 600 }}>
                         Change
@@ -544,7 +568,7 @@ export default function PropertyEditor({ params }: { params: Promise<{ id: strin
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
                     {form.gallery.map((g, i) => (
                       <div key={i} style={{ position: 'relative', width: 80, height: 80 }}>
-                        <img src={g.src} alt={g.alt} style={{ width: 80, height: 80, objectFit: 'cover', borderRadius: 'var(--r-sm)', display: 'block' }} />
+                        <Image unoptimized src={resolveMediaUrl(g.src)} alt={g.alt} width={80} height={80} style={{ width: 80, height: 80, objectFit: 'cover', borderRadius: 'var(--r-sm)', display: 'block' }} />
                         <button onClick={() => set('gallery', form.gallery.filter((_, j) => j !== i))}
                           style={{ position: 'absolute', top: 2, right: 2, background: 'rgba(0,0,0,.65)', border: 'none', borderRadius: '50%', width: 18, height: 18, cursor: 'pointer', color: '#fff', display: 'grid', placeItems: 'center' }}>
                           <X size={10} />
@@ -574,7 +598,7 @@ export default function PropertyEditor({ params }: { params: Promise<{ id: strin
             </div>
 
             {/* SEO */}
-            <div style={cardStyle}>
+            <div id="property-seo" className="property-editor-section" style={cardStyle}>
               <div style={sectionTitle}>SEO Settings</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                 <Field label="SEO Title">
@@ -633,7 +657,7 @@ export default function PropertyEditor({ params }: { params: Promise<{ id: strin
             {form.hero_url && (
               <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
                 <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', fontWeight: 700, fontSize: 13 }}>Hero Preview</div>
-                <img src={form.hero_url} alt={form.hero_alt} style={{ width: '100%', height: 160, objectFit: 'cover', display: 'block' }} />
+                <Image unoptimized loading="eager" src={resolveMediaUrl(form.hero_url)} alt={form.hero_alt} width={480} height={160} style={{ width: '100%', height: 160, objectFit: 'cover', display: 'block' }} />
               </div>
             )}
 

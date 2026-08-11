@@ -3,9 +3,7 @@
 import Topbar from '@/components/Topbar';
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
-import {
-  Plus, Trash2, ChevronUp, ChevronDown, Loader2, Save, CheckCircle, X, Inbox, Mail,
-} from 'lucide-react';
+import { Plus, Trash2, Loader2, Save, CheckCircle, X, Inbox, Mail } from 'lucide-react';
 import { toast } from 'sonner';
 import { createClient } from '@/lib/supabase/client';
 import { useConfirm } from '@/components/ConfirmDialog';
@@ -14,6 +12,7 @@ import { useSelectedClient } from '@/components/AppShell';
 import type { Form } from '@/lib/supabase/types';
 import type { FieldDef, FieldType } from '@/lib/collections/types';
 import { validateFieldDefs } from '@/lib/collections/validate';
+import SortableList from '@/components/builder/SortableList';
 
 const FIELD_TYPES: { value: FieldType; label: string }[] = [
   { value: 'text',        label: 'Text' },
@@ -85,6 +84,21 @@ export default function FormsPage() {
     const timer = window.setTimeout(() => fetchForms(), 0);
     return () => window.clearTimeout(timer);
   }, [fetchForms]);
+
+  useEffect(() => {
+    if (!showNewDialog) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setShowNewDialog(false);
+        setNewName('');
+        setNewSlug('');
+        setSlugTouched(false);
+        setCreateError('');
+      }
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [showNewDialog]);
 
   function handleNameChange(value: string) {
     setNewName(value);
@@ -252,11 +266,11 @@ export default function FormsPage() {
       </div>
 
       {showNewDialog && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.4)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-lg)', padding: '28px 32px', width: 440, boxShadow: '0 16px 48px rgba(0,0,0,.15)' }}>
+        <div className="dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) closeNewDialog(); }}>
+          <div role="dialog" aria-modal="true" aria-labelledby="new-form-title" className="dialog-panel" style={{ width: 440 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-              <div style={{ fontWeight: 800, fontSize: 16 }}>New Form</div>
-              <button onClick={closeNewDialog} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg3)' }}><X size={18} /></button>
+              <div id="new-form-title" style={{ fontWeight: 800, fontSize: 16 }}>New Form</div>
+              <button aria-label="Close new form dialog" onClick={closeNewDialog} className="icon-button"><X size={18} /></button>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
               {createError && (
@@ -265,8 +279,9 @@ export default function FormsPage() {
                 </div>
               )}
               <div>
-                <label style={labelStyle}>Name</label>
+                <label htmlFor="new-form-name" style={labelStyle}>Name</label>
                 <input
+                  id="new-form-name"
                   value={newName}
                   onChange={(e) => handleNameChange(e.target.value)}
                   placeholder="Contact Us"
@@ -275,8 +290,9 @@ export default function FormsPage() {
                 />
               </div>
               <div>
-                <label style={labelStyle}>Slug</label>
+                <label htmlFor="new-form-slug" style={labelStyle}>Slug</label>
                 <input
+                  id="new-form-slug"
                   value={newSlug}
                   onChange={(e) => { setNewSlug(e.target.value); setSlugTouched(true); }}
                   placeholder="contact"
@@ -367,14 +383,8 @@ function FormEditor({ form, onSaved }: { form: Form; onSaved: (updated: Form) =>
     setSaved(false);
   }
 
-  function moveField(index: number, dir: -1 | 1) {
-    setFields((prev) => {
-      const target = index + dir;
-      if (target < 0 || target >= prev.length) return prev;
-      const next = [...prev];
-      [next[index], next[target]] = [next[target], next[index]];
-      return next;
-    });
+  function reorderFields(next: FieldDef[]) {
+    setFields(next);
     setSaved(false);
   }
 
@@ -433,6 +443,7 @@ function FormEditor({ form, onSaved }: { form: Form; onSaved: (updated: Form) =>
       )}
 
       {/* Fields */}
+      <div className="form-builder-grid">
       <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
         <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={{ fontWeight: 700, fontSize: 14 }}>Fields</div>
@@ -503,38 +514,55 @@ function FormEditor({ form, onSaved }: { form: Form; onSaved: (updated: Form) =>
             No fields yet. Add your first field above.
           </div>
         ) : (
-          <div>
-            {fields.map((f, i) => (
-              <div key={f.key} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 20px', borderTop: i === 0 ? 'none' : '1px solid var(--border)' }}>
-                <div style={{ display: 'flex', flexDirection: 'column' }}>
-                  <button onClick={() => moveField(i, -1)} disabled={i === 0} style={{ background: 'none', border: 'none', cursor: i === 0 ? 'default' : 'pointer', color: i === 0 ? 'var(--border)' : 'var(--fg3)', padding: 2 }} aria-label="Move up">
-                    <ChevronUp size={14} />
-                  </button>
-                  <button onClick={() => moveField(i, 1)} disabled={i === fields.length - 1} style={{ background: 'none', border: 'none', cursor: i === fields.length - 1 ? 'default' : 'pointer', color: i === fields.length - 1 ? 'var(--border)' : 'var(--fg3)', padding: 2 }} aria-label="Move down">
-                    <ChevronDown size={14} />
-                  </button>
-                </div>
+          <SortableList
+            items={fields}
+            getId={(field) => field.key}
+            getLabel={(field) => field.label}
+            onReorder={reorderFields}
+            renderItem={(field) => (
+              <div style={{ minHeight: 58, display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px' }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                    <span style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--fg1)' }}>{f.label}</span>
-                    <code style={{ fontSize: 11, color: 'var(--fg3)' }}>{f.key}</code>
+                    <span style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--fg1)' }}>{field.label}</span>
+                    <code style={{ fontSize: 11, color: 'var(--fg3)' }}>{field.key}</code>
                     <span style={{ fontSize: 11, background: 'var(--surface-3)', padding: '2px 7px', borderRadius: 99, color: 'var(--fg2)', fontWeight: 500 }}>
-                      {FIELD_TYPES.find((t) => t.value === f.type)?.label ?? f.type}
+                      {FIELD_TYPES.find((type) => type.value === field.type)?.label ?? field.type}
                     </span>
-                    {f.required && <span style={{ fontSize: 11, color: 'var(--ne-danger)', fontWeight: 600 }}>Required</span>}
-                    {f.key === honeypotField && <span style={{ fontSize: 11, color: 'var(--ne-danger)', fontWeight: 600 }}>⚠ Same as honeypot key</span>}
+                    {field.required ? <span style={{ fontSize: 11, color: 'var(--ne-danger)', fontWeight: 600 }}>Required</span> : null}
+                    {field.key === honeypotField ? <span style={{ fontSize: 11, color: 'var(--ne-danger)', fontWeight: 600 }}>Same as honeypot key</span> : null}
                   </div>
-                  {(f.type === 'select' || f.type === 'multiselect') && f.options && f.options.length > 0 && (
-                    <div style={{ fontSize: 11.5, color: 'var(--fg3)', marginTop: 2 }}>Options: {f.options.join(', ')}</div>
-                  )}
+                  {(field.type === 'select' || field.type === 'multiselect') && field.options?.length ? <div style={{ fontSize: 11.5, color: 'var(--fg3)', marginTop: 2 }}>Options: {field.options.join(', ')}</div> : null}
                 </div>
-                <button onClick={() => handleRemoveField(f.key)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--ne-danger)', padding: 6, flexShrink: 0 }} aria-label={`Remove ${f.label}`}>
-                  <Trash2 size={14} />
+                <button onClick={() => handleRemoveField(field.key)} style={{ width: 40, height: 40, display: 'grid', placeItems: 'center', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--ne-danger)', flexShrink: 0 }} aria-label={`Remove ${field.label}`}>
+                  <Trash2 size={15} />
                 </button>
               </div>
-            ))}
-          </div>
+            )}
+          />
         )}
+      </div>
+
+      <aside className="form-live-preview" aria-label="Form preview">
+        <div className="form-live-preview-header">
+          <span>Live preview</span>
+          <span>{fields.length} fields</span>
+        </div>
+        <div className="form-live-preview-canvas">
+          <strong>{form.name}</strong>
+          <p>This is how the form structure will feel to a visitor.</p>
+          {fields.length === 0 ? (
+            <div className="form-preview-empty">Drag fields here to build the form.</div>
+          ) : fields.map((field) => (
+            <label key={field.key} className="form-preview-field">
+              <span>{field.label}{field.required ? ' *' : ''}</span>
+              {field.type === 'textarea' ? <textarea disabled rows={3} /> : field.type === 'boolean' ? <input disabled type="checkbox" /> : field.type === 'select' || field.type === 'multiselect' ? (
+                <select disabled multiple={field.type === 'multiselect'}><option>Select an option</option>{field.options?.map((option) => <option key={option}>{option}</option>)}</select>
+              ) : <input disabled type={field.type === 'email' ? 'email' : field.type === 'number' ? 'number' : field.type === 'date' ? 'date' : field.type === 'url' ? 'url' : 'text'} />}
+            </label>
+          ))}
+          <button type="button" disabled className="btn-ne">Submit</button>
+        </div>
+      </aside>
       </div>
 
       {/* Honeypot + notify emails */}

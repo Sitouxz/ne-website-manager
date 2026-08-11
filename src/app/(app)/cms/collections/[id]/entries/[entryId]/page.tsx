@@ -412,7 +412,7 @@ export default function CollectionEntryEditor({
           </div>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: 20, alignItems: 'start' }}>
+        <div className="editor-layout">
           {/* Fields */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             {collection.fields.length === 0 ? (

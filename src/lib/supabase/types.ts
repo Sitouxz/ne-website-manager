@@ -27,8 +27,24 @@ export interface Client {
   github_repo: string | null;
   plan: string;
   is_active: boolean;
+  capabilities?: Partial<ClientCapabilities> | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface ClientCapabilities {
+  posts: boolean;
+  pages: boolean;
+  properties: boolean;
+  media: boolean;
+  collections: boolean;
+  navigation: boolean;
+  forms: boolean;
+  announcements: boolean;
+  analytics: boolean;
+  social: boolean;
+  seo: boolean;
+  team: boolean;
 }
 
 /**

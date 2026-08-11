@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { Eye, EyeOff, KeyRound, AlertCircle, Loader2, CheckCircle } from 'lucide-react';
@@ -148,7 +149,7 @@ export default function AcceptInvitePage() {
         boxShadow: '0 8px 32px rgba(0,0,0,.08)',
       }}>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, marginBottom: 20 }}>
-          <img src="/logo-ne.png" alt="Neu Entity" style={{ height: 80, width: 'auto', display: 'block' }} />
+          <Image src="/logo-ne.png" alt="Neu Entity" width={160} height={80} priority style={{ height: 80, width: 'auto', display: 'block' }} />
           <div style={{ fontSize: 11, color: 'var(--fg3)', letterSpacing: '0.05em' }}>Website Manager</div>
         </div>
 

@@ -64,6 +64,11 @@ export default function AdminPage() {
     setCreating(false);
   }
 
+  function openClientWorkspace(clientId: string, destination: '/settings' | '/team') {
+    document.cookie = `ne_selected_client_id=${encodeURIComponent(clientId)}; path=/; max-age=31536000; samesite=lax`;
+    window.location.assign(destination);
+  }
+
   return (
     <>
       <Topbar title="NE Admin" subtitle="All managed clients" />
@@ -166,10 +171,20 @@ export default function AdminPage() {
                     {new Date(c.created_at).toLocaleDateString('en-SG', { day: 'numeric', month: 'short', year: 'numeric' })}
                   </td>
                   <td style={{ display: 'flex', gap: 6, padding: '14px 12px' }}>
-                    <button style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 6, padding: '5px 8px', cursor: 'pointer', color: 'var(--fg2)' }}>
+                    <button
+                      aria-label={`Edit ${c.name}`}
+                      title={`Edit ${c.name}`}
+                      onClick={() => openClientWorkspace(c.id, '/settings')}
+                      style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 6, padding: '5px 8px', cursor: 'pointer', color: 'var(--fg2)' }}
+                    >
                       <Edit size={13} />
                     </button>
-                    <button style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 6, padding: '5px 8px', cursor: 'pointer', color: 'var(--fg2)' }}>
+                    <button
+                      aria-label={`Manage users for ${c.name}`}
+                      title={`Manage users for ${c.name}`}
+                      onClick={() => openClientWorkspace(c.id, '/team')}
+                      style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 6, padding: '5px 8px', cursor: 'pointer', color: 'var(--fg2)' }}
+                    >
                       <Users size={13} />
                     </button>
                   </td>

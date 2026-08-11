@@ -39,9 +39,11 @@ const checks = [
     name: 'sidebar provides a persisted global client selector',
     pass: () => {
       const layout = read('src/app/(app)/layout.tsx');
+      const workspace = read('src/lib/workspace.ts');
       const sidebar = read('src/components/Sidebar.tsx');
-      return /ne_selected_client_id/.test(layout)
-        && /cookies/.test(layout)
+      return /getActiveWorkspace/.test(layout)
+        && /ne_selected_client_id/.test(workspace)
+        && /cookies/.test(workspace)
         && /ne_selected_client_id/.test(sidebar)
         && /router\.refresh\(\)/.test(sidebar);
     },

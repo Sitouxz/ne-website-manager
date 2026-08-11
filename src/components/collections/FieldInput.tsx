@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import Image from 'next/image';
 import { Image as ImageIcon, X, Plus, AlertCircle } from 'lucide-react';
 import RichTextEditor from '@/components/editor/RichTextEditor';
 import MediaPicker from '@/components/MediaPicker';
@@ -247,7 +248,7 @@ function ImageFieldInput({
     <div>
       {value?.url ? (
         <div style={{ position: 'relative', width: 160 }}>
-          <img src={value.url} alt={value.alt ?? ''} style={{ width: 160, height: 110, objectFit: 'cover', borderRadius: 'var(--r-sm)', display: 'block' }} />
+          <Image unoptimized src={value.url} alt={value.alt ?? ''} width={160} height={110} style={{ width: 160, height: 110, objectFit: 'cover', borderRadius: 'var(--r-sm)', display: 'block' }} />
           <button
             type="button"
             onClick={() => setPickerOpen(true)}
@@ -312,7 +313,7 @@ function GalleryFieldInput({
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
         {items.map((item, i) => (
           <div key={i} style={{ position: 'relative', width: 80, height: 80 }}>
-            <img src={item.url} alt={item.alt ?? ''} style={{ width: 80, height: 80, objectFit: 'cover', borderRadius: 'var(--r-sm)', display: 'block' }} />
+            <Image unoptimized src={item.url} alt={item.alt ?? ''} width={80} height={80} style={{ width: 80, height: 80, objectFit: 'cover', borderRadius: 'var(--r-sm)', display: 'block' }} />
             <button
               type="button"
               onClick={() => handleRemove(i)}
