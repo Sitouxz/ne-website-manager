@@ -284,7 +284,7 @@ export default function NavigationPage() {
           style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--ne-danger)', padding: 6, flexShrink: 0 }}
           aria-label={`Remove ${item.label}`}
         >
-          {isBusy ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Trash2 size={14} />}
+          {isBusy ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />}
         </button>
       </div>
     );
@@ -402,7 +402,7 @@ export default function NavigationPage() {
 
                 <div style={{ display: 'flex', gap: 8 }}>
                   <button className="btn-ne" onClick={handleAdd} disabled={adding}>
-                    {adding ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Plus size={14} />}
+                    {adding ? <Loader2 size={14} className="spin" /> : <Plus size={14} />}
                     Add
                   </button>
                   <button className="btn-outline-ne" onClick={resetAddForm}>
@@ -412,11 +412,11 @@ export default function NavigationPage() {
               </div>
             )}
 
-            <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
+            <div className="panel">
               {loading ? (
                 <div style={{ padding: 48, textAlign: 'center', color: 'var(--fg3)' }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-                    <Loader2 size={16} style={{ animation: 'spin .6s linear infinite' }} /> Loading...
+                    <Loader2 size={16} className="spin" /> Loading...
                   </div>
                 </div>
               ) : topLevel.length === 0 ? (
@@ -465,7 +465,6 @@ export default function NavigationPage() {
           </>
         )}
       </div>
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </>
   );
 }

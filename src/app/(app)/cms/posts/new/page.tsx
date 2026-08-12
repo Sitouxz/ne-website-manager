@@ -77,10 +77,9 @@ export default function NewPostPage() {
             {error}
           </div>
         ) : (
-          <Loader2 size={24} color="var(--ne-blue)" style={{ animation: 'spin .6s linear infinite' }} />
+          <Loader2 size={24} color="var(--ne-blue)" className="spin" />
         )}
       </div>
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </>
   );
 }

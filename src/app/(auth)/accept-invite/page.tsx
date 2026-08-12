@@ -155,7 +155,7 @@ export default function AcceptInvitePage() {
 
         {phase === 'checking' && (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, padding: '32px 0' }}>
-            <Loader2 size={22} color="var(--ne-blue)" style={{ animation: 'spin .6s linear infinite' }} />
+            <Loader2 size={22} color="var(--ne-blue)" className="spin" />
             <div style={{ fontSize: 13, color: 'var(--fg3)' }}>Verifying your invitation...</div>
           </div>
         )}
@@ -196,7 +196,7 @@ export default function AcceptInvitePage() {
               )}
 
               <div style={{ marginBottom: 16 }}>
-                <label style={{ display: 'block', fontSize: 12.5, fontWeight: 600, color: 'var(--fg2)', marginBottom: 6 }}>
+                <label className="field-label">
                   New password
                 </label>
                 <div style={{ position: 'relative' }}>
@@ -226,7 +226,7 @@ export default function AcceptInvitePage() {
               </div>
 
               <div style={{ marginBottom: 24 }}>
-                <label style={{ display: 'block', fontSize: 12.5, fontWeight: 600, color: 'var(--fg2)', marginBottom: 6 }}>
+                <label className="field-label">
                   Confirm password
                 </label>
                 <input
@@ -256,7 +256,7 @@ export default function AcceptInvitePage() {
               >
                 {submitting ? (
                   <>
-                    <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} />
+                    <Loader2 size={14} className="spin" />
                     Setting up your account...
                   </>
                 ) : (
@@ -276,7 +276,6 @@ export default function AcceptInvitePage() {
         )}
       </div>
 
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   );
 }

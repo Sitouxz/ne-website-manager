@@ -71,7 +71,7 @@ export default function LoginPage() {
 
           {/* Email */}
           <div style={{ marginBottom: 16 }}>
-            <label style={{ display: 'block', fontSize: 12.5, fontWeight: 600, color: 'var(--fg2)', marginBottom: 6 }}>
+            <label className="field-label">
               Email address
             </label>
             <input
@@ -93,7 +93,7 @@ export default function LoginPage() {
 
           {/* Password */}
           <div style={{ marginBottom: 24 }}>
-            <label style={{ display: 'block', fontSize: 12.5, fontWeight: 600, color: 'var(--fg2)', marginBottom: 6 }}>
+            <label className="field-label">
               Password
             </label>
             <div style={{ position: 'relative' }}>
@@ -140,7 +140,7 @@ export default function LoginPage() {
           >
             {loading ? (
               <>
-                <div style={{ width: 14, height: 14, border: '2px solid var(--fg3)', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.6s linear infinite' }} />
+                <div className="spin" style={{ width: 14, height: 14, border: '2px solid var(--fg3)', borderTopColor: 'transparent', borderRadius: '50%' }} />
                 Signing in...
               </>
             ) : (
@@ -159,7 +159,6 @@ export default function LoginPage() {
         . Contact your account manager for access.
       </p>
 
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   );
 }

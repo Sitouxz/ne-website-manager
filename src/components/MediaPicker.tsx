@@ -129,7 +129,7 @@ export default function MediaPicker({
             />
           </div>
           <button className="btn-outline-ne" onClick={() => fileInputRef.current?.click()} disabled={uploading}>
-            {uploading ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <UploadCloud size={14} />}
+            {uploading ? <Loader2 size={14} className="spin" /> : <UploadCloud size={14} />}
             Upload
           </button>
           <input
@@ -165,7 +165,7 @@ export default function MediaPicker({
         >
           {loading ? (
             <div style={{ display: 'flex', justifyContent: 'center', padding: 40 }}>
-              <Loader2 size={20} color="var(--ne-blue)" style={{ animation: 'spin .6s linear infinite' }} />
+              <Loader2 size={20} color="var(--ne-blue)" className="spin" />
             </div>
           ) : (
             <>
@@ -181,7 +181,6 @@ export default function MediaPicker({
           )}
         </div>
       </div>
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   );
 }

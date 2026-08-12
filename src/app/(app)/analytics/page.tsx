@@ -404,7 +404,7 @@ export default function AnalyticsPage() {
           </div>
           {loading && (
             <span style={{ fontSize: 12, color: 'var(--fg3)', display: 'flex', alignItems: 'center', gap: 6 }}>
-              <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> Loading…
+              <Loader2 size={14} className="spin" /> Loading…
             </span>
           )}
         </div>
@@ -532,7 +532,7 @@ export default function AnalyticsPage() {
                 </thead>
                 <tbody>
                   {loading ? (
-                    <tr><td colSpan={4} style={{ textAlign: 'center', padding: 34, color: 'var(--fg3)' }}><Loader2 size={16} style={{ animation: 'spin .6s linear infinite' }} /></td></tr>
+                    <tr><td colSpan={4} style={{ textAlign: 'center', padding: 34, color: 'var(--fg3)' }}><Loader2 size={16} className="spin" /></td></tr>
                   ) : events.slice(0, 8).length === 0 ? (
                     <tr><td colSpan={4} style={{ textAlign: 'center', padding: 34, color: 'var(--fg3)' }}>No analytics events have been captured yet.</td></tr>
                   ) : events.slice(0, 8).map((event) => (

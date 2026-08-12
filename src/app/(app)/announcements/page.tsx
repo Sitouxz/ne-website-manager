@@ -91,9 +91,8 @@ export default function AnnouncementsPage() {
     <>
       <Topbar title="Announcements" />
       <div className="page-body" style={{ display: 'flex', justifyContent: 'center', paddingTop: 80 }}>
-        <Loader2 size={24} color="var(--ne-blue)" style={{ animation: 'spin .6s linear infinite' }} />
+        <Loader2 size={24} color="var(--ne-blue)" className="spin" />
       </div>
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </>
   );
 
@@ -115,7 +114,7 @@ export default function AnnouncementsPage() {
                 </div>
               )}
               <button className="btn-ne" onClick={handleSave} disabled={saving}>
-                {saving ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Save size={14} />}
+                {saving ? <Loader2 size={14} className="spin" /> : <Save size={14} />}
                 Save
               </button>
             </div>
@@ -225,7 +224,6 @@ export default function AnnouncementsPage() {
           </>
         )}
       </div>
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </>
   );
 }

@@ -118,18 +118,17 @@ export default function NewPagePage() {
               </div>
             </div>
             {error && (
-              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ne-danger)', padding: '8px 14px', background: '#FEF2F2', borderRadius: 'var(--r-sm)' }}>
+              <div className="error-box">
                 {error}
               </div>
             )}
             <button className="btn-ne" style={{ justifyContent: 'center' }} onClick={handleCreate} disabled={creating || !path.trim()}>
-              {creating ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : null}
+              {creating ? <Loader2 size={14} className="spin" /> : null}
               Create Page
             </button>
           </div>
         </div>
       </div>
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </>
   );
 }

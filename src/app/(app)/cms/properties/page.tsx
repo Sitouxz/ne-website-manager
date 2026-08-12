@@ -161,9 +161,9 @@ export default function PropertiesPage() {
               <tbody>
                 {loading ? (
                   <tr>
-                    <td colSpan={5} style={{ textAlign: 'center', padding: 48, color: 'var(--fg3)' }}>
+                    <td colSpan={5} className="table-placeholder">
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-                        <Loader2 size={16} style={{ animation: 'spin .6s linear infinite' }} /> Loading...
+                        <Loader2 size={16} className="spin" /> Loading...
                       </div>
                     </td>
                   </tr>
@@ -221,7 +221,7 @@ export default function PropertiesPage() {
                             onClick={() => handleDelete(p)}
                             disabled={deleting === p.id}
                           >
-                            {deleting === p.id ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Trash2 size={14} />}
+                            {deleting === p.id ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />}
                             Delete
                           </button>
                         </div>
@@ -238,7 +238,6 @@ export default function PropertiesPage() {
           </div>
         </div>
       </div>
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </>
   );
 }
