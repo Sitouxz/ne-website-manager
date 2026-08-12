@@ -18,6 +18,67 @@ still requires a migration per client type — a slower version of the same trap
 
 ---
 
+## Status — 12 August 2026
+
+Stages 1, 2 and 3 have landed, along with the cross-cutting publish-integrity
+fixes. What remains is Stage 4 (migrate `properties`) and Stage 5 (onboarding
+templates).
+
+| Stage | State | Notes |
+| --- | --- | --- |
+| 0 — Freeze | Holding | No new native tables; no per-client slug constants in source. |
+| 1 — Field system | **Done** | `taglist`, `repeater` (2-level cap), `number.format`, `FieldDef.group`. `reference` deliberately deferred — see below. |
+| 2 — Collection UX parity | **Done** | Grouped editor panels, `list_columns`/`list_filters`/`sort_default`, entries search + filters, bulk actions, and the entry Preview button (item 3 — the preview route had supported `collection_entry` all along; only the button was missing). |
+| 3 — Per-client config | **Done** | `clients.capabilities` (migration 023) drives navigation; `LEGACY_SLUG_OVERRIDES` deleted. |
+| Publish integrity | **Done** | Unpublish/archive/delete all notify; media usage check; failed deliveries surfaced on the dashboard with retry. |
+| 4 — Migrate `properties` | Not started | Unblocked. The `listings` template is the target schema, already proven expressible. |
+| 5 — Onboarding templates | **Done** | `src/lib/templates/` — five templates, applied from the New Client dialog. |
+
+### Stage 5 as built
+
+Templates are **code-defined**, in `src/lib/templates/catalog.ts`, not
+`client_id IS NULL` collection rows as originally sketched. The reason is in
+that module's header: a template is capabilities + globals + navigation as well
+as collections, and only the collections half fits in the `collections` table —
+the rest would have needed a grouping key smuggled into `options`. Defining them
+in code also lets `templates.test.ts` run every built-in template through
+`validateFieldDefs` and the list-view rules, so a broken starter schema fails CI
+instead of a client's first login.
+
+The plan's target still holds: onboarding a client is a dropdown in the New
+Client dialog, no repo access. Authoring a *new template* needs the repo, which
+is correct — that is a product decision NE makes once, not per client.
+
+**The `listings` template is Stage 4's target schema.** A test asserts it can
+express every `properties` column, including the two that forced a native table:
+`highlights` as a `repeater` and `connectivity` as a `taglist`. Stage 4 is now a
+data migration rather than a modelling problem.
+
+**`reference` was dropped from Stage 1 on purpose.** It forces the still-open
+"return IDs vs. inline to depth 1" decision (Decision 1 below), changes the SDK
+response shape, and buys nothing until there is something worth pointing at. It
+should be reconsidered as part of Stage 4, where "what uses this media item"
+becomes a real question. `findEntryUsages` in `src/lib/media/usage.ts` already
+answers the urgent half of it by scanning content.
+
+**The SEO convention for entries (Stage 1, item 5) is now defined** in
+`src/lib/seo/entries.ts`: reserved `seo_title` / `seo_description` keys in
+`collection_items.data`, opt-in per collection by declaring those fields. The
+SEO manager and the dashboard's SEO count both read them through the same
+`isMissingSeo` rule that posts and pages use, and the schema builder has an
+"Add search fields" button so the exact key spelling never has to be typed.
+
+Opt-in rather than universal is deliberate: auditing every collection would
+have told an administrator that all 40 of their prayer-time entries were
+"missing SEO" for content that has no public page of its own.
+
+Not yet done: the **public** SEO feed (`/api/client/[slug]/seo`) still emits
+sitemap entries as `{ path, updated_at }` only. Adding title/description there
+changes a published response shape and needs a v2 opt-in, so it is deferred
+rather than slipped in.
+
+---
+
 ## Where we are
 
 Three clients on the platform today (al-islah, kamal-karim, zhenghelogistics).
