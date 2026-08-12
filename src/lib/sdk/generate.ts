@@ -1,4 +1,4 @@
-import type { FieldDef, FieldType } from '@/lib/collections/types';
+import type { FieldDef } from '@/lib/collections/types';
 
 /**
  * Single source of truth for generating `lib/cms.ts` — the TypeScript
@@ -83,6 +83,16 @@ import type { FieldDef, FieldType } from '@/lib/collections/types';
  * identifier. Suffixing the SAME `<Pascal>(slug)` with `Entry` is fully
  * deterministic from data every collection already has.
  */
+
+// ---------------------------------------------------------------------------
+// KNOWN GAP: `posts.cover_alt` (migration 024) IS returned by
+// `/api/client/[slug]/posts`, but `CmsPost` below does not declare it, because
+// `CmsPost` lives inside the v1 template and adding a field there would break
+// the byte-identical guarantee this file exists to hold. A client site can read
+// `cover_alt` off the JSON today; typing it needs a v3 template (or a v2
+// addendum interface). Extra JSON fields are ignored by existing consumers, so
+// nothing is broken in the meantime — it is just untyped.
+// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // v1 — byte-identical to the current live `sdk/route.ts#cmsLib` output.
@@ -239,8 +249,8 @@ export interface SdkCollectionInput {
  * `validateEntry`'s own rule that a non-required field absent from `data` is
  * valid, so the generated type shouldn't claim the key is always present.
  */
-function fieldTsType(type: FieldType): string {
-  switch (type) {
+function fieldTsType(field: FieldDef): string {
+  switch (field.type) {
     case 'text':
     case 'textarea':
     case 'url':
@@ -255,17 +265,33 @@ function fieldTsType(type: FieldType): string {
       return 'string';
     case 'multiselect':
       return 'string[]';
+    case 'taglist':
+      return 'string[]';
     case 'richtext':
       return '{ json: Record<string, unknown> | null; html: string }';
     case 'image':
       return '{ url: string; alt: string | null }';
     case 'gallery':
       return 'Array<{ url: string; alt: string | null }>';
+    case 'repeater':
+      // Inlined rather than hoisted to a named interface: the row shape has
+      // no identity outside this one field, and a generated
+      // `PropertiesHighlightsRow` would be one more name a client site has to
+      // learn (and one more collision risk) for no gain. Nesting is capped at
+      // `MAX_REPEATER_DEPTH`, so the inlining terminates and stays legible.
+      return field.fields && field.fields.length > 0
+        ? `Array<{ ${field.fields.map(fieldMemberSignature).join(' ')} }>`
+        : 'Array<Record<string, unknown>>';
     case 'json':
       return 'unknown';
     default:
       return 'unknown';
   }
+}
+
+/** `key?: T;` — one member of a generated interface or inlined row type. */
+function fieldMemberSignature(field: FieldDef): string {
+  return `${field.key}${field.required ? '' : '?'}: ${fieldTsType(field)};`;
 }
 
 /**
@@ -288,7 +314,7 @@ function generateCollectionSection(collection: SdkCollectionInput): string {
   const interfaceName = `${pascal}Fields`;
 
   const fieldLines = collection.fields
-    .map((f) => `  ${f.key}${f.required ? '' : '?'}: ${fieldTsType(f.type)};`)
+    .map((f) => `  ${fieldMemberSignature(f)}`)
     .join('\n');
 
   return `/** Generated from the "${collection.name}" collection's field schema. */
