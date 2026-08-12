@@ -20,7 +20,7 @@ export async function GET(
 
   const { data: post, error } = await supabase
     .from('posts')
-    .select('id, title, slug, excerpt, content, cover_url, category, tags, status, seo_title, seo_description, published_at, created_at, updated_at')
+    .select('id, title, slug, excerpt, content, cover_url, cover_alt, category, tags, status, seo_title, seo_description, published_at, created_at, updated_at')
     .eq('client_id', client.id)
     .eq('slug', postSlug)
     .eq('status', 'published')
