@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DAY_MS, daysAgoKey, daysSince, startOfUtcDay, utcDayKey } from './dates';
+import { DAY_MS, daysAgoIso, daysAgoKey, daysSince, startOfUtcDay, utcDayKey } from './dates';
 
 describe('DAY_MS', () => {
   it('is one day in milliseconds', () => {
@@ -122,5 +122,24 @@ describe('startOfUtcDay', () => {
     const now = new Date('2026-08-11T02:15:00.000Z');
     const windowStart = new Date(startOfUtcDay(now).getTime() - DAY_MS);
     expect(windowStart.toISOString()).toBe('2026-08-10T00:00:00.000Z');
+  });
+});
+
+describe('daysAgoIso', () => {
+  const from = Date.UTC(2026, 7, 12, 15, 30, 0);
+
+  it('returns a full timestamp, not a calendar-day key', () => {
+    // The distinction matters: this is compared with `gte` against a
+    // TIMESTAMPTZ column, where a bare `YYYY-MM-DD` would widen the window to
+    // the start of that day.
+    expect(daysAgoIso(7, from)).toBe('2026-08-05T15:30:00.000Z');
+  });
+
+  it('preserves the time of day across the offset', () => {
+    expect(daysAgoIso(0, from)).toBe(new Date(from).toISOString());
+  });
+
+  it('accepts a Date as well as a timestamp', () => {
+    expect(daysAgoIso(1, new Date(from))).toBe(daysAgoIso(1, from));
   });
 });
