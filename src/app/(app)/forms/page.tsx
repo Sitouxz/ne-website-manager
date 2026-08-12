@@ -3,8 +3,9 @@
 import Topbar from '@/components/Topbar';
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
-import { Plus, Trash2, Loader2, Save, CheckCircle, X, Inbox, Mail } from 'lucide-react';
+import { Plus, Trash2, Loader2, Save, CheckCircle, X, Inbox, Mail, Copy } from 'lucide-react';
 import { toast } from 'sonner';
+import { copyTitle, nextCopySlug } from '@/lib/duplicate';
 import { createClient } from '@/lib/supabase/client';
 import { useConfirm } from '@/components/ConfirmDialog';
 import { errorMessage } from '@/lib/errors';
@@ -65,6 +66,7 @@ export default function FormsPage() {
   const [createError,   setCreateError]   = useState('');
 
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [duplicatingId, setDuplicatingId] = useState<string | null>(null);
   const confirm = useConfirm();
 
   const fetchForms = useCallback(async () => {
@@ -143,6 +145,43 @@ export default function FormsPage() {
     setEditingId((created as Form).id);
   }
 
+  /**
+   * Copies a form definition, opening the copy for editing.
+   *
+   * The field schema is the expensive part — a contact form for a second page
+   * is nine fields, validation and notification addresses that otherwise get
+   * rebuilt by hand and end up subtly different.
+   *
+   * `notify_emails` is copied deliberately: a duplicated form almost always
+   * goes to the same people, and a form that silently notifies nobody is the
+   * worst failure this screen has — enquiries arrive and no one is told.
+   * Submissions are NOT copied; they belong to the original.
+   */
+  async function handleDuplicate(form: Form) {
+    if (!selectedClientId) return;
+    setDuplicatingId(form.id);
+
+    const supabase = createClient();
+    const { data: created, error } = await supabase
+      .from('forms')
+      .insert({
+        client_id: selectedClientId,
+        name: copyTitle(form.name, '(Untitled form)'),
+        slug: nextCopySlug(form.slug, forms.map((current) => current.slug)),
+        fields: form.fields,
+        notify_emails: form.notify_emails,
+        honeypot_field: form.honeypot_field,
+      })
+      .select()
+      .single();
+    setDuplicatingId(null);
+
+    if (error) { toast.error(errorMessage(error, { entity: 'form', action: 'save' })); return; }
+    toast.success(`Duplicated "${form.name}".`);
+    await fetchForms();
+    setEditingId((created as Form).id);
+  }
+
   async function handleDelete(form: Form) {
     const ok = await confirm({
       title: `Delete the "${form.name}" form?`,
@@ -196,15 +235,15 @@ export default function FormsPage() {
                   <tbody>
                     {loading ? (
                       <tr>
-                        <td colSpan={3} style={{ textAlign: 'center', padding: 48, color: 'var(--fg3)' }}>
+                        <td colSpan={3} className="table-placeholder">
                           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-                            <Loader2 size={16} style={{ animation: 'spin .6s linear infinite' }} /> Loading...
+                            <Loader2 size={16} className="spin" /> Loading...
                           </div>
                         </td>
                       </tr>
                     ) : forms.length === 0 ? (
                       <tr>
-                        <td colSpan={3} style={{ textAlign: 'center', padding: 48, color: 'var(--fg3)' }}>
+                        <td colSpan={3} className="table-placeholder">
                           No forms yet. Create your first one!
                         </td>
                       </tr>
@@ -229,6 +268,15 @@ export default function FormsPage() {
                               onClick={() => setEditingId(editingId === f.id ? null : f.id)}
                             >
                               {editingId === f.id ? 'Close' : 'Edit'}
+                            </button>
+                            <button
+                              onClick={() => handleDuplicate(f)}
+                              disabled={duplicatingId === f.id}
+                              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg3)', padding: 6 }}
+                              aria-label={`Duplicate ${f.name}`}
+                              title="Duplicate this form"
+                            >
+                              {duplicatingId === f.id ? <Loader2 size={14} className="spin" /> : <Copy size={14} />}
                             </button>
                             <button
                               onClick={() => handleDelete(f)}
@@ -274,7 +322,7 @@ export default function FormsPage() {
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
               {createError && (
-                <div style={{ padding: '10px 14px', background: '#FEF2F2', color: 'var(--ne-danger)', borderRadius: 'var(--r-sm)', fontSize: 13 }}>
+                <div className="error-box">
                   {createError}
                 </div>
               )}
@@ -301,7 +349,7 @@ export default function FormsPage() {
               </div>
               <div style={{ display: 'flex', gap: 8 }}>
                 <button className="btn-ne" style={{ flex: 1, justifyContent: 'center' }} onClick={handleCreate} disabled={creating}>
-                  {creating ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Plus size={14} />}
+                  {creating ? <Loader2 size={14} className="spin" /> : <Plus size={14} />}
                   Create
                 </button>
                 <button className="btn-outline-ne" onClick={closeNewDialog}>Cancel</button>
@@ -311,7 +359,6 @@ export default function FormsPage() {
         </div>
       )}
 
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </>
   );
 }
@@ -444,7 +491,7 @@ function FormEditor({ form, onSaved }: { form: Form; onSaved: (updated: Form) =>
 
       {/* Fields */}
       <div className="form-builder-grid">
-      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
+      <div className="panel">
         <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={{ fontWeight: 700, fontSize: 14 }}>Fields</div>
           <button className="btn-ne" onClick={() => setShowAddField((v) => !v)}>
@@ -609,7 +656,7 @@ function FormEditor({ form, onSaved }: { form: Form; onSaved: (updated: Form) =>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
         <button className="btn-ne" onClick={handleSave} disabled={saving}>
-          {saving ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Save size={14} />}
+          {saving ? <Loader2 size={14} className="spin" /> : <Save size={14} />}
           Save Form
         </button>
         {saved && (
