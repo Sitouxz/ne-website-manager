@@ -3,7 +3,7 @@
 import Topbar from '@/components/Topbar';
 import Link from 'next/link';
 import { use, useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowLeft, Save, Send, Loader2, History, X, AlertCircle } from 'lucide-react';
+import { ArrowLeft, Save, Send, Loader2, History, X, AlertCircle, Eye } from 'lucide-react';
 import { toast } from 'sonner';
 import { useConfirm } from '@/components/ConfirmDialog';
 import { errorMessage } from '@/lib/errors';
@@ -12,6 +12,9 @@ import { logActivity } from '@/lib/activity';
 import { firePublishNotify, computeLivePath } from '@/lib/publish-client';
 import FieldInput from '@/components/collections/FieldInput';
 import { validateEntry } from '@/lib/collections/validate';
+import type { FieldDef } from '@/lib/collections/types';
+import { checkEntryBeforePublish, type PublishWarning } from '@/lib/publish-checks';
+import { PublishWarnings } from '@/components/editor/PublishWarnings';
 import type { Collection, CollectionItem, CollectionItemStatus } from '@/lib/supabase/types';
 
 const ACTIVITY_LABELS: Record<string, string> = {
@@ -22,6 +25,7 @@ const ACTIVITY_LABELS: Record<string, string> = {
 };
 
 const REVISION_SNAPSHOT_INTERVAL_MS = 60_000;
+const PREVIEW_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
 
 interface FormState {
   slug: string;
@@ -81,6 +85,14 @@ export default function CollectionEntryEditor({
   const [saved,         setSaved]         = useState(false);
   const [error,         setError]         = useState('');
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
+  // Publish preflight — see `handleSave`. `warningsAcknowledged` is what makes
+  // the second Publish click go through; it resets whenever the content
+  // changes, so fixing one problem and introducing another still warns rather
+  // than silently publishing the new one.
+  const [previewError, setPreviewError] = useState('');
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [warnings, setWarnings] = useState<PublishWarning[]>([]);
+  const [warningsAcknowledged, setWarningsAcknowledged] = useState(false);
   const [autosaveState, setAutosaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [historyOpen,   setHistoryOpen]   = useState(false);
   // Whether this user's role is allowed to publish an entry at all
@@ -113,7 +125,27 @@ export default function CollectionEntryEditor({
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastRevisionSnapshotAtRef = useRef(0);
 
+  /**
+   * Retires the shown publish warnings. Called wherever the entry's content
+   * changes — an edit or a revision restore — because the list describes
+   * content that no longer exists as described, and leaving it on screen
+   * while the user works through it is both stale and quietly nagging.
+   * Clearing `warningsAcknowledged` is the important half: it means fixing one
+   * problem and introducing another still warns.
+   */
+  function clearPublishWarnings() {
+    setWarnings([]);
+    setWarningsAcknowledged(false);
+  }
+
   function applyItemToForm(item: CollectionItem) {
+    // The two setters inlined rather than calling `clearPublishWarnings`:
+    // `applyItemToForm` is referenced from the load effect's dependency array,
+    // and calling another component-scope function from it defeats
+    // exhaustive-deps' stability analysis. Setters are stable, so this stays
+    // provably safe to omit.
+    setWarnings([]);
+    setWarningsAcknowledged(false);
     skipNextAutosaveRef.current = true;
     const status = item.status ?? 'draft';
     setForm({
@@ -211,6 +243,54 @@ export default function CollectionEntryEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.slug, form.data]);
 
+  /**
+   * Opens this entry on the client's own website through their preview route.
+   *
+   * Same mechanism the post editor uses — a short-lived `preview_tokens` row
+   * the client site redeems — and `/api/client/[slug]/preview` has understood
+   * `collection_entry` since it was written. The button was simply never
+   * added here, which left the generic editor without the one feature that
+   * makes "show before committing" true for entries.
+   *
+   * Deliberately previews what is SAVED, not what is on screen: the token
+   * points at a row id, and autosave has usually already persisted the
+   * current draft. Previewing unsaved form state would need the whole entry
+   * POSTed somewhere, which is a different feature.
+   */
+  async function handlePreview() {
+    if (!clientId) return;
+    setPreviewError('');
+    setPreviewLoading(true);
+
+    const supabase = createClient();
+    const { data: client } = await supabase
+      .from('clients')
+      .select('website_url')
+      .eq('id', clientId)
+      .single();
+
+    const websiteUrl = client?.website_url;
+    if (!websiteUrl) {
+      setPreviewError('No website address is set for this client — add one in Settings.');
+      setPreviewLoading(false);
+      return;
+    }
+
+    const token = crypto.randomUUID();
+    const { error: err } = await supabase.from('preview_tokens').insert({
+      client_id: clientId,
+      entity_type: 'collection_entry',
+      entity_id: entryId,
+      token,
+      expires_at: new Date(Date.now() + PREVIEW_TOKEN_TTL_MS).toISOString(),
+    });
+
+    setPreviewLoading(false);
+    if (err) { setPreviewError(errorMessage(err, { entity: 'entry' })); return; }
+
+    window.open(`${websiteUrl.replace(/\/$/, '')}/api/preview?token=${token}`, '_blank');
+  }
+
   async function handleSave(statusOverride?: CollectionItemStatus) {
     if (!collection) return;
     const status = statusOverride ?? form.status;
@@ -222,7 +302,19 @@ export default function CollectionEntryEditor({
         setError('Fix the highlighted fields before publishing.');
         return;
       }
+
+      // Quality warnings, unlike the validation above, never block. They are
+      // shown once and the same click again publishes anyway — the author
+      // decides, and a publish button that refuses twice for a missing image
+      // description teaches people to dread it.
+      const checks = checkEntryBeforePublish({ fields: collection.fields, data: form.data });
+      if (checks.length > 0 && !warningsAcknowledged) {
+        setWarnings(checks);
+        setWarningsAcknowledged(true);
+        return;
+      }
     }
+    setWarnings([]);
     setValidationErrors({});
     setError('');
     setSaving(true);
@@ -293,10 +385,9 @@ export default function CollectionEntryEditor({
       <>
         <Topbar title="Entry" subtitle="Loading..." />
         <div className="page-body" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 300 }}>
-          <Loader2 size={24} color="var(--ne-blue)" style={{ animation: 'spin .6s linear infinite' }} />
+          <Loader2 size={24} color="var(--ne-blue)" className="spin" />
         </div>
-        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-      </>
+        </>
     );
   }
 
@@ -358,6 +449,70 @@ export default function CollectionEntryEditor({
     ? (form.data[titleField] as string)
     : (form.slug || '(untitled)');
 
+  /**
+   * Splits the schema into editor sections by `FieldDef.group`, preserving
+   * schema order both within a section and across sections (a group takes the
+   * position of its first field). Fields with no group are collected under
+   * `null` and keep the original card-per-field layout.
+   *
+   * This is the difference between the generic editor and a 30-input wall:
+   * the bespoke property editor earns its keep mostly by having Overview /
+   * Location / Media panels, and a schema can now express the same thing.
+   */
+  const fieldSections: { group: string | null; fields: FieldDef[]; filledCount: number }[] = [];
+  for (const field of collection.fields) {
+    const group = field.group ?? null;
+    const existing = fieldSections.find((s) => s.group === group);
+    if (existing) existing.fields.push(field);
+    else fieldSections.push({ group, fields: [field], filledCount: 0 });
+  }
+  for (const section of fieldSections) {
+    section.filledCount = section.fields.filter((f) => {
+      const v = form.data[f.key];
+      if (v === undefined || v === null || v === '') return false;
+      if (Array.isArray(v)) return v.length > 0;
+      return true;
+    }).length;
+  }
+
+  /**
+   * Renders one field's label, control, help and errors. Repeater errors are
+   * keyed by row path (`highlights[1].label`), so they are collected here and
+   * shown against the repeater — otherwise a publish would be blocked by an
+   * error the editor never displays anywhere.
+   */
+  function renderField(f: FieldDef) {
+    const rowErrors = f.type === 'repeater'
+      ? Object.entries(validationErrors)
+          .filter(([key]) => key.startsWith(`${f.key}[`))
+          .map(([, message]) => message)
+      : [];
+    const messages = validationErrors[f.key] ? [validationErrors[f.key], ...rowErrors] : rowErrors;
+
+    return (
+      <>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: 'var(--fg2)', marginBottom: 10 }}>
+          {f.label}
+          {f.required && <span style={{ color: 'var(--ne-danger)' }}>*</span>}
+        </label>
+        <FieldInput
+          def={f}
+          value={form.data[f.key]}
+          onChange={(v) => {
+            clearPublishWarnings();
+            setForm((prev) => ({ ...prev, data: { ...prev.data, [f.key]: v } }));
+          }}
+        />
+        {f.help && <div style={{ fontSize: 11.5, color: 'var(--fg3)', marginTop: 8 }}>{f.help}</div>}
+        {messages.map((message, i) => (
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--ne-danger)', marginTop: 8 }}>
+            <AlertCircle size={13} /> {message}
+          </div>
+        ))}
+      </>
+    );
+  }
+
   return (
     <>
       <Topbar title={collection.name_singular || 'Entry'} subtitle={derivedTitle} />
@@ -367,20 +522,29 @@ export default function CollectionEntryEditor({
             <ArrowLeft size={14} /> Back to {collection.name}
           </Link>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            {error && <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ne-danger)', padding: '8px 14px', background: '#FEF2F2', borderRadius: 'var(--r-sm)' }}>{error}</div>}
+            {error && <div className="error-box">{error}</div>}
             {autosaveState === 'error' && (
-              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ne-danger)', padding: '8px 14px', background: '#FEF2F2', borderRadius: 'var(--r-sm)' }}>
+              <div className="error-box">
                 Autosave failed — your last change may not be saved. Use Save Draft to be sure.
               </div>
             )}
             {(autosaveState === 'saving' || autosaveState === 'saved') && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11.5, fontWeight: 600, color: 'var(--fg3)' }}>
                 {autosaveState === 'saving'
-                  ? <><Loader2 size={12} style={{ animation: 'spin .6s linear infinite' }} /> Saving…</>
+                  ? <><Loader2 size={12} className="spin" /> Saving…</>
                   : 'All changes saved'}
               </div>
             )}
             {saved && <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ne-success)', padding: '8px 14px', background: '#DCFCE7', borderRadius: 'var(--r-sm)' }}>Saved</div>}
+            {previewError && (
+              <div className="error-box">
+                {previewError}
+              </div>
+            )}
+            <button className="btn-outline-ne" onClick={handlePreview} disabled={previewLoading} title="See this on the website before publishing">
+              {previewLoading ? <Loader2 size={14} className="spin" /> : <Eye size={14} />}
+              Preview
+            </button>
             <button className="btn-outline-ne" onClick={() => setHistoryOpen(true)} title="Revision history">
               <History size={14} /> History
             </button>
@@ -390,7 +554,7 @@ export default function CollectionEntryEditor({
               disabled={saving || isElevatedLocked}
               title={elevatedLockedTitle}
             >
-              {saving ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Save size={14} />}
+              {saving ? <Loader2 size={14} className="spin" /> : <Save size={14} />}
               Save Draft
             </button>
             {/* Publish shortcut: hidden entirely for `editor` — RLS
@@ -405,12 +569,14 @@ export default function CollectionEntryEditor({
                 blocked for a non-admin by migration 016's trigger. */}
             {canPublish && (
               <button className="btn-ne" onClick={() => handleSave('published')} disabled={saving}>
-                {saving ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Send size={14} />}
+                {saving ? <Loader2 size={14} className="spin" /> : <Send size={14} />}
                 {form.status === 'published' ? 'Update' : 'Publish'}
               </button>
             )}
           </div>
         </div>
+
+        <PublishWarnings warnings={warnings} />
 
         <div className="editor-layout">
           {/* Fields */}
@@ -420,31 +586,38 @@ export default function CollectionEntryEditor({
                 This collection has no fields defined yet.{' '}
                 <Link href={`/cms/collections/${collectionId}/schema`} style={{ color: 'var(--ne-blue)', fontWeight: 600 }}>Add fields</Link> to start entering content.
               </div>
-            ) : collection.fields.map((f) => (
-              <div key={f.key} style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', padding: '16px 20px' }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: 'var(--fg2)', marginBottom: 10 }}>
-                  {f.label}
-                  {f.required && <span style={{ color: 'var(--ne-danger)' }}>*</span>}
-                </label>
-                <FieldInput
-                  def={f}
-                  value={form.data[f.key]}
-                  onChange={(v) => setForm((prev) => ({ ...prev, data: { ...prev.data, [f.key]: v } }))}
-                />
-                {f.help && <div style={{ fontSize: 11.5, color: 'var(--fg3)', marginTop: 8 }}>{f.help}</div>}
-                {validationErrors[f.key] && (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--ne-danger)', marginTop: 8 }}>
-                    <AlertCircle size={13} /> {validationErrors[f.key]}
+            ) : fieldSections.map((section) => (
+              section.group === null ? (
+                // Ungrouped fields keep the original one-card-per-field
+                // layout, so a schema that never sets `group` looks exactly
+                // as it did before grouping existed.
+                section.fields.map((f) => (
+                  <div key={f.key} style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', padding: '16px 20px' }}>
+                    {renderField(f)}
                   </div>
-                )}
-              </div>
+                ))
+              ) : (
+                <div key={section.group} className="panel">
+                  <div style={{ padding: '12px 20px', borderBottom: '1px solid var(--border)', background: 'var(--surface-2)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--fg1)' }}>{section.group}</div>
+                    <div style={{ fontSize: 11.5, color: 'var(--fg3)' }}>
+                      {section.filledCount} of {section.fields.length} filled in
+                    </div>
+                  </div>
+                  <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 18 }}>
+                    {section.fields.map((f) => (
+                      <div key={f.key}>{renderField(f)}</div>
+                    ))}
+                  </div>
+                </div>
+              )
             ))}
           </div>
 
           {/* Sidebar */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
-              <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)', fontWeight: 700, fontSize: 13 }}>Entry Settings</div>
+            <div className="panel">
+              <div className="panel-subhead">Entry Settings</div>
               <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
                 <div>
                   <label style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--fg3)', display: 'block', marginBottom: 5 }}>Slug</label>
@@ -522,7 +695,6 @@ export default function CollectionEntryEditor({
         onRestore={(row) => applyItemToForm(row as unknown as CollectionItem)}
       />
 
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </>
   );
 }
@@ -625,7 +797,7 @@ function RevisionPanel({
         <div style={{ flex: 1, overflowY: 'auto', padding: '14px 16px' }}>
           {loading && (
             <div style={{ display: 'flex', justifyContent: 'center', padding: 30 }}>
-              <Loader2 size={18} color="var(--ne-blue)" style={{ animation: 'spin .6s linear infinite' }} />
+              <Loader2 size={18} color="var(--ne-blue)" className="spin" />
             </div>
           )}
           {error && (
@@ -653,7 +825,7 @@ function RevisionPanel({
                   onClick={() => handleRestore(rev.id)}
                   disabled={restoringId === rev.id}
                 >
-                  {restoringId === rev.id ? <Loader2 size={12} style={{ animation: 'spin .6s linear infinite' }} /> : null}
+                  {restoringId === rev.id ? <Loader2 size={12} className="spin" /> : null}
                   Restore
                 </button>
               </div>
