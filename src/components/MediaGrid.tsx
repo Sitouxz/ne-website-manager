@@ -25,13 +25,16 @@ function FileTypeIcon({ mimeType }: { mimeType: string | null }) {
 }
 
 function MediaGridCard({
-  item, onSelect, onDelete, onSaveAlt, deleting,
+  item, onSelect, onDelete, onSaveAlt, deleting, selected, onToggleSelected,
 }: {
   item: MediaItem;
   onSelect?: (item: MediaItem) => void;
   onDelete?: (item: MediaItem) => void;
   onSaveAlt?: (item: MediaItem, alt: string) => void;
   deleting?: boolean;
+  /** Selection is opt-in: the picker passes neither of these and shows no checkbox. */
+  selected?: boolean;
+  onToggleSelected?: (item: MediaItem) => void;
 }) {
   const [altDraft, setAltDraft] = useState(item.alt ?? '');
   const [copied, setCopied] = useState(false);
@@ -53,7 +56,25 @@ function MediaGridCard({
       }}
       onClick={onSelect ? () => onSelect(item) : undefined}
     >
-      <div style={{ height: 120, background: 'var(--surface-2)', display: 'grid', placeItems: 'center', overflow: 'hidden' }}>
+      <div style={{ position: 'relative', height: 120, background: 'var(--surface-2)', display: 'grid', placeItems: 'center', overflow: 'hidden' }}>
+        {onToggleSelected && (
+          <label
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              position: 'absolute', top: 6, left: 6, zIndex: 1, display: 'grid', placeItems: 'center',
+              width: 24, height: 24, borderRadius: 5, background: 'rgba(255,255,255,.92)',
+              boxShadow: '0 1px 3px rgba(0,0,0,.2)', cursor: 'pointer',
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={!!selected}
+              onChange={() => onToggleSelected(item)}
+              aria-label={`Select ${item.filename ?? 'file'}`}
+              style={{ width: 15, height: 15, cursor: 'pointer' }}
+            />
+          </label>
+        )}
         {isImage ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img src={item.url} alt={item.alt ?? ''} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
@@ -103,7 +124,7 @@ function MediaGridCard({
                 border: '1px solid var(--border)', borderRadius: 4, padding: '5px 8px', cursor: 'pointer',
               }}
             >
-              {deleting ? <Loader2 size={11} style={{ animation: 'spin .6s linear infinite' }} /> : <Trash2 size={11} />}
+              {deleting ? <Loader2 size={11} className="spin" /> : <Trash2 size={11} />}
             </button>
           )}
         </div>
@@ -114,12 +135,16 @@ function MediaGridCard({
 
 export function MediaGrid({
   items, onSelect, onDelete, onSaveAlt, deletingId, emptyTitle, emptyBody,
+  isSelected, onToggleSelected,
 }: {
   items: MediaItem[];
   onSelect?: (item: MediaItem) => void;
   onDelete?: (item: MediaItem) => void;
   onSaveAlt?: (item: MediaItem, alt: string) => void;
   deletingId?: string | null;
+  /** Both required together to show selection checkboxes; the picker passes neither. */
+  isSelected?: (item: MediaItem) => boolean;
+  onToggleSelected?: (item: MediaItem) => void;
   /** Overrides for the empty state, e.g. when a search returned nothing. */
   emptyTitle?: string;
   emptyBody?: string;
@@ -148,6 +173,8 @@ export function MediaGrid({
           onDelete={onDelete}
           onSaveAlt={onSaveAlt}
           deleting={deletingId === item.id}
+          selected={isSelected?.(item) ?? false}
+          onToggleSelected={onToggleSelected}
         />
       ))}
     </div>

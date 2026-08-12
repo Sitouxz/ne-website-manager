@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { escapeLikePattern } from '@/lib/like-escape';
 import { parsePagination } from '@/lib/api/pagination';
 
 /**
@@ -201,6 +202,11 @@ export async function GET(req: Request) {
   const { clientId } = resolved;
 
   const type = url.searchParams.get('type');
+  // Filename search, applied in the database rather than over the loaded page.
+  // Client-side filtering only ever saw the current page, so a match on page
+  // two reported "no matching files" — indistinguishable, to the user, from
+  // the file having been deleted.
+  const q = url.searchParams.get('q')?.trim() ?? '';
   const { limit, offset } = parsePagination(url, PAGINATION);
 
   let query = supabase
@@ -218,6 +224,16 @@ export async function GET(req: Request) {
   if (type) {
     query = query.like('mime_type', `${type}/%`);
     countQuery = countQuery.like('mime_type', `${type}/%`);
+  }
+
+  if (q) {
+    // Wildcards in the user's own text are neutralised so a search box means
+    // what it looks like it means — see `escapeLikePattern` for why the
+    // escaping order matters. The surrounding `%…%` is this route's, making
+    // it a contains-match.
+    const escaped = escapeLikePattern(q);
+    query = query.ilike('filename', `%${escaped}%`);
+    countQuery = countQuery.ilike('filename', `%${escaped}%`);
   }
 
   const [{ data, error }, { count }] = await Promise.all([query, countQuery]);

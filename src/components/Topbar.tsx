@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { useMobileMenu, useSelectedClient } from './AppShell';
 import { createClient } from '@/lib/supabase/client';
+import { escapeLikePattern } from '@/lib/like-escape';
 import {
   Dialog,
   DialogContent,
@@ -72,11 +73,19 @@ export default function Topbar({ title, subtitle }: { title: string; subtitle?: 
     const timer = window.setTimeout(async () => {
       setSearchingContent(true);
       const supabase = createClient();
-      const pattern = `%${normalized.replace(/[%_]/g, '\\$&')}%`;
+      // `escapeLikePattern` also escapes backslashes, and escapes them FIRST.
+      // The inline version this replaced handled `%` and `_` but not `\`, so a
+      // query like `a\%` still reached the database with a live wildcard.
+      const pattern = `%${escapeLikePattern(normalized)}%`;
+      // PostgREST reads `or=(...)` as a comma-separated list, so an unquoted
+      // value containing a comma splits into two malformed conditions.
+      // Double-quoting keeps it one value; any `"` the user typed is escaped
+      // so it cannot close the quoting early.
+      const orValue = `"${pattern.replace(/"/g, '\\"')}"`;
       const [posts, pages, media, collections] = await Promise.all([
         supabase.from('posts').select('id,title,status').eq('client_id', selectedClientId).ilike('title', pattern).limit(5),
         supabase.from('pages').select('id,title,path').eq('client_id', selectedClientId).ilike('title', pattern).limit(5),
-        supabase.from('media').select('id,filename,alt').eq('client_id', selectedClientId).or(`filename.ilike.${pattern},alt.ilike.${pattern}`).limit(5),
+        supabase.from('media').select('id,filename,alt').eq('client_id', selectedClientId).or(`filename.ilike.${orValue},alt.ilike.${orValue}`).limit(5),
         supabase.from('collections').select('id,name').eq('client_id', selectedClientId).ilike('name', pattern).limit(5),
       ]);
       if (cancelled) return;

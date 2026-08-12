@@ -23,6 +23,7 @@ export function useMediaList({
   type,
   limit = 50,
   initialLoading = false,
+  search = '',
 }: {
   clientId: string | null;
   type?: 'image';
@@ -33,6 +34,9 @@ export function useMediaList({
    * which only fetches once `open` flips true and so wants `false`, vs. the
    * library page, which fetches on mount and wants `true`). */
   initialLoading?: boolean;
+  /** Filename search, passed to the API so it covers the whole library rather
+   * than only the page already loaded. */
+  search?: string;
 }) {
   const [items, setItems] = useState<MediaItem[]>([]);
   const [totalCount, setTotalCount] = useState(0);
@@ -46,6 +50,7 @@ export function useMediaList({
       const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
       if (clientId) params.set('client_id', clientId);
       if (type) params.set('type', type);
+      if (search.trim()) params.set('q', search.trim());
       const res = await fetch(`/api/media?${params.toString()}`);
       const json = await res.json();
       if (!res.ok) {
@@ -60,7 +65,7 @@ export function useMediaList({
       setError('Failed to load media');
     }
     setLoading(false);
-  }, [clientId, type, limit]);
+  }, [clientId, type, limit, search]);
 
   const canLoadMore = items.length < totalCount;
   const loadMore = useCallback(() => fetchPage(items.length, true), [fetchPage, items.length]);
