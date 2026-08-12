@@ -4,7 +4,7 @@ import Topbar from '@/components/Topbar';
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import {
-  Plus, Trash2, Loader2, X, Pencil, Save, ArrowRight, AlertTriangle, FileText, FileEdit,
+  Plus, Trash2, Loader2, X, Pencil, Save, ArrowRight, AlertTriangle, FileText, FileEdit, Boxes,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useConfirm } from '@/components/ConfirmDialog';
@@ -15,6 +15,10 @@ import { useSelectedClient } from '@/components/AppShell';
 import type { Redirect } from '@/lib/supabase/types';
 import { isSameOriginRedirectPath } from '@/lib/seo/redirects';
 import { isMissingSeo } from '@/lib/seo/audit';
+import { auditableEntries, entrySeoRow } from '@/lib/seo/entries';
+import { deriveEntryTitle } from '@/lib/collections/display';
+import type { FieldDef } from '@/lib/collections/types';
+import type { CollectionOptions } from '@/lib/supabase/types';
 
 /**
  * SEO Manager — Task 5.3. Two independent sections on one page (matching
@@ -36,7 +40,9 @@ import { isMissingSeo } from '@/lib/seo/audit';
 
 interface AuditItem {
   id: string;
-  type: 'post' | 'page';
+  /** A collection entry reports its collection's singular name, so the list
+   *  reads "Sermon" / "Property" rather than a generic "Entry". */
+  type: string;
   title: string;
   href: string;
   missingTitle: boolean;
@@ -100,10 +106,14 @@ export default function SeoManagerPage() {
       { data: redirectRows, error: redirectsErr },
       { data: postRows, error: postsErr },
       { data: pageRows, error: pagesErr },
+      { data: collectionRows },
+      { data: entryRows },
     ] = await Promise.all([
       supabase.from('redirects').select('*').eq('client_id', selectedClientId).order('from_path', { ascending: true }),
       supabase.from('posts').select('id, title, seo_title, seo_description').eq('client_id', selectedClientId).eq('status', 'published'),
       supabase.from('pages').select('id, title, seo_title, seo_description').eq('client_id', selectedClientId).eq('status', 'published'),
+      supabase.from('collections').select('id, name_singular, fields, options').eq('client_id', selectedClientId).eq('storage', 'generic'),
+      supabase.from('collection_items').select('id, collection_id, slug, data').eq('client_id', selectedClientId).eq('status', 'published'),
     ]);
 
     if (redirectsErr) setLoadError(errorMessage(redirectsErr, { action: 'load' }));
@@ -130,7 +140,30 @@ export default function SeoManagerPage() {
         missingTitle: !row.seo_title?.trim(), missingDescription: !row.seo_description?.trim(),
       }));
 
-    setAudit([...pageAudit, ...postAudit]);
+    // Collection entries join the same audit, but only for collections that
+    // opted in by declaring the reserved `seo_title`/`seo_description` fields
+    // — see `src/lib/seo/entries.ts` for why that opt-in exists.
+    type AuditCollection = { id: string; name_singular: string; fields: FieldDef[]; options: CollectionOptions | null };
+    type AuditEntry = { id: string; collection_id: string; slug: string; data: Record<string, unknown> | null };
+
+    const entryAudit: AuditItem[] = auditableEntries(
+      (collectionRows ?? []) as AuditCollection[],
+      (entryRows ?? []) as AuditEntry[],
+    )
+      .filter(({ entry }) => isMissingSeo(entrySeoRow(entry)))
+      .map(({ collection, entry }) => {
+        const row = entrySeoRow(entry);
+        return {
+          id: entry.id,
+          type: collection.name_singular || 'Entry',
+          title: deriveEntryTitle({ ...entry, status: 'published', created_at: '', updated_at: '' }, collection.options?.title_field),
+          href: `/cms/collections/${collection.id}/entries/${entry.id}`,
+          missingTitle: !row.seo_title,
+          missingDescription: !row.seo_description,
+        };
+      });
+
+    setAudit([...pageAudit, ...postAudit, ...entryAudit]);
     setLoading(false);
   }, [selectedClientId]);
 
@@ -344,7 +377,7 @@ export default function SeoManagerPage() {
                   </label>
                   <div style={{ display: 'flex', gap: 8 }}>
                     <button className="btn-ne" onClick={handleAdd} disabled={adding}>
-                      {adding ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Plus size={14} />}
+                      {adding ? <Loader2 size={14} className="spin" /> : <Plus size={14} />}
                       Add
                     </button>
                     <button className="btn-outline-ne" onClick={resetAddForm}>
@@ -354,11 +387,11 @@ export default function SeoManagerPage() {
                 </div>
               )}
 
-              <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
+              <div className="panel">
                 {loading ? (
                   <div style={{ padding: 48, textAlign: 'center', color: 'var(--fg3)' }}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-                      <Loader2 size={16} style={{ animation: 'spin .6s linear infinite' }} /> Loading...
+                      <Loader2 size={16} className="spin" /> Loading...
                     </div>
                   </div>
                 ) : redirects.length === 0 ? (
@@ -396,7 +429,7 @@ export default function SeoManagerPage() {
                             </label>
                             <div style={{ display: 'flex', gap: 8 }}>
                               <button className="btn-ne" onClick={() => handleSaveEdit(r.id)} disabled={isBusy}>
-                                {isBusy ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Save size={14} />}
+                                {isBusy ? <Loader2 size={14} className="spin" /> : <Save size={14} />}
                                 Save
                               </button>
                               <button className="btn-outline-ne" onClick={cancelEdit}>
@@ -428,7 +461,7 @@ export default function SeoManagerPage() {
                               style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--ne-danger)', padding: 6, flexShrink: 0 }}
                               aria-label={`Delete redirect from ${r.from_path}`}
                             >
-                              {isBusy ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Trash2 size={14} />}
+                              {isBusy ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />}
                             </button>
                           </div>
                         )}
@@ -443,19 +476,19 @@ export default function SeoManagerPage() {
             <section>
               <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 4 }}>Content SEO Audit</div>
               <p style={{ fontSize: 13, color: 'var(--fg3)', margin: '0 0 14px' }}>
-                Published posts and pages missing an SEO title or description. Click through to fix them in their own editor.
+                Published content missing a search title or description. Click through to fix each one in its own editor.
               </p>
 
-              <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
+              <div className="panel">
                 {loading ? (
                   <div style={{ padding: 48, textAlign: 'center', color: 'var(--fg3)' }}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-                      <Loader2 size={16} style={{ animation: 'spin .6s linear infinite' }} /> Loading...
+                      <Loader2 size={16} className="spin" /> Loading...
                     </div>
                   </div>
                 ) : audit.length === 0 ? (
                   <div style={{ padding: 48, textAlign: 'center', color: 'var(--fg3)', fontSize: 13 }}>
-                    Nothing to flag &mdash; every published post and page has both an SEO title and description.
+                    Nothing to flag &mdash; every published item has both a search title and description.
                   </div>
                 ) : (
                   audit.map((item, i) => (
@@ -468,7 +501,7 @@ export default function SeoManagerPage() {
                         textDecoration: 'none', color: 'inherit',
                       }}
                     >
-                      {item.type === 'post' ? <FileText size={14} color="var(--fg3)" /> : <FileEdit size={14} color="var(--fg3)" />}
+                      {item.type === 'post' ? <FileText size={14} color="var(--fg3)" /> : item.type === 'page' ? <FileEdit size={14} color="var(--fg3)" /> : <Boxes size={14} color="var(--fg3)" />}
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--fg1)' }}>{item.title}</div>
                         <div style={{ fontSize: 11, color: 'var(--fg3)', marginTop: 2, textTransform: 'capitalize' }}>{item.type}</div>
@@ -493,7 +526,6 @@ export default function SeoManagerPage() {
           </>
         )}
       </div>
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </>
   );
 }
