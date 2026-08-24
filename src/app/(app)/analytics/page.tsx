@@ -374,8 +374,12 @@ export default function AnalyticsPage() {
 
   // Per-post performance (Task 8.1): match each post's canonical live path
   // (via `computeLivePath`, the same helper the publish pipeline uses —
-  // never re-derive the `/blog/{slug}` convention here) against whichever
+  // never re-derive the blog-path convention here) against whichever
   // path->views map is active for the selected range.
+  //
+  // This uses the platform default rather than `clients.blog_path`, so a
+  // client that routes its blog elsewhere will report zero views per post
+  // until this screen loads the client row too.
   const postPerformance = posts
     .map((post) => {
       const path = computeLivePath('post', { slug: post.slug });

@@ -113,6 +113,8 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
   const [previewLoading, setPreviewLoading] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [websiteUrl, setWebsiteUrl] = useState<string | null>(null);
+  // Where this client's site publishes its blog — '/blog' unless they route it elsewhere.
+  const [blogPath, setBlogPath] = useState('/blog');
   const { selectedClientId } = useSelectedClient();
 
   // Guards against autosave firing in response to *this component* setting
@@ -184,10 +186,11 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
           // publishing is "where is it?", and until now nothing answered it.
           const { data: client } = await supabase
             .from('clients')
-            .select('website_url')
+            .select('website_url, blog_path')
             .eq('id', post.client_id)
             .single();
           setWebsiteUrl(client?.website_url ?? null);
+          setBlogPath(client?.blog_path ?? '/blog');
         }
         setLoading(false);
       }
@@ -340,7 +343,7 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
       if (status === 'published') {
         // A brand-new post transitioning straight to published is always a
         // fresh publish (there's no prior live version to merely update).
-        firePublishNotify({ clientId, event: 'content.published', entityType: 'post', entityId: newPost.id, slug: payload.slug, path: computeLivePath('post', { slug: payload.slug }) });
+        firePublishNotify({ clientId, event: 'content.published', entityType: 'post', entityId: newPost.id, slug: payload.slug, path: computeLivePath('post', { slug: payload.slug, blogPath }) });
       }
 
       const action = status === 'published' ? 'published' : status === 'scheduled' ? 'scheduled' : 'created';
@@ -376,7 +379,7 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
           entityType: 'post',
           entityId: id,
           slug: payload.slug,
-          path: computeLivePath('post', { slug: payload.slug }),
+          path: computeLivePath('post', { slug: payload.slug, blogPath }),
         });
       } else if (previousStatus === 'published') {
         // Leaving `published` (unpublish to draft/in_review, or archive) is
@@ -393,7 +396,7 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
           entityType: 'post',
           entityId: id,
           slug: payload.slug,
-          path: computeLivePath('post', { slug: payload.slug }),
+          path: computeLivePath('post', { slug: payload.slug, blogPath }),
         });
       }
 
@@ -436,7 +439,7 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
     const supabase = createClient();
     const { data: client } = await supabase
       .from('clients')
-      .select('website_url')
+      .select('website_url, blog_path')
       .eq('id', clientId)
       .single();
 
@@ -521,10 +524,10 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
             {/* "Where is it?" is the first thing anyone asks after publishing,
                 and nothing in the CMS answered it. Only shown once the post is
                 actually live, so the link can never 404. */}
-            {!isNew && initialStatus === 'published' && liveUrl(websiteUrl, computeLivePath('post', { slug: form.slug })) && (
+            {!isNew && initialStatus === 'published' && liveUrl(websiteUrl, computeLivePath('post', { slug: form.slug, blogPath })) && (
               <a
                 className="btn-outline-ne"
-                href={liveUrl(websiteUrl, computeLivePath('post', { slug: form.slug }))!}
+                href={liveUrl(websiteUrl, computeLivePath('post', { slug: form.slug, blogPath }))!}
                 target="_blank"
                 rel="noopener noreferrer"
                 title="Open this post on your website"
@@ -590,7 +593,7 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
                 </label>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 0, fontSize: 12.5, border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', overflow: 'hidden', background: 'var(--surface-3)' }}>
                   <span style={{ padding: '8px 0 8px 10px', color: 'var(--fg3)', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
-                    /blog/
+                    {blogPath}/
                   </span>
                   <input
                     id="post-web-address"

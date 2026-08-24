@@ -82,7 +82,8 @@ async function resolveEntity(
   admin: ReturnType<typeof createAdminClient>,
   clientId: string,
   entityType: string,
-  entityId: string
+  entityId: string,
+  blogPath: string
 ): Promise<{ entityType: 'post' | 'page' | 'collection_entry'; path: string; data: Record<string, unknown> } | null> {
   if (entityType === 'post') {
     const { data: post } = await admin
@@ -92,7 +93,7 @@ async function resolveEntity(
       .eq('client_id', clientId)
       .single();
     if (!post) return null;
-    return { entityType: 'post', path: `/blog/${post.slug as string}`, data: post as Record<string, unknown> };
+    return { entityType: 'post', path: `${blogPath}/${post.slug as string}`, data: post as Record<string, unknown> };
   }
 
   if (entityType === 'page') {
@@ -152,7 +153,7 @@ export async function GET(
 
   const admin = createAdminClient();
 
-  const { data: client } = await admin.from('clients').select('id').eq('slug', slug).single();
+  const { data: client } = await admin.from('clients').select('id, blog_path').eq('slug', slug).single();
   if (!client) return notFound('Client not found');
 
   const { data: config } = await admin
@@ -179,7 +180,13 @@ export async function GET(
   const row = previewToken as PreviewTokenRow;
   if (new Date(row.expires_at) <= new Date()) return notFound('Invalid or expired preview link');
 
-  const entity = await resolveEntity(admin, client.id as string, row.entity_type, row.entity_id);
+  const entity = await resolveEntity(
+    admin,
+    client.id as string,
+    row.entity_type,
+    row.entity_id,
+    (client.blog_path as string | null) ?? '/blog'
+  );
   if (!entity) return notFound('Invalid or expired preview link');
 
   return NextResponse.json(entity, { headers: { 'Cache-Control': 'no-store' } });

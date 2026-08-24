@@ -41,10 +41,14 @@ import type { PublishEvent } from '@/lib/publish';
  */
 export function computeLivePath(
   entityType: string,
-  info: { slug?: string | null; path?: string | null; collectionSlug?: string | null }
+  info: { slug?: string | null; path?: string | null; collectionSlug?: string | null; blogPath?: string | null }
 ): string | null {
   if (entityType === 'post') {
-    return info.slug ? `/blog/${info.slug}` : null;
+    // `/blog` is the platform default, but a client whose site publishes its
+    // blog elsewhere (Zhenghe serves the same posts under /insights) passes
+    // its own `clients.blog_path`. Callers that don't have the client row
+    // loaded keep the historical behaviour.
+    return info.slug ? `${info.blogPath || '/blog'}/${info.slug}` : null;
   }
   if (entityType === 'page') {
     return info.path ?? null;

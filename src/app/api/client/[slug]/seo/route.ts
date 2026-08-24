@@ -31,7 +31,8 @@ import { createAdminClient } from '@/lib/supabase/admin';
  * --- Sitemap path-construction conventions (first task to fix these; see
  * task brief's note that path templates are "configurable later — YAGNI") ---
  *   - Pages:      `pages.path` verbatim — already a full path (e.g. `/about`).
- *   - Posts:      `/blog/{posts.slug}` — the literal prefix the brief specifies.
+ *   - Posts:      `{clients.blog_path}/{posts.slug}` — `/blog` unless the
+ *     client's site publishes its blog elsewhere.
  *   - Collection entries: `/{collection.slug}/{item.slug}` — e.g. a "Sermons"
  *     collection (`slug: 'sermons'`) with an entry `slug: 'friday-sermon'`
  *     becomes `/sermons/friday-sermon`. PROVISIONAL: nothing else in this
@@ -65,7 +66,7 @@ export async function GET(
 
   const { data: client } = await admin
     .from('clients')
-    .select('id')
+    .select('id, blog_path')
     .eq('slug', slug)
     .single();
 
@@ -106,6 +107,7 @@ export async function GET(
     permanent: row.permanent,
   }));
 
+  const blogPath = (client.blog_path as string | null) ?? '/blog';
   const sitemap: SitemapEntry[] = [];
 
   for (const page of (pageRows ?? []) as { path: string; updated_at: string | null }[]) {
@@ -113,7 +115,7 @@ export async function GET(
   }
 
   for (const post of (postRows ?? []) as { slug: string; updated_at: string | null }[]) {
-    sitemap.push({ path: `/blog/${post.slug}`, updated_at: post.updated_at });
+    sitemap.push({ path: `${blogPath}/${post.slug}`, updated_at: post.updated_at });
   }
 
   const genericCollections = (collectionRows ?? []) as { id: string; slug: string }[];

@@ -87,6 +87,10 @@ export default function PostsPage() {
         entityType: 'post',
         entityId: post.id,
         slug: post.slug,
+        // No `blogPath` here: this list never loads the client row, and a
+        // client whose blog is routed elsewhere translates the default at
+        // its own revalidate handler. The editor, which does have the row,
+        // passes the real value.
         path: computeLivePath('post', { slug: post.slug }),
       });
     }

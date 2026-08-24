@@ -41,6 +41,17 @@ describe('computeLivePath', () => {
     expect(computeLivePath('something_else', { slug: 'x' })).toBeNull();
   });
 
+  it("post -> the client's own blog path when their site routes it elsewhere", () => {
+    expect(computeLivePath('post', { slug: 'hello-world', blogPath: '/insights' }))
+      .toBe('/insights/hello-world');
+  });
+
+  it('post -> /blog when blogPath is absent, null or empty, so existing clients are unchanged', () => {
+    expect(computeLivePath('post', { slug: 'a' })).toBe('/blog/a');
+    expect(computeLivePath('post', { slug: 'a', blogPath: null })).toBe('/blog/a');
+    expect(computeLivePath('post', { slug: 'a', blogPath: '' })).toBe('/blog/a');
+  });
+
   it('post with no slug -> null rather than "/blog/undefined"', () => {
     expect(computeLivePath('post', {})).toBeNull();
   });
