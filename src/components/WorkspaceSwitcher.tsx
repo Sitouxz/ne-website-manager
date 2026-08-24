@@ -103,6 +103,52 @@ export function WorkspaceSwitcher({ clients, selectedClientId, clientName, onSel
     if (open) optionRefs.current[activeIndex]?.focus();
   }, [open, activeIndex]);
 
+  // Bound to the document rather than to the panel via React's onKeyDown.
+  // The panel is portalled, and a keydown on an option inside it did not reach
+  // a handler on the panel element — verified against the deployed build,
+  // where clicks worked but every arrow key did nothing. Listening on the
+  // document sidesteps the question entirely and cannot silently regress.
+  // Enter and Space need no handling here: focus is on a real <button>, so the
+  // browser already turns them into the click that selects a workspace.
+  useEffect(() => {
+    if (!open) return;
+
+    function onKeyDown(event: KeyboardEvent) {
+      switch (event.key) {
+        case 'ArrowDown':
+          event.preventDefault();
+          setActiveIndex((index) => (index + 1) % clients.length);
+          break;
+        case 'ArrowUp':
+          event.preventDefault();
+          setActiveIndex((index) => (index - 1 + clients.length) % clients.length);
+          break;
+        case 'Home':
+          event.preventDefault();
+          setActiveIndex(0);
+          break;
+        case 'End':
+          event.preventDefault();
+          setActiveIndex(clients.length - 1);
+          break;
+        case 'Escape':
+          event.preventDefault();
+          close();
+          break;
+        case 'Tab':
+          // Let focus leave naturally rather than trapping it — this is a
+          // menu, not a dialog.
+          close(false);
+          break;
+        default:
+          break;
+      }
+    }
+
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [open, clients.length]);
+
   function close(returnFocus = true) {
     setOpen(false);
     if (returnFocus) triggerRef.current?.focus();
@@ -120,38 +166,6 @@ export function WorkspaceSwitcher({ clients, selectedClientId, clientName, onSel
     } else if (event.key === 'ArrowUp') {
       event.preventDefault();
       openAt(clients.length - 1);
-    }
-  }
-
-  function onMenuKeyDown(event: React.KeyboardEvent) {
-    switch (event.key) {
-      case 'ArrowDown':
-        event.preventDefault();
-        setActiveIndex((index) => (index + 1) % clients.length);
-        break;
-      case 'ArrowUp':
-        event.preventDefault();
-        setActiveIndex((index) => (index - 1 + clients.length) % clients.length);
-        break;
-      case 'Home':
-        event.preventDefault();
-        setActiveIndex(0);
-        break;
-      case 'End':
-        event.preventDefault();
-        setActiveIndex(clients.length - 1);
-        break;
-      case 'Escape':
-        event.preventDefault();
-        close();
-        break;
-      case 'Tab':
-        // Let focus leave naturally rather than trapping it — this is a menu,
-        // not a dialog.
-        close(false);
-        break;
-      default:
-        break;
     }
   }
 
@@ -191,7 +205,6 @@ export function WorkspaceSwitcher({ clients, selectedClientId, clientName, onSel
           role="listbox"
           aria-label="Website workspaces"
           aria-activedescendant={`ws-option-${activeIndex}`}
-          onKeyDown={onMenuKeyDown}
         >
           {clients.map((client, index) => {
             const isSelected = client.id === selectedClientId;
