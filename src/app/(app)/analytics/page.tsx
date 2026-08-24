@@ -16,6 +16,7 @@ const RANGES = [7, 30, 90] as const;
 type RangeDays = (typeof RANGES)[number];
 
 type CmsPost = {
+  client_id: string;
   id: string;
   title: string;
   slug: string;
@@ -257,6 +258,10 @@ export default function AnalyticsPage() {
   const [rollupRows, setRollupRows] = useState<RollupRow[]>([]);
   const [posts, setPosts] = useState<CmsPost[]>([]);
   const [pages, setPages] = useState<CmsPage[]>([]);
+  // A post's live path depends on where its client's site publishes the blog
+  // (`clients.blog_path`). Keyed by client so the ne_admin all-clients view
+  // stays correct too, instead of assuming everyone uses /blog.
+  const [blogPathByClient, setBlogPathByClient] = useState<Record<string, string>>({});
   // "Now" as of the last fetch — read once inside the (impure, but
   // effect-triggered rather than render-time) `fetchData` callback below and
   // stored as state, rather than calling `Date.now()` directly during render
@@ -280,7 +285,7 @@ export default function AnalyticsPage() {
 
     let postsQuery = supabase
       .from('posts')
-      .select('id, title, slug, status, category, published_at, updated_at, created_at')
+      .select('id, client_id, title, slug, status, category, published_at, updated_at, created_at')
       .order('updated_at', { ascending: false });
     if (selectedClientId) postsQuery = postsQuery.eq('client_id', selectedClientId);
 
@@ -302,17 +307,24 @@ export default function AnalyticsPage() {
       rollupQuery = q;
     }
 
-    const [eventsRes, postsRes, pagesRes, rollupRes] = await Promise.all([
+    const clientsQuery = supabase.from('clients').select('id, blog_path');
+
+    const [eventsRes, postsRes, pagesRes, rollupRes, clientsRes] = await Promise.all([
       eventsQuery,
       postsQuery,
       pagesQuery,
       rollupQuery ?? Promise.resolve({ data: [] as RollupRow[] }),
+      clientsQuery,
     ]);
 
     setEvents((eventsRes.data ?? []) as AnalyticsEvent[]);
     setPosts((postsRes.data ?? []) as CmsPost[]);
     setPages((pagesRes.data ?? []) as CmsPage[]);
     setRollupRows((rollupRes.data ?? []) as RollupRow[]);
+    setBlogPathByClient(Object.fromEntries(
+      ((clientsRes.data ?? []) as { id: string; blog_path: string | null }[])
+        .map((client) => [client.id, client.blog_path || '/blog']),
+    ));
     setNowMs(nowMs);
     setLoading(false);
   }, [selectedClientId, range]);
@@ -377,12 +389,10 @@ export default function AnalyticsPage() {
   // never re-derive the blog-path convention here) against whichever
   // path->views map is active for the selected range.
   //
-  // This uses the platform default rather than `clients.blog_path`, so a
-  // client that routes its blog elsewhere will report zero views per post
-  // until this screen loads the client row too.
+
   const postPerformance = posts
     .map((post) => {
-      const path = computeLivePath('post', { slug: post.slug });
+      const path = computeLivePath('post', { slug: post.slug, blogPath: blogPathByClient[post.client_id] });
       return { post, path, views: path ? viewsByPath.get(path) ?? 0 : 0 };
     })
     .filter((row): row is { post: CmsPost; path: string; views: number } => row.path !== null)
@@ -392,7 +402,7 @@ export default function AnalyticsPage() {
   return (
     <>
       <Topbar title="Analytics" subtitle={`${clientName} · Traffic and CMS performance`} />
-      <div className="page-body" style={{ maxWidth: 1180 }}>
+      <div className="page-body">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, gap: 12, flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             {RANGES.map((r) => (
