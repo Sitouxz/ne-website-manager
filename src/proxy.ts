@@ -26,7 +26,7 @@ export async function proxy(request: NextRequest) {
   const path = request.nextUrl.pathname;
   const isLoginPage = path === '/login';
   const isAcceptInvitePage = path === '/accept-invite';
-  const isPublicApi = path.startsWith('/api/client/');
+  const isPublicApi = authenticatesItself(path);
 
   // `/accept-invite` must stay reachable without an existing session: a
   // user who just clicked an invite email link arrives here via Supabase
@@ -60,3 +60,29 @@ export const config = {
     '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
   ],
 };
+
+/**
+ * Endpoints that carry their own credential instead of a session cookie, and
+ * so must never be bounced to `/login`:
+ *
+ *   - `/api/client/**` — the public content API (per-client API key, or
+ *     anonymous read of published content).
+ *   - `/api/cron/**` — Vercel Cron, authorised by `CRON_SECRET`.
+ *   - `/api/mcp` — the MCP endpoint, authorised by an `api_keys` bearer
+ *     token.
+ *
+ * **`/api/cron/**` was missing here, and that was a live bug.** Vercel Cron
+ * sends an ordinary HTTP request with no Supabase session, so every
+ * invocation matched the `!user` branch below and was answered with a 307 to
+ * `/login` — the route's own `CRON_SECRET` check never ran. Scheduled posts
+ * did not publish and analytics did not roll up, and because a redirect is a
+ * successful response, nothing reported an error. Verified against the dev
+ * server: 307 before this list included it, 401 (the route's own check)
+ * after.
+ *
+ * Exported so the list is a tested contract rather than a condition three
+ * layers into a request handler.
+ */
+export function authenticatesItself(path: string): boolean {
+  return path.startsWith('/api/client/') || path.startsWith('/api/cron/') || path === '/api/mcp';
+}
