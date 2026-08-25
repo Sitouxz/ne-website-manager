@@ -127,6 +127,25 @@ class QueryBuilder<T = Row, Single extends boolean = false>
   }
 
   /**
+   * Postgrest-style `is` — the only meaningful comparison here is against
+   * `null`, which is how the scheduled-publish cron excludes rows that
+   * belong to a content release (`.is('release_id', null)`).
+   *
+   * A missing key and an explicit `null` both count as null, because a
+   * fixture written before a column existed is describing a row that has no
+   * value for it — treating those differently would make every fixture in
+   * the suite need updating whenever a nullable column is added.
+   */
+  is(column: string, value: unknown): this {
+    if (value === null) {
+      this.rows = this.rows.filter((row) => row[column] === null || row[column] === undefined);
+    } else {
+      this.rows = this.rows.filter((row) => row[column] === value);
+    }
+    return this;
+  }
+
+  /**
    * Minimal Postgrest-style `LIKE` (case-sensitive; `%` = any run of chars,
    * `_` = any single char). Only what callers in this codebase need
    * (e.g. `mime_type LIKE 'image/%'`) — no escaping of literal `%`/`_`.

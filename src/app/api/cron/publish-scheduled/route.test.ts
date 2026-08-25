@@ -190,7 +190,9 @@ describe('GET /api/cron/publish-scheduled — publishing', () => {
     const body = await res.json();
 
     expect(res.status).toBe(200);
-    expect(body).toEqual({ published: 0, ids: [] });
+    // `releases` is additive: the same pass now also publishes due content
+    // releases, and reports one entry per release it acted on.
+    expect(body).toEqual({ published: 0, ids: [], releases: [] });
     expect(logActivity).not.toHaveBeenCalled();
   });
 
