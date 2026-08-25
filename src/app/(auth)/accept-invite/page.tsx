@@ -72,6 +72,34 @@ export default function AcceptInvitePage() {
 
       const supabase = createClient();
 
+      // The file-level comment above is right that invite emails arrive as an
+      // implicit-grant `#access_token=...` fragment, but wrong that
+      // `detectSessionInUrl` will pick it up. `@supabase/ssr`'s
+      // `createBrowserClient` hard-codes `flowType: 'pkce'`, and auth-js
+      // refuses the mismatch outright — `_getSessionFromURL` throws
+      // `AuthPKCEGrantCodeExchangeError('Not a valid PKCE flow url.')` on any
+      // implicit callback while the client is in PKCE mode. So the fragment
+      // was discarded, `getUser()` returned null, and every invite link this
+      // app sent landed on "invitation link invalid".
+      //
+      // Reading the fragment ourselves and handing it straight to
+      // `setSession` sidesteps the flow-type check entirely, and works for
+      // links already sitting in people's inboxes. The fragment is stripped
+      // afterwards so the access token doesn't linger in the address bar or
+      // get copied into a bug report.
+      const hash = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+      const accessToken = hash.get('access_token');
+      const refreshToken = hash.get('refresh_token');
+      if (accessToken && refreshToken) {
+        try {
+          await supabase.auth.setSession({ access_token: accessToken, refresh_token: refreshToken });
+          window.history.replaceState(null, '', window.location.pathname + window.location.search);
+        } catch {
+          // Fall through to the checks below, which render the "invalid"
+          // state rather than leaving the page stuck on "checking".
+        }
+      }
+
       // Defensive PKCE handling — see the file-level comment. Wrapped so a
       // failure here (e.g. no code_verifier stored, exactly as expected
       // for an invite) doesn't prevent falling through to the implicit-

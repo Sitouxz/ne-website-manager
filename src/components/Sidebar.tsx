@@ -8,7 +8,6 @@ import {
   Activity,
   BarChart2,
   Boxes,
-  ChevronDown,
   FileEdit,
   FileText,
   Globe,
@@ -27,6 +26,7 @@ import {
   Users,
 } from 'lucide-react';
 import type { Client, ClientCapabilities, Collection, Role } from '@/lib/supabase/types';
+import { WorkspaceSwitcher } from '@/components/WorkspaceSwitcher';
 
 type Capability = keyof ClientCapabilities;
 export type NavItem = {
@@ -128,15 +128,21 @@ export default function Sidebar({
           <NextImage src="/logo-ne.png" alt="Neu Entity" width={38} height={38} priority />
           <span><strong>Website Manager</strong><small>by Neu Entity</small></span>
         </div>
-        <div className="workspace-switcher">
-          <Globe size={15} aria-hidden="true" />
-          {isAdmin && clients.length ? (
-            <select value={selectedClientId ?? ''} onChange={(event) => handleClientChange(event.target.value)} aria-label="Select website workspace">
-              {clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}
-            </select>
-          ) : <span title={clientName}>{clientName}</span>}
-          <ChevronDown size={14} aria-hidden="true" />
-        </div>
+        {isAdmin && clients.length > 1 ? (
+          <WorkspaceSwitcher
+            clients={clients}
+            selectedClientId={selectedClientId}
+            clientName={clientName}
+            onSelect={handleClientChange}
+          />
+        ) : (
+          // One workspace is a fact, not a choice — showing a menu that can
+          // only ever resolve to the current client is a dead affordance.
+          <div className="workspace-switcher ws-static">
+            <Globe size={15} aria-hidden="true" />
+            <span title={clientName}>{clientName}</span>
+          </div>
+        )}
       </div>
 
       <nav className="sidebar-nav">
