@@ -26,9 +26,17 @@ import { summarizeReport } from '@/lib/health/sweep';
  * does: the pass is intentionally cross-tenant and has no user session to
  * scope RLS against.
  *
- * Cadence is weekly (`vercel.json`). Daily would report the same findings
- * six more times before anyone had a chance to act on them, and a report
- * that repeats itself is one people stop reading.
+ * Intended cadence is weekly. Daily would report the same findings six more
+ * times before anyone had a chance to act on them, and a report that repeats
+ * itself is one people stop reading.
+ *
+ * NOT currently in `vercel.json`: the project is on a Hobby plan, which
+ * already carries the two crons it allows (publish-scheduled and
+ * rollup-analytics), and a third entry risks the deployment rejection that
+ * previously stranded production on a stale build. Nothing is lost in the
+ * meantime — `/health` computes the same report on demand, so this route is
+ * only the unattended half. Add the schedule when the plan allows a third
+ * cron; until then it can be triggered manually with `CRON_SECRET`.
  */
 export async function GET(req: Request) {
   const cronSecret = process.env.CRON_SECRET;
