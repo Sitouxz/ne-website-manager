@@ -295,3 +295,95 @@ Stage 5  Onboarding templates      ── the payoff
 4. **Kamal Karim cutover appetite:** is the live site available for a v2 SDK
    upgrade during Stage 4, or does it need to stay on v1 indefinitely? This
    determines whether `properties` can actually be retired or just deprecated.
+
+---
+
+## Decisions settled — 13 August 2026
+
+Three of the four decisions above are now answered. They are recorded here
+rather than left open because Stage 4 migrates `properties` into
+`collection_items`, and that is the moment the entry data shape stops being
+cheap to change: retrofitting either of the first two afterwards means
+migrating the platform's largest content set twice.
+
+### Decision 3 (page sections) — a repeater, and specifically a render tree
+
+**Answer: page sections are a `repeater` field, as recommended — but the row
+schema is fixed by convention rather than left free-form.**
+
+The original recommendation is right for the reason it gives (one system to
+build and maintain). What it understates is where it leads. Once a page is a
+typed, ordered list of sections, it is already a render tree, and the gap
+between that and a renderer that mounts a component per section type is
+small — but only if the section schema was designed with rendering in mind.
+Left as a free-form field bag, every client's sections end up shaped
+differently and there is nothing generic to render.
+
+So the convention, which costs nothing today and preserves the option:
+
+- A page's sections live under the reserved key `sections`, a `repeater`.
+- Every row carries a `type` field (a `select` whose options are that
+  client's available section types). `type` is the component name; everything
+  else in the row is that component's props.
+- Section types are namespaced per client (`hero`, `card_grid`,
+  `prayer_times`), declared in the collection's schema, never invented by an
+  editor.
+- Nesting stays within the existing two-level `MAX_REPEATER_DEPTH`: a section
+  may contain a list of items (cards, links, logos), and no deeper. A section
+  that wants sections is a page.
+
+This is the smallest possible commitment. It is a naming convention plus one
+required sub-field, it needs no new code, and it is what makes
+`docs/strategy-site-runtime.md` an incremental option rather than a rewrite.
+If that strategy is never pursued, nothing has been lost — the convention is
+just a tidy way to model page sections.
+
+**What is explicitly NOT decided here:** whether to build the shared
+rendering runtime. That is a business decision with real risk (blast radius,
+bus factor) and its own kill criteria. This decision only avoids foreclosing
+it.
+
+### Decision 1 (reference resolution) — return IDs, inline behind v2
+
+**Answer: `reference` fields return IDs. Inlining to depth 1 is an opt-in
+query parameter on the v2 SDK, not a change to the default response shape.**
+
+The deferral in Stage 1 was correct and the reasoning still holds, but the
+decision itself can be made now because Stage 4 makes "what uses this?" a
+real question. Returning IDs keeps the published response shape stable — the
+v1 byte-compatibility guarantee is the mechanism that makes the properties
+cutover survivable, and inlining by default would break exactly the contract
+that is doing that work. A client site that wants the referenced entry asks
+for it (`?include=1`), which is one extra decision for the two sites that
+need it and no change at all for the three that do not.
+
+### Localization — per-entry locale, decided now, built when a client needs it
+
+**Answer: when localization arrives, it is per-entry (`locale` +
+`translation_of`), never per-field.**
+
+Nothing in the codebase has a locale concept today, and nothing should be
+built until a client actually asks. But the *model* has to be settled before
+Stage 4, because both options are cheap now and only one is cheap later.
+
+Per-entry means a translation is a sibling row: same collection, same schema,
+its own `locale`, pointing at the original via `translation_of`. It costs two
+nullable columns, leaves `data` untouched, keeps the SDK response shape
+identical for single-locale clients (the default query filters to the site's
+locale), and makes "translate this" a duplicate-and-edit — which is a
+workflow a mosque administrator can already do.
+
+Per-field localization — `data.title = { en: …, zh: … }` — was rejected. It
+rewrites the shape of every entry on the platform, breaks every existing SDK
+consumer, forces every field type to become locale-aware, and turns the entry
+editor into a tabbed form for the majority of clients who will never use it.
+
+Singapore makes this concrete rather than hypothetical: EN/ZH is a normal ask
+here, and Zheng He Logistics is already on the platform.
+
+### Decision 4 (Kamal Karim cutover) — still open
+
+Unchanged, and genuinely NE's call rather than a technical one: it depends on
+whether the live site can take a v2 SDK upgrade during Stage 4. It determines
+whether `properties` is retired or merely deprecated, and nothing above
+depends on the answer.
