@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import {
+  Activity,
   BarChart2,
   Boxes,
   ChevronDown,
@@ -62,6 +63,7 @@ const NAVIGATION: NavGroup[] = [
       { label: 'Analytics', href: '/analytics', icon: BarChart2, capability: 'analytics', access: 'manager' },
       { label: 'Social', href: '/social', icon: Share2, capability: 'social', access: 'manager' },
       { label: 'SEO', href: '/seo', icon: Search, capability: 'seo', access: 'manager' },
+      { label: 'Website check', href: '/health', icon: Activity, access: 'manager' },
     ],
   },
   {
