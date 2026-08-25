@@ -3,6 +3,8 @@
 import { useState } from 'react';
 import { Trash2, Copy, Check, FileText, Film, File as FileIcon, Loader2 } from 'lucide-react';
 import type { MediaItem } from '@/app/api/media/route';
+import SuggestButton from './SuggestButton';
+import { useSuggestionsEnabled } from './AppShell';
 
 /**
  * Grid rendering shared by the Media Library page (`cms/media/page.tsx`) and
@@ -37,6 +39,7 @@ function MediaGridCard({
   onToggleSelected?: (item: MediaItem) => void;
 }) {
   const [altDraft, setAltDraft] = useState(item.alt ?? '');
+  const suggestionsEnabled = useSuggestionsEnabled();
   const [copied, setCopied] = useState(false);
   const isImage = item.mime_type?.startsWith('image/') ?? false;
 
@@ -92,14 +95,32 @@ function MediaGridCard({
         <div style={{ fontSize: 11, color: 'var(--fg3)' }}>{formatBytes(item.size_bytes)}</div>
 
         {onSaveAlt && (
-          <input
-            value={altDraft}
-            onChange={(e) => setAltDraft(e.target.value)}
-            onBlur={() => { if (altDraft !== (item.alt ?? '')) onSaveAlt(item, altDraft); }}
-            onClick={(e) => e.stopPropagation()}
-            placeholder="Alt text..."
-            style={{ fontSize: 11, border: '1px solid var(--border)', borderRadius: 4, padding: '4px 6px', outline: 'none', color: 'var(--fg2)' }}
-          />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }} onClick={(e) => e.stopPropagation()}>
+            <input
+              value={altDraft}
+              onChange={(e) => setAltDraft(e.target.value)}
+              onBlur={() => { if (altDraft !== (item.alt ?? '')) onSaveAlt(item, altDraft); }}
+              placeholder="Describe this picture..."
+              style={{ fontSize: 11, border: '1px solid var(--border)', borderRadius: 4, padding: '4px 6px', outline: 'none', color: 'var(--fg2)' }}
+            />
+            {/* Only for images — there is nothing to look at in a PDF, and a
+                confidently wrong description is worse than a missing one. */}
+            {isImage && (
+              <SuggestButton
+                kind="alt"
+                enabled={suggestionsEnabled}
+                imageUrl={item.url}
+                hasExistingValue={altDraft.trim() !== ''}
+                onSuggestion={(text) => {
+                  // Saved immediately rather than left as a draft: this input
+                  // persists on blur, and a suggestion the user never focuses
+                  // would otherwise be silently discarded.
+                  setAltDraft(text);
+                  onSaveAlt(item, text);
+                }}
+              />
+            )}
+          </div>
         )}
 
         <div style={{ display: 'flex', gap: 6, marginTop: 2 }}>

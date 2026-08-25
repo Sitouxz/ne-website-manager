@@ -15,6 +15,7 @@ export default function AppShell({
   capabilities,
   role,
   genericCollections = [],
+  aiSuggestions = false,
 }: {
   children: React.ReactNode;
   clientName: string;
@@ -24,6 +25,13 @@ export default function AppShell({
   capabilities: ClientCapabilities;
   role: Role;
   genericCollections?: Pick<Collection, 'id' | 'name'>[];
+  /**
+   * Whether this installation has AI suggestions configured. Resolved once
+   * on the server (`isSuggestionEnabled`) and passed down, so no client
+   * component has to probe an endpoint to decide whether to render a button
+   * — and the API key itself never crosses the boundary.
+   */
+  aiSuggestions?: boolean;
 }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
@@ -57,7 +65,11 @@ export default function AppShell({
                   screen needs to ask "are you sure?" and to report the
                   outcome of a save. Mounted once here so no screen has to
                   fall back to `window.confirm`/`alert` again. */}
-              <ConfirmProvider>{children}</ConfirmProvider>
+              <ConfirmProvider>
+                <SuggestionsContext.Provider value={aiSuggestions}>
+                  {children}
+                </SuggestionsContext.Provider>
+              </ConfirmProvider>
             </ClientSelectionProvider>
           </MobileMenuProvider>
         </div>
@@ -80,6 +92,15 @@ const ClientSelectionContext = createContext<{ selectedClientId: string | null; 
   websiteUrl: null,
 });
 export function useSelectedClient() { return useContext(ClientSelectionContext); }
+
+/**
+ * Feature availability that depends on server-only configuration. Kept
+ * separate from the client-selection context because it is about the
+ * installation, not the tenant — mixing the two would mean every feature
+ * flag re-renders on a workspace switch.
+ */
+const SuggestionsContext = createContext(false);
+export function useSuggestionsEnabled() { return useContext(SuggestionsContext); }
 
 function MobileMenuProvider({ children, onToggle }: { children: React.ReactNode; onToggle: () => void }) {
   return (

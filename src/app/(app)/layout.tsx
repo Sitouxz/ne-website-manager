@@ -1,5 +1,6 @@
 import { redirect } from 'next/navigation';
 import AppShell from '@/components/AppShell';
+import { isSuggestionEnabled } from '@/lib/ai/suggest';
 import { getActiveWorkspace } from '@/lib/workspace';
 import { getClientCapabilities } from '@/lib/client-capabilities';
 import type { Collection } from '@/lib/supabase/types';
@@ -42,6 +43,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       capabilities={capabilities}
       role={role}
       genericCollections={genericCollections}
+      aiSuggestions={isSuggestionEnabled()}
     >
       {children}
     </AppShell>

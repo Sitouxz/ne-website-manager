@@ -10,7 +10,8 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { createClient } from '@/lib/supabase/client';
-import { useSelectedClient } from '@/components/AppShell';
+import { useSelectedClient, useSuggestionsEnabled } from '@/components/AppShell';
+import SuggestButton from '@/components/SuggestButton';
 import { useConfirm } from '@/components/ConfirmDialog';
 import { errorMessage } from '@/lib/errors';
 import { statusDescription, statusLabel, liveUrl } from '@/lib/content-status';
@@ -123,6 +124,7 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
   const [historyOpen, setHistoryOpen] = useState(false);
   const [websiteUrl, setWebsiteUrl] = useState<string | null>(null);
   const { selectedClientId } = useSelectedClient();
+  const suggestionsEnabled = useSuggestionsEnabled();
 
   // Guards against autosave firing in response to *this component* setting
   // `form` itself (initial load from the DB, or a revision restore) rather
@@ -697,10 +699,25 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
                     rows={2}
                     style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '9px 12px', fontSize: 13.5, color: 'var(--fg1)', resize: 'none', outline: 'none', fontFamily: 'inherit' }}
                   />
-                  <div style={{ fontSize: 11, color: form.seoDesc.length > 160 ? 'var(--ne-danger)' : 'var(--fg3)', marginTop: 4 }}>
-                    {form.seoDesc.length > 160
-                      ? `${form.seoDesc.length} characters — Google will cut this off after about 160.`
-                      : `${form.seoDesc.length} of about 160 characters`}
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 4 }}>
+                    <div style={{ fontSize: 11, color: form.seoDesc.length > 160 ? 'var(--ne-danger)' : 'var(--fg3)' }}>
+                      {form.seoDesc.length > 160
+                        ? `${form.seoDesc.length} characters — Google will cut this off after about 160.`
+                        : `${form.seoDesc.length} of about 160 characters`}
+                    </div>
+                    <SuggestButton
+                      kind="seo-description"
+                      enabled={suggestionsEnabled}
+                      hasExistingValue={form.seoDesc.trim() !== ''}
+                      context={{ title: form.title, body: form.content }}
+                      onSuggestion={(text) => {
+                        // Goes through the same setter a keystroke does, so
+                        // the publish warnings reset and the autosave and
+                        // revision snapshot behave identically.
+                        resetPublishWarnings();
+                        setForm({ ...form, seoDesc: text });
+                      }}
+                    />
                   </div>
                 </div>
               </div>
