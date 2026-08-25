@@ -5,6 +5,7 @@ import type { ElementType } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
+  Activity,
   Bell,
   BookOpen,
   Boxes,
@@ -14,6 +15,7 @@ import {
   FileText,
   Image,
   LayoutDashboard,
+  Mail,
   Menu,
   Navigation,
   Search,
@@ -38,8 +40,32 @@ const COMMANDS = [
   { label: 'Media', description: 'Upload and organize files', href: '/cms/media', icon: Image },
   { label: 'Collections', description: 'Manage structured content', href: '/cms/collections', icon: Boxes },
   { label: 'Website navigation', description: 'Arrange the site menu', href: '/cms/navigation', icon: Navigation },
+  { label: 'Website check', description: 'See what is broken on the live website', href: '/health', icon: Activity },
+  { label: 'Forms', description: 'Read enquiries and leads', href: '/forms', icon: Mail },
+  { label: 'SEO', description: 'Redirects and search descriptions', href: '/seo', icon: Search },
   { label: 'Settings', description: 'Configure this website', href: '/settings', icon: Settings },
 ];
+
+/**
+ * Where the palette's highlight moves for a given key.
+ *
+ * Exported and pure so the behaviour is testable without mounting a Topbar
+ * (which needs the shell's contexts, a router and Supabase) — the same shape
+ * `canShowSidebarItem` uses for the sidebar's rules.
+ *
+ * Returns `null` for a key the palette does not handle, so the caller knows
+ * not to `preventDefault` — swallowing every keystroke would break typing in
+ * the search input the handler is attached to.
+ */
+export function nextActiveIndex(key: string, current: number, length: number): number | null {
+  if (length === 0) return null;
+  // Wrapping in both directions: with a list this short, holding ↓ to get
+  // back to the top is faster than reaching for ↑, and a highlight that
+  // sticks silently at the last row reads as broken.
+  if (key === 'ArrowDown') return (current + 1) % length;
+  if (key === 'ArrowUp') return (current - 1 + length) % length;
+  return null;
+}
 
 export default function Topbar({ title, subtitle }: { title: string; subtitle?: string }) {
   const { onToggle } = useMobileMenu();
@@ -102,7 +128,10 @@ export default function Topbar({ title, subtitle }: { title: string; subtitle?: 
   }, [query, searchOpen, selectedClientId]);
 
   const canSearchContent = query.trim().length >= 2 && Boolean(selectedClientId);
-  const visibleContentResults = canSearchContent && contentResultClientId === selectedClientId ? contentResults : [];
+  const visibleContentResults = useMemo(
+    () => (canSearchContent && contentResultClientId === selectedClientId ? contentResults : []),
+    [canSearchContent, contentResultClientId, selectedClientId, contentResults],
+  );
 
   const filteredCommands = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -112,10 +141,61 @@ export default function Topbar({ title, subtitle }: { title: string; subtitle?: 
     );
   }, [query]);
 
+  /**
+   * The two result groups as one flat list, in the order they render.
+   *
+   * The palette's footer has always advertised "Navigate with ↑ ↓ · Open with
+   * Enter" while nothing listened for an arrow key — a control that claims a
+   * capability it does not have, which is the specific anti-pattern the audit
+   * called out. Indexing across both groups (rather than per group) is what
+   * makes a single ↓ walk from the last matching page into the first matching
+   * command without a dead keypress in between.
+   */
+  const navigableResults = useMemo(
+    () => [...visibleContentResults, ...filteredCommands],
+    [visibleContentResults, filteredCommands],
+  );
+
+  const [activeIndex, setActiveIndex] = useState(0);
+
+  /**
+   * Any change to the query — or reopening the palette — invalidates the
+   * highlight: leaving it on index 4 after a keystroke that reduced the list
+   * to two means Enter opens whatever happens to be last, which is worse
+   * than no keyboard support at all.
+   *
+   * Adjusted during render against a stored previous value rather than in an
+   * effect. `useEffect(() => setActiveIndex(0))` is the obvious spelling and
+   * it is a cascading render — React renders the stale highlight, then
+   * immediately re-renders to correct it. This pattern resets before anything
+   * is painted, and is what the lint rule is pointing at.
+   */
+  const resetKey = `${query}|${searchOpen}`;
+  const [prevResetKey, setPrevResetKey] = useState(resetKey);
+  if (prevResetKey !== resetKey) {
+    setPrevResetKey(resetKey);
+    setActiveIndex(0);
+  }
+
   function runCommand(href: string) {
     setSearchOpen(false);
     setQuery('');
     router.push(href);
+  }
+
+  function onPaletteKeyDown(event: React.KeyboardEvent) {
+    if (event.key === 'Enter') {
+      const target = navigableResults[activeIndex];
+      if (!target) return;
+      event.preventDefault();
+      runCommand(target.href);
+      return;
+    }
+
+    const next = nextActiveIndex(event.key, activeIndex, navigableResults.length);
+    if (next === null) return;
+    event.preventDefault();
+    setActiveIndex(next);
   }
 
   return (
@@ -161,17 +241,30 @@ export default function Topbar({ title, subtitle }: { title: string; subtitle?: 
               autoFocus
               value={query}
               onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={onPaletteKeyDown}
               placeholder={`Search ${clientName}…`}
               aria-label="Search pages and actions"
+              // Points assistive tech at the row the arrow keys are on, which
+              // is the half of keyboard support that is not visible.
+              aria-activedescendant={navigableResults[activeIndex] ? `command-option-${activeIndex}` : undefined}
             />
             <kbd>Esc</kbd>
           </div>
           <div className="command-results" role="listbox" aria-label="Available commands">
             {canSearchContent && searchingContent ? <div className="command-empty">Searching this website…</div> : null}
-            {visibleContentResults.map((result) => {
+            {visibleContentResults.map((result, index) => {
               const ResultIcon = result.icon;
+              const isActive = index === activeIndex;
               return (
-                <button key={`${result.href}-${result.label}`} role="option" aria-selected="false" onClick={() => runCommand(result.href)}>
+                <button
+                  key={`${result.href}-${result.label}`}
+                  id={`command-option-${index}`}
+                  role="option"
+                  aria-selected={isActive}
+                  data-active={isActive || undefined}
+                  onMouseEnter={() => setActiveIndex(index)}
+                  onClick={() => runCommand(result.href)}
+                >
                   <span className="command-icon"><ResultIcon size={17} /></span>
                   <span><strong>{result.label}</strong><small>{result.description}</small></span>
                   <span className="command-enter">↵</span>
@@ -180,10 +273,20 @@ export default function Topbar({ title, subtitle }: { title: string; subtitle?: 
             })}
             {filteredCommands.length === 0 ? (
               visibleContentResults.length === 0 && !searchingContent ? <div className="command-empty">No matching content, pages, or actions.</div> : null
-            ) : filteredCommands.map((command) => {
+            ) : filteredCommands.map((command, index) => {
               const Icon = command.icon;
+              const flatIndex = visibleContentResults.length + index;
+              const isActive = flatIndex === activeIndex;
               return (
-                <button key={command.href} role="option" aria-selected="false" onClick={() => runCommand(command.href)}>
+                <button
+                  key={command.href}
+                  id={`command-option-${flatIndex}`}
+                  role="option"
+                  aria-selected={isActive}
+                  data-active={isActive || undefined}
+                  onMouseEnter={() => setActiveIndex(flatIndex)}
+                  onClick={() => runCommand(command.href)}
+                >
                   <span className="command-icon"><Icon size={17} /></span>
                   <span><strong>{command.label}</strong><small>{command.description}</small></span>
                   <span className="command-enter">↵</span>
