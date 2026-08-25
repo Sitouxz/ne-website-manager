@@ -222,6 +222,14 @@ function collectEntryErrors(
   errors: Record<string, string>,
 ): void {
   for (const field of fields) {
+    // A deprecated field is skipped entirely, not merely exempted from
+    // `required`. Its value is frozen legacy data that the entry editor no
+    // longer renders, so ANY error raised against it — a required value that
+    // was never filled in, a legacy string in what is now a number field —
+    // would block a save the user has no control to fix. Deprecating a field
+    // must never be able to strand an entry.
+    if (field.deprecated) continue;
+
     const value = data[field.key];
     const errorKey = `${keyPrefix}${field.key}`;
     const present = Object.prototype.hasOwnProperty.call(data, field.key) && !isEmpty(value);

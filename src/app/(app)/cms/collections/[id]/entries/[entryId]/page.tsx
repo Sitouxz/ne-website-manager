@@ -13,6 +13,7 @@ import { firePublishNotify, computeLivePath } from '@/lib/publish-client';
 import FieldInput from '@/components/collections/FieldInput';
 import { validateEntry } from '@/lib/collections/validate';
 import type { FieldDef } from '@/lib/collections/types';
+import { visibleFields } from '@/lib/collections/schema-changes';
 import { checkEntryBeforePublish, type PublishWarning } from '@/lib/publish-checks';
 import { PublishWarnings } from '@/components/editor/PublishWarnings';
 import type { Collection, CollectionItem, CollectionItemStatus } from '@/lib/supabase/types';
@@ -460,7 +461,10 @@ export default function CollectionEntryEditor({
    * Location / Media panels, and a schema can now express the same thing.
    */
   const fieldSections: { group: string | null; fields: FieldDef[]; filledCount: number }[] = [];
-  for (const field of collection.fields) {
+  // Deprecated fields are retired from the editor but still present in the
+  // schema, the data and the SDK types. This is the one place that decides
+  // an editor never sees them again.
+  for (const field of visibleFields(collection.fields)) {
     const group = field.group ?? null;
     const existing = fieldSections.find((s) => s.group === group);
     if (existing) existing.fields.push(field);
@@ -581,7 +585,7 @@ export default function CollectionEntryEditor({
         <div className="editor-layout">
           {/* Fields */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            {collection.fields.length === 0 ? (
+            {fieldSections.length === 0 ? (
               <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', padding: 32, textAlign: 'center', color: 'var(--fg3)', fontSize: 13 }}>
                 This collection has no fields defined yet.{' '}
                 <Link href={`/cms/collections/${collectionId}/schema`} style={{ color: 'var(--ne-blue)', fontWeight: 600 }}>Add fields</Link> to start entering content.

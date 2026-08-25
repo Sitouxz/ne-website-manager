@@ -3,11 +3,20 @@
 import Topbar from '@/components/Topbar';
 import Link from 'next/link';
 import { use, useState, useEffect } from 'react';
-import { ArrowLeft, Plus, Trash2, Loader2, Save, CheckCircle, ShieldAlert } from 'lucide-react';
+import { ArrowLeft, Plus, Trash2, Loader2, Save, CheckCircle, ShieldAlert, Eye, EyeOff, Pencil } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
+import { useConfirm } from '@/components/ConfirmDialog';
 import type { Collection, CollectionSortDefault } from '@/lib/supabase/types';
 import type { FieldDef, FieldType } from '@/lib/collections/types';
 import { validateFieldDefs } from '@/lib/collections/validate';
+import {
+  checkRename,
+  countFieldUsage,
+  describeFieldRemoval,
+  setFieldDeprecated,
+  visibleFields,
+  type UsageEntry,
+} from '@/lib/collections/schema-changes';
 import { FILTERABLE_TYPES, MAX_LIST_COLUMNS, SORT_LABELS } from '@/lib/collections/display';
 import { RESERVED_SEO_KEYS, SEO_DESCRIPTION_KEY, SEO_TITLE_KEY, collectionHasSeoFields } from '@/lib/seo/entries';
 import SortableList from '@/components/builder/SortableList';
@@ -106,6 +115,40 @@ export default function CollectionSchemaPage({ params }: { params: Promise<{ id:
   const [subRequired,   setSubRequired]   = useState(false);
   const [subOptionsText, setSubOptionsText] = useState('');
 
+  /**
+   * Every entry's `data` and `status`, loaded once so the builder can answer
+   * "how much content is behind this field?" before it removes anything.
+   * Only those two columns — a schema screen has no business pulling whole
+   * entries, and a collection of 500 listings would drag every rich-text
+   * body through the browser to count keys.
+   */
+  const [entries, setEntries] = useState<UsageEntry[]>([]);
+
+  const [renamingKey, setRenamingKey] = useState<string | null>(null);
+  const [renameKeyDraft, setRenameKeyDraft] = useState('');
+  const [renameLabelDraft, setRenameLabelDraft] = useState('');
+  const [renameError, setRenameError] = useState('');
+  const [renaming, setRenaming] = useState(false);
+
+  const confirm = useConfirm();
+
+  /**
+   * Whether the in-memory schema has drifted from what was last saved.
+   * Derived rather than tracked, because `collection` already holds the
+   * last-saved state and a separate `dirty` flag would have to be set
+   * correctly by all fourteen mutations on this page.
+   *
+   * It gates renaming: that runs server-side against the row as stored, so
+   * starting one with unsaved edits on screen would silently discard them.
+   */
+  const dirty = collection
+    ? JSON.stringify(fields) !== JSON.stringify(collection.fields ?? []) ||
+      titleField !== (collection.options?.title_field ?? '') ||
+      JSON.stringify(listColumns) !== JSON.stringify(collection.options?.list_columns ?? []) ||
+      JSON.stringify(listFilters) !== JSON.stringify(collection.options?.list_filters ?? []) ||
+      sortDefault !== (collection.options?.sort_default ?? 'manual')
+    : false;
+
   useEffect(() => {
     async function load() {
       const supabase = createClient();
@@ -128,6 +171,12 @@ export default function CollectionSchemaPage({ params }: { params: Promise<{ id:
         setListColumns(c.options?.list_columns ?? []);
         setListFilters(c.options?.list_filters ?? []);
         setSortDefault(c.options?.sort_default ?? 'manual');
+
+        const { data: rows } = await supabase
+          .from('collection_items')
+          .select('data, status')
+          .eq('collection_id', id);
+        setEntries((rows ?? []) as UsageEntry[]);
       }
       setLoading(false);
     }
@@ -269,7 +318,42 @@ export default function CollectionSchemaPage({ params }: { params: Promise<{ id:
     setSaved(false);
   }
 
-  function handleRemoveField(key: string) {
+  /**
+   * Removing a field is the one action on this page that can destroy
+   * content, so it is the one action that asks first.
+   *
+   * The question is only asked when there is something to lose:
+   * `describeFieldRemoval` returns null for a field no entry has filled in,
+   * and deleting a typo from an empty collection should not make anyone read
+   * a red dialog. When content IS behind the field, the dialog names how
+   * much, how much of it is live, and points at hiding as the reversible
+   * alternative — because in almost every real case ("we don't use this any
+   * more") hiding is what the person actually wants.
+   */
+  async function handleRemoveField(key: string) {
+    const field = fields.find((f) => f.key === key);
+    if (!field) return;
+
+    const usage = countFieldUsage(entries, key);
+    const warning = describeFieldRemoval(usage, field.label);
+
+    if (warning) {
+      const consequences = [warning];
+      if (usage.publishedWithContent > 0) {
+        consequences.push('The websites that read this field stop receiving it once the collection is republished.');
+      }
+      consequences.push('Hiding the field instead keeps every answer and keeps the website working.');
+
+      const ok = await confirm({
+        title: `Remove "${field.label}" and its content?`,
+        body: 'The content stored under this field cannot be recovered from this screen afterwards.',
+        consequences,
+        confirmLabel: 'Remove field',
+        tone: 'danger',
+      });
+      if (!ok) return;
+    }
+
     setFields((prev) => prev.filter((f) => f.key !== key));
     // Drop every reference to the removed field, so the saved options never
     // name a key that no longer exists.
@@ -278,6 +362,88 @@ export default function CollectionSchemaPage({ params }: { params: Promise<{ id:
     setListFilters((prev) => prev.filter((k) => k !== key));
     setSaveErrors([]);
     setSaved(false);
+  }
+
+  /**
+   * The reversible half of "remove". A hidden field leaves the entry editor
+   * but stays in the data and in the generated SDK types, so a client site
+   * still reading it keeps compiling and keeps rendering — the field can be
+   * retired today and deleted properly once the site has moved on.
+   */
+  function handleToggleDeprecated(key: string) {
+    const field = fields.find((f) => f.key === key);
+    if (!field) return;
+    setFields((prev) => setFieldDeprecated(prev, key, !field.deprecated));
+    if (!field.deprecated) {
+      // A hidden field must not go on driving the entries list, or the list
+      // renders a column of values nobody can edit any more.
+      if (titleField === key) setTitleField('');
+      setListColumns((prev) => prev.filter((k) => k !== key));
+      setListFilters((prev) => prev.filter((k) => k !== key));
+    }
+    setSaveErrors([]);
+    setSaved(false);
+  }
+
+  function startRename(field: FieldDef) {
+    setRenamingKey(field.key);
+    setRenameKeyDraft(field.key);
+    setRenameLabelDraft(field.label);
+    setRenameError('');
+  }
+
+  /**
+   * Renames through the server route rather than in local state, because the
+   * key is also a key in every entry's `data` — the whole reason remove +
+   * re-add was the documented workaround, and the whole reason it lost
+   * content. See `api/cms/collections/rename-field/route.ts`.
+   */
+  async function handleRename() {
+    if (!collection || !renamingKey) return;
+    const nextKey = slugifyKey(renameKeyDraft);
+
+    const check = checkRename(fields, renamingKey, nextKey);
+    if (!check.ok) { setRenameError(check.error); return; }
+
+    setRenaming(true);
+    setRenameError('');
+    const res = await fetch('/api/cms/collections/rename-field', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        collectionId: collection.id,
+        oldKey: renamingKey,
+        newKey: nextKey,
+        newLabel: renameLabelDraft,
+      }),
+    });
+    const body = await res.json().catch(() => ({ error: 'The rename could not be completed.' }));
+    setRenaming(false);
+
+    if (!res.ok) { setRenameError(body.error ?? 'The rename could not be completed.'); return; }
+
+    // Re-read rather than patching local state: the route rewrote the schema,
+    // the display options and every entry, and guessing at that result is how
+    // the next stale-state bug gets written.
+    const supabase = createClient();
+    const { data: coll } = await supabase.from('collections').select('*').eq('id', collection.id).single();
+    if (coll) {
+      const c = coll as Collection;
+      setCollection(c);
+      setFields(c.fields ?? []);
+      setTitleField(c.options?.title_field ?? '');
+      setListColumns(c.options?.list_columns ?? []);
+      setListFilters(c.options?.list_filters ?? []);
+    }
+    const { data: rows } = await supabase
+      .from('collection_items')
+      .select('data, status')
+      .eq('collection_id', collection.id);
+    setEntries((rows ?? []) as UsageEntry[]);
+
+    setRenamingKey(null);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2500);
   }
 
   function reorderFields(next: FieldDef[]) {
@@ -380,7 +546,11 @@ export default function CollectionSchemaPage({ params }: { params: Promise<{ id:
   // creating "location" and "Location " as two separate editor sections.
   const existingGroups = Array.from(new Set(fields.map((f) => f.group).filter((g): g is string => !!g)));
 
-  const filterableFields = fields.filter((f) => FILTERABLE_TYPES.has(f.type));
+  // Hidden fields are excluded from every list-view control below. A column
+  // or filter driven by a field the editor no longer shows renders values
+  // nobody can change, which reads as a broken list rather than a retired one.
+  const selectableFields = visibleFields(fields);
+  const filterableFields = selectableFields.filter((f) => FILTERABLE_TYPES.has(f.type));
   const hasSeoFields = collectionHasSeoFields(fields);
 
   return (
@@ -641,11 +811,19 @@ export default function CollectionSchemaPage({ params }: { params: Promise<{ id:
                 getLabel={(field) => field.label}
                 onReorder={reorderFields}
                 renderItem={(f) => (
-                  <div style={{ minHeight: 58, display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px' }}>
+                  <div style={{ minHeight: 58, display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', opacity: f.deprecated ? 0.6 : 1 }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                         <span style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--fg1)' }}>{f.label}</span>
                         <code style={{ fontSize: 11, color: 'var(--fg3)' }}>{f.key}</code>
+                        {f.deprecated && (
+                          <span
+                            title="Hidden from the entry editor. The content is kept, and websites reading this field still receive it."
+                            style={{ fontSize: 11, background: 'var(--surface-3)', padding: '2px 7px', borderRadius: 99, color: 'var(--fg2)', fontWeight: 600 }}
+                          >
+                            Hidden
+                          </span>
+                        )}
                         <span style={{ fontSize: 11, background: 'var(--surface-3)', padding: '2px 7px', borderRadius: 99, color: 'var(--fg2)', fontWeight: 500 }}>
                           {FIELD_TYPES.find((t) => t.value === f.type)?.label ?? f.type}
                         </span>
@@ -685,14 +863,100 @@ export default function CollectionSchemaPage({ params }: { params: Promise<{ id:
                           {f.format.suffix ? ` ${f.format.suffix}` : ''}
                         </div>
                       )}
+
+                      {/* How much content is behind this field, stated before
+                          anyone reaches for the remove button rather than
+                          inside the dialog that follows it. */}
+                      {(() => {
+                        const usage = countFieldUsage(entries, f.key);
+                        if (usage.withContent === 0) return null;
+                        return (
+                          <div style={{ fontSize: 11.5, color: 'var(--fg3)', marginTop: 3 }}>
+                            Filled in on {usage.withContent} of {usage.total}{' '}
+                            {usage.total === 1 ? 'entry' : 'entries'}
+                            {usage.publishedWithContent > 0 && (
+                              <span style={{ color: 'var(--ne-blue)', fontWeight: 600 }}>
+                                {' '}· {usage.publishedWithContent} published
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })()}
+
+                      {renamingKey === f.key && (
+                        <div style={{ marginTop: 10, padding: 12, background: 'var(--surface-2)', borderRadius: 'var(--r-sm)', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                          <div style={{ fontSize: 12, color: 'var(--fg2)' }}>
+                            Renaming moves the content in all {countFieldUsage(entries, f.key).total} entries across to the new name.
+                          </div>
+                          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                            <label style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 11, color: 'var(--fg3)' }}>
+                              Label
+                              <input
+                                value={renameLabelDraft}
+                                onChange={(e) => setRenameLabelDraft(e.target.value)}
+                                className="input-ne"
+                                style={{ minWidth: 160 }}
+                              />
+                            </label>
+                            <label style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 11, color: 'var(--fg3)' }}>
+                              Key
+                              <input
+                                value={renameKeyDraft}
+                                onChange={(e) => setRenameKeyDraft(e.target.value)}
+                                className="input-ne"
+                                style={{ minWidth: 160, fontFamily: 'monospace' }}
+                              />
+                            </label>
+                          </div>
+                          {renameError && (
+                            <div style={{ fontSize: 12, color: 'var(--ne-danger)' }}>{renameError}</div>
+                          )}
+                          {dirty && (
+                            <div style={{ fontSize: 12, color: 'var(--ne-danger)' }}>
+                              Save your other changes first — renaming reloads this screen from the saved version.
+                            </div>
+                          )}
+                          <div style={{ display: 'flex', gap: 8 }}>
+                            <button className="btn-ne" disabled={renaming || dirty} onClick={handleRename}>
+                              {renaming ? <Loader2 size={13} className="spin" /> : <Save size={13} />}
+                              {renaming ? 'Renaming…' : 'Rename field'}
+                            </button>
+                            <button className="btn-outline-ne" disabled={renaming} onClick={() => setRenamingKey(null)}>
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
-                    <button
-                      onClick={() => handleRemoveField(f.key)}
-                      style={{ width: 40, height: 40, display: 'grid', placeItems: 'center', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--ne-danger)', flexShrink: 0 }}
-                      aria-label={`Remove ${f.label}`}
-                    >
-                      <Trash2 size={14} />
-                    </button>
+
+                    <div style={{ display: 'flex', gap: 2, flexShrink: 0 }}>
+                      <button
+                        onClick={() => startRename(f)}
+                        style={{ width: 36, height: 40, display: 'grid', placeItems: 'center', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg3)' }}
+                        aria-label={`Rename ${f.label}`}
+                        title="Rename this field, keeping the content"
+                      >
+                        <Pencil size={14} />
+                      </button>
+                      <button
+                        onClick={() => handleToggleDeprecated(f.key)}
+                        style={{ width: 36, height: 40, display: 'grid', placeItems: 'center', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg3)' }}
+                        aria-label={f.deprecated ? `Show ${f.label} again` : `Hide ${f.label}`}
+                        title={f.deprecated
+                          ? 'Show this field in the entry editor again'
+                          : 'Hide from the entry editor, keeping the content and the website working'}
+                      >
+                        {f.deprecated ? <Eye size={14} /> : <EyeOff size={14} />}
+                      </button>
+                      <button
+                        onClick={() => handleRemoveField(f.key)}
+                        style={{ width: 36, height: 40, display: 'grid', placeItems: 'center', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--ne-danger)' }}
+                        aria-label={`Remove ${f.label}`}
+                        title="Remove this field and its content"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
                   </div>
                 )}
               />
@@ -712,7 +976,7 @@ export default function CollectionSchemaPage({ params }: { params: Promise<{ id:
               style={{ width: '100%', maxWidth: 320, padding: '9px 12px', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', fontSize: 13, color: 'var(--fg1)', background: fields.length === 0 ? 'var(--surface-2)' : 'var(--surface)' }}
             >
               <option value="">— none —</option>
-              {fields.map((f) => <option key={f.key} value={f.key}>{f.label} ({f.key})</option>)}
+              {selectableFields.map((f) => <option key={f.key} value={f.key}>{f.label} ({f.key})</option>)}
             </select>
           </div>
 
@@ -734,7 +998,7 @@ export default function CollectionSchemaPage({ params }: { params: Promise<{ id:
                 <div style={{ fontSize: 12.5, color: 'var(--fg3)' }}>Add a field first.</div>
               ) : (
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                  {fields.map((f) => {
+                  {selectableFields.map((f) => {
                     const selected = listColumns.includes(f.key);
                     const atLimit = !selected && listColumns.length >= MAX_LIST_COLUMNS;
                     return (

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { validateFieldDefs } from '@/lib/collections/validate';
+import { collectSectionsErrors } from '@/lib/collections/sections';
 import { FILTERABLE_TYPES, MAX_LIST_COLUMNS } from '@/lib/collections/display';
 import { collectionHasSeoFields } from '@/lib/seo/entries';
 import { mockSupabase } from '@/test/supabase-mock';
@@ -41,6 +42,22 @@ describe('SITE_TEMPLATES catalog', () => {
             throw new Error(`${collection.slug}: ${result.errors.join('; ')}`);
           }
           expect(result.ok).toBe(true);
+        }
+      });
+
+      it('follows the page-sections convention wherever it declares sections', () => {
+        // The convention is not enforced by `validateFieldDefs` (it would
+        // retroactively invalidate existing client schemas — see
+        // `lib/collections/sections.ts`), so templates are gated here
+        // instead. A starter schema is the one place a broken sections
+        // field would reach every future client at once.
+        for (const collection of template.collections) {
+          for (const field of collection.fields) {
+            const errors = collectSectionsErrors(field);
+            if (errors.length > 0) {
+              throw new Error(`${collection.slug}: ${errors.join('; ')}`);
+            }
+          }
         }
       });
 

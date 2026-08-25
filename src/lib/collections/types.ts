@@ -57,6 +57,21 @@ export interface FieldDef {
    * entry's `data`, which is what lets `validateEntry` recurse into itself.
    */
   fields?: FieldDef[];
+  /**
+   * Retired from the entry editor, but NOT from the data or from the
+   * generated SDK types. This is the safe half of "remove a field": the
+   * editor stops offering it, existing values stay exactly where they are,
+   * and a client website that still reads the field keeps compiling and
+   * keeps rendering. Deleting it for real becomes a separate, later,
+   * deliberate act — by which time the site has been updated.
+   *
+   * Everything that reads a schema *for a human* filters on this via
+   * `visibleFields` (`./schema-changes.ts`); everything that reads it *for
+   * a machine* deliberately ignores it. A deprecated field is never
+   * `required` in practice — `validateEntry` skips it, because an entry
+   * cannot be made to satisfy a field its editor no longer shows.
+   */
+  deprecated?: boolean;
 }
 
 /**

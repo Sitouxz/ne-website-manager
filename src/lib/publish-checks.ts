@@ -92,6 +92,12 @@ function walkFields(
   warnings: PublishWarning[],
 ): void {
   for (const field of fields) {
+    // A deprecated field is not shown by the entry editor, so warning about
+    // it hands someone a job with no button to do it with. The content is
+    // still served to the website — but fixing it means un-hiding the field
+    // first, which is a schema decision, not a publish-time one.
+    if (field.deprecated) continue;
+
     const value = data[field.key];
     const fieldPath = `${path}${field.key}`;
     if (value === undefined || value === null) continue;
