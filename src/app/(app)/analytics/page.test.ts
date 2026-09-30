@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { dailyBucketsFromRollup, dailyBuckets, utcWindowStart, type RollupRow, type AnalyticsEvent } from './page';
+import { dailyBuckets, utcWindowStart, type AnalyticsEvent } from './page';
 
 // Regression test for the UTC-vs-local bucketing bug described in the Phase 8
 // whole-branch review: `analytics_daily.day` is always written as a UTC
@@ -47,46 +47,6 @@ describe('utcWindowStart', () => {
     const start = utcWindowStart(7);
 
     expect(start.toISOString()).toBe('2026-06-30T00:00:00.000Z');
-  });
-});
-
-describe('dailyBucketsFromRollup', () => {
-  it('keys buckets by UTC calendar day so they line up with analytics_daily.day', () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-07-06T05:00:00.000Z'));
-
-    const rows: RollupRow[] = [
-      { day: '2026-07-06', path: '/blog/a', views: 3, visitors: 2 },
-      { day: '2026-07-05', path: '/blog/a', views: 5, visitors: 4 },
-    ];
-
-    const buckets = dailyBucketsFromRollup(rows, 7);
-
-    expect(buckets.map((b) => b.key)).toEqual([
-      '2026-06-30', '2026-07-01', '2026-07-02', '2026-07-03',
-      '2026-07-04', '2026-07-05', '2026-07-06',
-    ]);
-    expect(buckets.find((b) => b.key === '2026-07-06')?.count).toBe(3);
-    expect(buckets.find((b) => b.key === '2026-07-05')?.count).toBe(5);
-  });
-
-  it('sums to the same total as the fetched rows that fall inside the window (rangeViews must agree with the trend chart)', () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-07-06T05:00:00.000Z'));
-
-    const rows: RollupRow[] = [
-      { day: '2026-07-06', path: '/a', views: 3, visitors: 2 },
-      { day: '2026-07-05', path: '/a', views: 5, visitors: 4 },
-      { day: '2026-06-20', path: '/a', views: 999, visitors: 1 }, // outside the 7-day window
-    ];
-
-    const buckets = dailyBucketsFromRollup(rows, 7);
-    const bucketSum = buckets.reduce((sum, b) => sum + b.count, 0);
-
-    // The out-of-window row must be excluded from the bucket sum — this is
-    // what `rangeViews` in the page component now sums from, instead of
-    // summing every row the `.gte('day', ...)` query happens to return.
-    expect(bucketSum).toBe(8);
   });
 });
 
