@@ -10,10 +10,8 @@ import {
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 
-import { DAY_MS, daysSince, utcDayKey } from '@/lib/dates';
-
-const RANGES = [7, 30, 90] as const;
-type RangeDays = (typeof RANGES)[number];
+import { DAY_MS, daysSince } from '@/lib/dates';
+import { RANGE_PRESETS, isDayKey, resolveRange, type RangePreset, type ResolvedRange } from '@/lib/analytics/range';
 
 type CmsPost = {
   client_id: string;
@@ -90,25 +88,8 @@ function countBy<T>(items: T[], getKey: (item: T) => string | null | undefined) 
     .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
 }
 
-/**
- * Builds the UTC-midnight instant that begins the `days`-day window ending
- * "today" (UTC). `analytics_daily.day` is written from
- * `new Date(created_at).toISOString().slice(0, 10)` by the rollup cron
- * (src/app/api/cron/rollup-analytics/route.ts) — i.e. always a UTC calendar
- * day — so bucket boundaries here must be computed with UTC date methods
- * (`getUTCFullYear`/`getUTCMonth`/`getUTCDate` via `Date.UTC`), never local
- * `setHours`/`getDate`/`setDate`. Using local methods would shift the
- * midnight instant (and therefore every bucket's UTC-day key) whenever the
- * browser (or, for the dashboard's server component, the server process) is
- * not running in UTC.
- */
-export function utcWindowStart(days: number) {
-  const now = new Date();
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - (days - 1)));
-}
-
-export function dailyBuckets(events: AnalyticsEvent[], days: number) {
-  const start = utcWindowStart(days);
+/** One bucket per UTC day from `start` for `days` days; events outside that span are ignored. */
+export function dailyBuckets(events: AnalyticsEvent[], start: Date, days: number) {
 
   const buckets = Array.from({ length: days }, (_, index) => {
     const date = new Date(start.getTime() + index * DAY_MS);
@@ -198,7 +179,13 @@ function MiniMetric({ label, value, sub }: { label: string; value: string; sub: 
 
 export default function AnalyticsPage() {
   const { selectedClientId, clientName } = useSelectedClient();
-  const [range, setRange] = useState<RangeDays>(7);
+  const [preset, setPreset] = useState<RangePreset>('7d');
+  const [customFrom, setCustomFrom] = useState('');
+  const [customTo, setCustomTo] = useState('');
+  // The range the currently displayed data was fetched for. Kept separate from
+  // the selection controls so the chart, tiles and PDF always describe the data
+  // actually on screen, even while a new range is still loading.
+  const [range, setRange] = useState<ResolvedRange>(() => resolveRange('7d', Date.now()));
   const [loading, setLoading] = useState(true);
   // Raw events for the selected range, from the start of the UTC-day window
   // the trend chart uses. Every card on the page derives from this one set, so
@@ -225,7 +212,7 @@ export default function AnalyticsPage() {
     setLoading(true);
     const supabase = createClient();
     const nowMs = Date.now();
-    const windowStart = utcWindowStart(range).toISOString();
+    const resolved = resolveRange(preset, nowMs, customFrom, customTo);
 
     // PostgREST caps a single response at 1000 rows, so page through the
     // window instead of silently truncating busy ranges (the old single
@@ -238,7 +225,8 @@ export default function AnalyticsPage() {
         let q = supabase
           .from('analytics_events')
           .select('id, event_name, path, title, referrer, visitor_id, session_id, device, browser, country, created_at')
-          .gte('created_at', windowStart)
+          .gte('created_at', resolved.start.toISOString())
+          .lt('created_at', resolved.endExclusive.toISOString())
           .order('created_at', { ascending: false })
           .order('id', { ascending: false })
           .range(page * PAGE, page * PAGE + PAGE - 1);
@@ -283,29 +271,35 @@ export default function AnalyticsPage() {
       ((clientsRes.data ?? []) as { id: string; blog_path: string | null }[])
         .map((client) => [client.id, client.blog_path || '/blog']),
     ));
+    setRange(resolved);
     setNowMs(nowMs);
     setLoading(false);
-  }, [selectedClientId, range, includeBots]);
+  }, [selectedClientId, preset, customFrom, customTo, includeBots]);
+
+  // A custom range only fetches once both dates are valid, so half-typed
+  // input never triggers a request.
+  const customReady = preset !== 'custom' || (isDayKey(customFrom) && isDayKey(customTo));
 
   useEffect(() => {
+    if (!customReady) return;
     const timer = window.setTimeout(() => {
       fetchData();
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [fetchData]);
+  }, [fetchData, customReady]);
 
   const pageViews = events.filter((event) => event.event_name === 'page_view');
   const customEvents = events.filter((event) => event.event_name !== 'page_view');
   const sessions = new Set(events.map((event) => event.session_id).filter(Boolean)).size;
-  const last24h = events.filter((event) => nowMs - new Date(event.created_at).getTime() <= DAY_MS).length;
   const referrers = countBy(pageViews, (event) => host(event.referrer));
   const devices = countBy(events, (event) => event.device);
   const browsers = countBy(events, (event) => event.browser);
   const countries = countBy(events, (event) => event.country);
   const eventTypes = countBy(events, (event) => event.event_name);
 
-  const trendBuckets = dailyBuckets(pageViews, range);
+  const trendBuckets = dailyBuckets(pageViews, range.start, range.days);
   const rangeViews = trendBuckets.reduce((sum, bucket) => sum + bucket.count, 0);
+  const avgPerDay = Math.round(rangeViews / range.days);
   const rangeVisitors = new Set(events.map((event) => event.visitor_id).filter(Boolean)).size;
   const topPages = countBy(pageViews, (event) => event.path);
   const maxBucket = Math.max(1, ...trendBuckets.map((bucket) => bucket.count));
@@ -338,19 +332,16 @@ export default function AnalyticsPage() {
     setExporting(true);
     try {
       const { buildAnalyticsPdf } = await import('@/lib/analytics/pdf');
-      const start = utcWindowStart(range);
-      const dateFmt: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' };
-      const rangeLabel = `${start.toLocaleDateString('en-SG', dateFmt)} – ${new Date(nowMs).toLocaleDateString('en-SG', dateFmt)}`;
       const doc = await buildAnalyticsPdf({
         clientName,
-        rangeLabel,
-        rangeDays: range,
+        rangeLabel: range.label,
+        rangeDays: range.days,
         generatedAt: new Date(),
         includesBots: includeBots,
         kpis: [
-          { label: 'Page views', value: rangeViews.toLocaleString('en-US'), sub: `${last24h.toLocaleString('en-US')} events in the last 24h` },
+          { label: 'Page views', value: rangeViews.toLocaleString('en-US'), sub: `${avgPerDay.toLocaleString('en-US')} per day on average` },
           { label: 'Visitors', value: rangeVisitors.toLocaleString('en-US'), sub: 'Unique visitors' },
-          { label: 'Sessions', value: sessions.toLocaleString('en-US'), sub: `Browser sessions, last ${range} days` },
+          { label: 'Sessions', value: sessions.toLocaleString('en-US'), sub: 'Browser sessions in this period' },
           { label: 'Custom events', value: customEvents.length.toLocaleString('en-US'), sub: `${eventTypes.length} event types` },
         ],
         trend: trendBuckets.map((b) => ({ label: b.label, count: b.count })),
@@ -363,7 +354,7 @@ export default function AnalyticsPage() {
         posts: postPerformance.map((row) => ({ title: row.post.title, path: row.path, views: row.views })),
       });
       const slug = clientName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'client';
-      doc.save(`analytics-${slug}-${utcDayKey(nowMs)}-${range}d.pdf`);
+      doc.save(`analytics-${slug}-${range.startKey}_to_${range.endKey}.pdf`);
     } finally {
       setExporting(false);
     }
@@ -374,17 +365,30 @@ export default function AnalyticsPage() {
       <Topbar title="Analytics" subtitle={`${clientName} · Traffic and CMS performance`} />
       <div className="page-body">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, gap: 12, flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            {RANGES.map((r) => (
-              <button key={r} onClick={() => setRange(r)} style={{
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+            {RANGE_PRESETS.map((r) => (
+              <button key={r.id} onClick={() => {
+                if (r.id === 'custom' && !customFrom) {
+                  setCustomFrom(range.startKey);
+                  setCustomTo(range.endKey);
+                }
+                setPreset(r.id);
+              }} style={{
                 padding: '6px 14px', borderRadius: 99, fontSize: 12.5, fontWeight: 600, cursor: 'pointer', border: 'none',
-                background: range === r ? 'var(--ne-blue)' : 'var(--surface)',
-                color: range === r ? '#fff' : 'var(--fg2)',
+                background: preset === r.id ? 'var(--ne-blue)' : 'var(--surface)',
+                color: preset === r.id ? '#fff' : 'var(--fg2)',
                 boxShadow: 'var(--shadow-sm)',
               }}>
-                {r} days
+                {r.label}
               </button>
             ))}
+            {preset === 'custom' && (
+              <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: 'var(--fg2)' }}>
+                <input type="date" aria-label="From date" value={customFrom} max={customTo || undefined} onChange={(e) => setCustomFrom(e.target.value)} style={{ padding: '5px 8px', border: '1px solid var(--border)', borderRadius: 8, background: 'var(--surface)', color: 'var(--fg1)', fontSize: 12.5 }} />
+                to
+                <input type="date" aria-label="To date" value={customTo} min={customFrom || undefined} onChange={(e) => setCustomTo(e.target.value)} style={{ padding: '5px 8px', border: '1px solid var(--border)', borderRadius: 8, background: 'var(--surface)', color: 'var(--fg1)', fontSize: 12.5 }} />
+              </span>
+            )}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
             {loading && (
@@ -416,31 +420,31 @@ export default function AnalyticsPage() {
         <div style={{ marginBottom: 20, background: 'var(--ne-blue-bg)', border: '1px solid var(--ne-blue-muted)', borderRadius: 'var(--r-md)', padding: '14px 18px', display: 'flex', gap: 12, alignItems: 'center' }}>
           <BarChart2 size={17} color="var(--ne-blue)" style={{ flexShrink: 0 }} />
           <p style={{ fontSize: 12.5, color: 'var(--fg2)', margin: 0 }}>
-            Tracking the last {range} days of first-party page views collected through the NE Website Manager analytics endpoint.{includeBots ? ' Bot traffic is included.' : ' Bot and crawler traffic is excluded.'}
+            Showing {range.label} ({range.days} {range.days === 1 ? 'day' : 'days'}, UTC) of first-party page views collected through the NE Website Manager analytics endpoint.{includeBots ? ' Bot traffic is included.' : ' Bot and crawler traffic is excluded.'}
             {eventsTruncated && ' Showing the most recent 30,000 events for this range.'}
           </p>
         </div>
 
         <div className="grid-stats">
-          <StatCard label="Page Views" value={String(rangeViews)} sub={`${last24h} events in the last 24h`} icon={Eye} color="var(--ne-blue)" />
+          <StatCard label="Page Views" value={String(rangeViews)} sub={`${avgPerDay} per day on average`} icon={Eye} color="var(--ne-blue)" />
           <StatCard label="Visitors" value={String(rangeVisitors)} sub={rangeVisitors === 0 ? 'Install tracker to begin' : 'Unique visitors'} icon={Users} color="var(--ne-success)" />
-          <StatCard label="Sessions" value={String(sessions)} sub={`Browser sessions, last ${range} days`} icon={Activity} color="#6366f1" />
-          <StatCard label="Custom Events" value={String(customEvents.length)} sub={`${eventTypes.length} event types, last ${range} days`} icon={MousePointerClick} color="var(--ne-warning)" />
+          <StatCard label="Sessions" value={String(sessions)} sub="Browser sessions in this period" icon={Activity} color="#6366f1" />
+          <StatCard label="Custom Events" value={String(customEvents.length)} sub={`${eventTypes.length} event types in this period`} icon={MousePointerClick} color="var(--ne-warning)" />
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1.35fr .65fr', gap: 20, marginBottom: 24 }}>
           <Card>
-            <CardHead title="Page Views Trend" action={<span style={{ fontSize: 12, color: 'var(--fg3)' }}>Last {range} days</span>} />
+            <CardHead title="Page Views Trend" action={<span style={{ fontSize: 12, color: 'var(--fg3)' }}>{range.label}</span>} />
             <div style={{ padding: 20 }}>
               {rangeViews === 0 ? (
                 <div style={{ color: 'var(--fg3)', fontSize: 13, padding: '48px 0', textAlign: 'center' }}>No page views recorded yet. Add the generated analytics helper to the client website.</div>
               ) : (
-                <div style={{ display: 'grid', gridTemplateColumns: `repeat(${trendBuckets.length}, 1fr)`, gap: range > 30 ? 2 : 8, alignItems: 'end', minHeight: 220 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: `repeat(${trendBuckets.length}, 1fr)`, gap: range.days > 31 ? 2 : 8, alignItems: 'end', minHeight: 220 }}>
                   {trendBuckets.map((bucket) => (
                     <div key={bucket.key} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
-                      {range <= 30 && <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--fg1)' }}>{bucket.count}</div>}
+                      {range.days <= 31 && <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--fg1)' }}>{bucket.count}</div>}
                       <div style={{ width: '100%', height: Math.max(4, Math.round((bucket.count / maxBucket) * 154)), borderRadius: '6px 6px 0 0', background: 'var(--ne-blue)' }} />
-                      {range <= 30 && <div style={{ fontSize: 10.5, color: 'var(--fg3)', whiteSpace: 'nowrap' }}>{bucket.label}</div>}
+                      {range.days <= 31 && <div style={{ fontSize: 10.5, color: 'var(--fg3)', whiteSpace: 'nowrap' }}>{bucket.label}</div>}
                     </div>
                   ))}
                 </div>
@@ -494,7 +498,7 @@ export default function AnalyticsPage() {
         </div>
 
         <Card style={{ marginBottom: 24 }}>
-          <CardHead title="Top Posts" action={<span style={{ fontSize: 12, color: 'var(--fg3)' }}>By views, last {range} days</span>} />
+          <CardHead title="Top Posts" action={<span style={{ fontSize: 12, color: 'var(--fg3)' }}>By views · {range.label}</span>} />
           <div className="table-responsive">
             <table className="data-table">
               <thead>

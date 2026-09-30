@@ -84,7 +84,7 @@ export async function buildAnalyticsPdf(report: AnalyticsReport): Promise<JsPDF>
   doc.setFontSize(9.5);
   setColor(MUTED);
   doc.text(report.rangeLabel, PAGE_W - M, 20, { align: 'right' });
-  doc.text(`Last ${report.rangeDays} days · UTC days`, PAGE_W - M, 25, { align: 'right' });
+  doc.text(`${report.rangeDays} ${report.rangeDays === 1 ? 'day' : 'days'} · UTC`, PAGE_W - M, 25, { align: 'right' });
   doc.text(
     `Generated ${report.generatedAt.toLocaleString('en-SG', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}`,
     PAGE_W - M, 30, { align: 'right' },
@@ -142,7 +142,7 @@ export async function buildAnalyticsPdf(report: AnalyticsReport): Promise<JsPDF>
   const n = report.trend.length;
   const slot = chartW / n;
   const barW = Math.max(0.6, slot * (n > 45 ? 0.8 : 0.62));
-  const labelEvery = n <= 10 ? 1 : n <= 31 ? 3 : 7;
+  const labelEvery = n <= 10 ? 1 : Math.ceil(n / 12);
   report.trend.forEach((bucket, i) => {
     const h = (bucket.count / axisMax) * chartH;
     const bx = chartX + slot * i + (slot - barW) / 2;

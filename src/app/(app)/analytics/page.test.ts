@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { dailyBuckets, utcWindowStart, type AnalyticsEvent } from './page';
+import { dailyBuckets, type AnalyticsEvent } from './page';
 
 // Regression test for the UTC-vs-local bucketing bug described in the Phase 8
 // whole-branch review: `analytics_daily.day` is always written as a UTC
@@ -25,31 +25,6 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe('utcWindowStart', () => {
-  it('anchors the window to the UTC calendar day, not the local one', () => {
-    // 05:00 UTC on 6 Jul 2026 is still 6 Jul in UTC, but 13:00 local
-    // (UTC+8) — same local calendar day, so this instant isolates the bug:
-    // a local-midnight-based implementation subtracts a full local-TZ-width
-    // offset before flooring to midnight, which lands on the *previous* UTC
-    // day here.
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-07-06T05:00:00.000Z'));
-
-    const start = utcWindowStart(1);
-
-    expect(start.toISOString()).toBe('2026-07-06T00:00:00.000Z');
-  });
-
-  it('offsets by (days - 1) UTC calendar days for multi-day windows', () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-07-06T05:00:00.000Z'));
-
-    const start = utcWindowStart(7);
-
-    expect(start.toISOString()).toBe('2026-06-30T00:00:00.000Z');
-  });
-});
-
 describe('dailyBuckets (raw events)', () => {
   it('keys buckets by the UTC calendar day of created_at', () => {
     vi.useFakeTimers();
@@ -63,7 +38,7 @@ describe('dailyBuckets (raw events)', () => {
       },
     ];
 
-    const buckets = dailyBuckets(events, 7);
+    const buckets = dailyBuckets(events, new Date('2026-06-30T00:00:00.000Z'), 7);
 
     expect(buckets.map((b) => b.key)).toEqual([
       '2026-06-30', '2026-07-01', '2026-07-02', '2026-07-03',
