@@ -5,12 +5,12 @@ import { createClient } from '@/lib/supabase/client';
 import { useSelectedClient } from '@/components/AppShell';
 import { computeLivePath } from '@/lib/publish-client';
 import {
-  Activity, BarChart2, Eye, MousePointerClick, MonitorSmartphone, Users, Loader2,
+  Activity, BarChart2, Download, Eye, MousePointerClick, MonitorSmartphone, Users, Loader2,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 
-import { DAY_MS, daysSince } from '@/lib/dates';
+import { DAY_MS, daysSince, utcDayKey } from '@/lib/dates';
 
 const RANGES = [7, 30, 90] as const;
 type RangeDays = (typeof RANGES)[number];
@@ -205,6 +205,8 @@ export default function AnalyticsPage() {
   // the stat tiles, chart and breakdowns can never disagree with each other.
   const [events, setEvents] = useState<AnalyticsEvent[]>([]);
   const [eventsTruncated, setEventsTruncated] = useState(false);
+  const [includeBots, setIncludeBots] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [posts, setPosts] = useState<CmsPost[]>([]);
   const [pages, setPages] = useState<CmsPage[]>([]);
@@ -241,6 +243,7 @@ export default function AnalyticsPage() {
           .order('id', { ascending: false })
           .range(page * PAGE, page * PAGE + PAGE - 1);
         if (selectedClientId) q = q.eq('client_id', selectedClientId);
+        if (!includeBots) q = q.eq('is_bot', false);
         const { data, error } = await q;
         if (error) return { rows, error: error.message, truncated: false };
         rows.push(...((data ?? []) as AnalyticsEvent[]));
@@ -282,7 +285,7 @@ export default function AnalyticsPage() {
     ));
     setNowMs(nowMs);
     setLoading(false);
-  }, [selectedClientId, range]);
+  }, [selectedClientId, range, includeBots]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -331,6 +334,41 @@ export default function AnalyticsPage() {
     .sort((a, b) => b.views - a.views || a.post.title.localeCompare(b.post.title))
     .slice(0, 8);
 
+  const exportPdf = async () => {
+    setExporting(true);
+    try {
+      const { buildAnalyticsPdf } = await import('@/lib/analytics/pdf');
+      const start = utcWindowStart(range);
+      const dateFmt: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' };
+      const rangeLabel = `${start.toLocaleDateString('en-SG', dateFmt)} – ${new Date(nowMs).toLocaleDateString('en-SG', dateFmt)}`;
+      const doc = await buildAnalyticsPdf({
+        clientName,
+        rangeLabel,
+        rangeDays: range,
+        generatedAt: new Date(),
+        includesBots: includeBots,
+        kpis: [
+          { label: 'Page views', value: rangeViews.toLocaleString('en-US'), sub: `${last24h.toLocaleString('en-US')} events in the last 24h` },
+          { label: 'Visitors', value: rangeVisitors.toLocaleString('en-US'), sub: 'Unique visitors' },
+          { label: 'Sessions', value: sessions.toLocaleString('en-US'), sub: `Browser sessions, last ${range} days` },
+          { label: 'Custom events', value: customEvents.length.toLocaleString('en-US'), sub: `${eventTypes.length} event types` },
+        ],
+        trend: trendBuckets.map((b) => ({ label: b.label, count: b.count })),
+        pages: topPages,
+        referrers,
+        countries,
+        devices,
+        browsers,
+        eventTypes,
+        posts: postPerformance.map((row) => ({ title: row.post.title, path: row.path, views: row.views })),
+      });
+      const slug = clientName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'client';
+      doc.save(`analytics-${slug}-${utcDayKey(nowMs)}-${range}d.pdf`);
+    } finally {
+      setExporting(false);
+    }
+  };
+
   return (
     <>
       <Topbar title="Analytics" subtitle={`${clientName} · Traffic and CMS performance`} />
@@ -348,11 +386,25 @@ export default function AnalyticsPage() {
               </button>
             ))}
           </div>
-          {loading && (
-            <span style={{ fontSize: 12, color: 'var(--fg3)', display: 'flex', alignItems: 'center', gap: 6 }}>
-              <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> Loading…
-            </span>
-          )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+            {loading && (
+              <span style={{ fontSize: 12, color: 'var(--fg3)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> Loading…
+              </span>
+            )}
+            <label style={{ fontSize: 12.5, color: 'var(--fg2)', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+              <input type="checkbox" checked={includeBots} onChange={(e) => setIncludeBots(e.target.checked)} />
+              Include bot traffic
+            </label>
+            <button
+              onClick={exportPdf}
+              disabled={loading || exporting}
+              style={{ padding: '6px 14px', borderRadius: 99, fontSize: 12.5, fontWeight: 600, cursor: loading || exporting ? 'default' : 'pointer', border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--fg1)', display: 'flex', alignItems: 'center', gap: 6, opacity: loading || exporting ? 0.6 : 1 }}
+            >
+              {exporting ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Download size={14} />}
+              Export PDF
+            </button>
+          </div>
         </div>
 
         {loadError && (
@@ -364,7 +416,7 @@ export default function AnalyticsPage() {
         <div style={{ marginBottom: 20, background: 'var(--ne-blue-bg)', border: '1px solid var(--ne-blue-muted)', borderRadius: 'var(--r-md)', padding: '14px 18px', display: 'flex', gap: 12, alignItems: 'center' }}>
           <BarChart2 size={17} color="var(--ne-blue)" style={{ flexShrink: 0 }} />
           <p style={{ fontSize: 12.5, color: 'var(--fg2)', margin: 0 }}>
-            Tracking the last {range} days of first-party page views collected through the NE Website Manager analytics endpoint.
+            Tracking the last {range} days of first-party page views collected through the NE Website Manager analytics endpoint.{includeBots ? ' Bot traffic is included.' : ' Bot and crawler traffic is excluded.'}
             {eventsTruncated && ' Showing the most recent 30,000 events for this range.'}
           </p>
         </div>

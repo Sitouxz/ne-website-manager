@@ -56,7 +56,7 @@ export async function GET(req: Request) {
 
   const { data: eventsData, error } = await supabase
     .from('analytics_events')
-    .select('client_id, path, visitor_id, created_at')
+    .select('client_id, path, visitor_id, created_at, is_bot')
     .eq('event_name', 'page_view')
     .gte('created_at', windowStart.toISOString());
 
@@ -64,8 +64,9 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  type EventRow = { client_id: string; path: string; visitor_id: string | null; created_at: string };
-  const events = (eventsData ?? []) as EventRow[];
+  type EventRow = { client_id: string; path: string; visitor_id: string | null; created_at: string; is_bot?: boolean };
+  // Bot traffic is excluded so the rollup matches the Analytics screen's default view.
+  const events = ((eventsData ?? []) as EventRow[]).filter((event) => !event.is_bot);
 
   // Group by (client_id, day, path). `views` is the raw event count for the
   // grouping; `visitors` is the size of the distinct-visitor_id set — a
