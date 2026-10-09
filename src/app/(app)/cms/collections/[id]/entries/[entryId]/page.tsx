@@ -231,7 +231,8 @@ export default function CollectionEntryEditor({
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) { setError('You have been signed out. Please sign in again to save your work.'); setSaving(false); return; }
 
-    const previousStatus = form.status;
+    // Persisted status, not `form.status` — see the same line in the post editor.
+    const previousStatus = initialStatus;
     const payload: Record<string, unknown> = {
       ...buildContentPayload(form),
       status,

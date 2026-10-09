@@ -313,7 +313,11 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) { setError('You have been signed out. Please sign in again to save your work.'); setSaving(false); return; }
 
-    const previousStatus = form.status;
+    // The row's persisted status, not `form.status`: the Status dropdown has
+    // already written the target status into the form by the time a save
+    // button calls this, so `form.status` would read 'published' on the very
+    // save that publishes — and `published_at` would never get stamped.
+    const previousStatus = initialStatus;
     // Only stamp `published_at` on the transition INTO published. Setting it
     // on every save meant that fixing a typo on a year-old post re-dated it to
     // today on the live site, and reshuffled the client's blog ordering. The
