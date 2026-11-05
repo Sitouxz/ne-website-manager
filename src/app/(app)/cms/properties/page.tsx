@@ -8,11 +8,11 @@ import { toast } from 'sonner';
 import { createClient } from '@/lib/supabase/client';
 import { useConfirm } from '@/components/ConfirmDialog';
 import { firePublishNotify } from '@/lib/publish-client';
-import { errorMessage } from '@/lib/errors';
 import { statusDescription, statusLabel } from '@/lib/content-status';
 import { EmptyState, NoResultsState } from '@/components/EmptyState';
 import { useSelectedClient } from '@/components/AppShell';
 import type { Property } from '@/lib/supabase/types';
+import { TRASH_RETENTION_DAYS, moveToTrash, restoreFromTrash } from '@/lib/trash';
 
 const STATUSES = ['All', 'active', 'archived'];
 const LISTINGS = ['All', 'sale', 'rent'];
@@ -51,27 +51,26 @@ export default function PropertiesPage() {
     const isLive = property.status === 'active';
 
     const ok = await confirm({
-      title: `Delete "${name}"?`,
-      body: 'This permanently removes the listing from your CMS. It cannot be undone.',
+      title: `Move "${name}" to the trash?`,
+      body: `You can restore it from the trash for ${TRASH_RETENTION_DAYS} days.`,
       consequences: isLive
         ? [
             'This listing is active, so it will disappear from your website.',
-            'Its photos, description and details are all removed with it.',
             'Anyone with a direct link to it will see a "page not found" error.',
           ]
         : ['This listing is archived, so nothing on your website will change.'],
-      confirmLabel: 'Delete listing',
+      confirmLabel: 'Move to trash',
     });
     if (!ok) return;
 
     setDeleting(property.id);
     const supabase = createClient();
-    const { error } = await supabase.from('properties').delete().eq('id', property.id);
+    const { trashId, error } = await moveToTrash(supabase, 'property', property.id);
     setDeleting(null);
     setOpenMenu(null);
 
     if (error) {
-      toast.error(errorMessage(error, { entity: 'property', action: 'delete' }));
+      toast.error(error);
       return;
     }
     // Deleting a live listing changes the client's website; `path: null`
@@ -89,7 +88,29 @@ export default function PropertiesPage() {
     }
 
     setProperties((prev) => prev.filter((p) => p.id !== property.id));
-    toast.success(`"${name}" was deleted.`);
+    toast.success(`"${name}" moved to the trash.`, trashId ? {
+      action: { label: 'Undo', onClick: () => { void undoTrash(trashId, property, isLive); } },
+    } : undefined);
+  }
+
+  async function undoTrash(trashId: string, property: Property, wasLive: boolean) {
+    const { row, error } = await restoreFromTrash(createClient(), trashId, 'property');
+    if (error || !row) {
+      toast.error(error ?? 'Could not restore the listing.');
+      return;
+    }
+    setProperties((prev) => [row as unknown as Property, ...prev]);
+    if (wasLive && property.client_id) {
+      firePublishNotify({
+        clientId: property.client_id,
+        event: 'content.published',
+        entityType: 'property',
+        entityId: property.id,
+        slug: property.slug,
+        path: null,
+      });
+    }
+    toast.success(`"${property.name || '(Untitled)'}" restored.`);
   }
 
   const filtered = properties.filter((p) =>
@@ -222,7 +243,7 @@ export default function PropertiesPage() {
                             disabled={deleting === p.id}
                           >
                             {deleting === p.id ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />}
-                            Delete
+                            Move to trash
                           </button>
                         </div>
                       )}

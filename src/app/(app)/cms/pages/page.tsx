@@ -15,6 +15,7 @@ import { EmptyState } from '@/components/EmptyState';
 import { useSelectedClient } from '@/components/AppShell';
 import { BulkActionBar, SelectCell } from '@/components/builder/BulkActionBar';
 import { copyTitle, nextCopySlug } from '@/lib/duplicate';
+import { TRASH_RETENTION_DAYS, moveToTrash, restoreFromTrash } from '@/lib/trash';
 import { statusChangeEvent } from '@/lib/publish-events';
 import { useBulkSelection } from '@/lib/hooks/useBulkSelection';
 import type { Page } from '@/lib/supabase/types';
@@ -189,22 +190,23 @@ export default function PagesPage() {
     const liveCount = chosen.filter((page) => page.status === 'published').length;
 
     const ok = await confirm({
-      title: `Delete ${chosen.length} ${chosen.length === 1 ? 'page' : 'pages'}?`,
-      body: 'This permanently removes them from your CMS. It cannot be undone.',
+      title: `Move ${chosen.length} ${chosen.length === 1 ? 'page' : 'pages'} to the trash?`,
+      body: `You can restore them from the trash for ${TRASH_RETENTION_DAYS} days.`,
       consequences: liveCount > 0
         ? [
             `${liveCount} of them ${liveCount === 1 ? 'is' : 'are'} published, so ${liveCount === 1 ? 'it' : 'they'} will disappear from your website.`,
             'Any link to them, in your menu or from Google, will lead to a "page not found" error.',
           ]
         : ['None of them are published, so nothing on your website will change.'],
-      confirmLabel: `Delete ${chosen.length === 1 ? 'page' : 'pages'}`,
+      confirmLabel: 'Move to trash',
     });
     if (!ok) return;
 
     setBulkBusy(true);
     const supabase = createClient();
-    const results = await Promise.all(chosen.map((page) => supabase.from('pages').delete().eq('id', page.id)));
+    const results = await Promise.all(chosen.map((page) => moveToTrash(supabase, 'page', page.id)));
     const deleted = chosen.filter((_, i) => !results[i].error);
+    const firstError = results.find((r) => r.error)?.error;
     const failed = chosen.length - deleted.length;
 
     for (const page of deleted) {
@@ -223,8 +225,8 @@ export default function PagesPage() {
     selection.clear();
     setBulkBusy(false);
 
-    if (failed > 0) toast.warning(`${deleted.length} deleted, ${failed} could not be deleted.`);
-    else toast.success(`${deleted.length} ${deleted.length === 1 ? 'page' : 'pages'} deleted.`);
+    if (failed > 0) toast.warning(`${deleted.length} moved to the trash, ${failed} could not be. ${firstError ?? ''}`.trim());
+    else toast.success(`${deleted.length} ${deleted.length === 1 ? 'page' : 'pages'} moved to the trash.`);
   }
 
   async function handleDelete(page: Page) {
@@ -232,26 +234,26 @@ export default function PagesPage() {
     const isLive = page.status === 'published' && page.visibility === 'public';
 
     const ok = await confirm({
-      title: `Delete "${title}"?`,
-      body: 'This permanently removes the page from your CMS. It cannot be undone.',
+      title: `Move "${title}" to the trash?`,
+      body: `You can restore it from the trash for ${TRASH_RETENTION_DAYS} days.`,
       consequences: isLive
         ? [
             `This page is live at ${page.path}, so it will disappear from your website.`,
             'Any menu link or button pointing to it will lead to a "page not found" error.',
           ]
         : ['This page is not published, so nothing on your website will change.'],
-      confirmLabel: 'Delete page',
+      confirmLabel: 'Move to trash',
     });
     if (!ok) return;
 
     setDeleting(page.id);
     const supabase = createClient();
-    const { error } = await supabase.from('pages').delete().eq('id', page.id);
+    const { trashId, error } = await moveToTrash(supabase, 'page', page.id);
     setDeleting(null);
     setOpenMenu(null);
 
     if (error) {
-      toast.error(errorMessage(error, { entity: 'page', action: 'delete' }));
+      toast.error(error);
       return;
     }
     // See the matching comment in the posts list — deleting live content used
@@ -268,7 +270,29 @@ export default function PagesPage() {
     }
 
     setPages((prev) => prev.filter((p) => p.id !== page.id));
-    toast.success(`"${title}" was deleted.`);
+    toast.success(`"${title}" moved to the trash.`, trashId ? {
+      action: { label: 'Undo', onClick: () => { void undoTrash(trashId, page, isLive); } },
+    } : undefined);
+  }
+
+  async function undoTrash(trashId: string, page: Page, wasLive: boolean) {
+    const { row, error } = await restoreFromTrash(createClient(), trashId, 'page');
+    if (error || !row) {
+      toast.error(error ?? 'Could not restore the page.');
+      return;
+    }
+    setPages((prev) => [row as unknown as Page, ...prev]);
+    if (wasLive && page.client_id) {
+      firePublishNotify({
+        clientId: page.client_id,
+        event: 'content.published',
+        entityType: 'page',
+        entityId: page.id,
+        slug: page.path,
+        path: computeLivePath('page', { path: page.path }),
+      });
+    }
+    toast.success(`"${page.title || page.path || '(Untitled)'}" restored.`);
   }
 
   const publicCount = pages.filter((page) => page.status === 'published' && page.visibility === 'public').length;
@@ -297,6 +321,7 @@ export default function PagesPage() {
             busy={bulkBusy}
             onClear={selection.clear}
             onDelete={bulkDelete}
+            deleteLabel="Move to trash"
           >
             {canPublish && (
               <>
@@ -403,7 +428,7 @@ export default function PagesPage() {
                             disabled={deleting === page.id}
                           >
                             {deleting === page.id ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />}
-                            Delete
+                            Move to trash
                           </button>
                         </div>
                       )}

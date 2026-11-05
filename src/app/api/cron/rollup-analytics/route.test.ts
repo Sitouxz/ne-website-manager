@@ -205,4 +205,19 @@ describe('GET /api/cron/rollup-analytics — aggregation', () => {
     expect(body.aggregated).toBe(0);
     expect(await rollupRows(admin)).toEqual([]);
   });
+
+  it('purges trash rows past the 30-day retention and keeps newer ones', async () => {
+    vi.stubEnv('CRON_SECRET', 'correct-secret');
+    const old = { id: 'trash-old', client_id: 'client-1', deleted_at: new Date(Date.now() - 31 * DAY_MS).toISOString() };
+    const recent = { id: 'trash-new', client_id: 'client-1', deleted_at: new Date(Date.now() - 2 * DAY_MS).toISOString() };
+    const { admin } = setAdmin({ analytics_events: [], trash: [old, recent] });
+
+    const res = await GET(getReq({ authorization: 'Bearer correct-secret' }));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.trashPurged).toBe(1);
+    const { data } = await admin.from('trash').select('id');
+    expect((data as { id: string }[]).map((row) => row.id)).toEqual(['trash-new']);
+  });
 });
