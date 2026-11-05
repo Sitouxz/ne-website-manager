@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createRateLimiter, getClientIp } from '@/lib/api/rate-limit';
+import { loadExtraHosts, siteHostOf } from '@/lib/analytics/traffic-sources';
 import { MAX_BATCH_EVENTS, countryFromHeaders, normalizeEvent } from '@/lib/analytics/ingest';
 
 /**
@@ -41,7 +42,7 @@ export async function POST(
 
   const { data: client } = await admin
     .from('clients')
-    .select('id')
+    .select('id, website_url')
     .eq('slug', slug)
     .eq('is_active', true)
     .single();
@@ -65,6 +66,8 @@ export async function POST(
     userAgent: req.headers.get('user-agent') ?? '',
     country: countryFromHeaders(req.headers),
     nowMs: Date.now(),
+    siteHost: siteHostOf(client.website_url),
+    extraHosts: await loadExtraHosts(admin),
   };
   const rows = list.slice(0, MAX_BATCH_EVENTS)
     .map((body) => normalizeEvent(body, ctx))

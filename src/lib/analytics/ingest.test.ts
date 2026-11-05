@@ -69,3 +69,29 @@ describe('referrer helpers', () => {
     expect(hostOf(null)).toBeNull();
   });
 });
+
+describe('attribution', () => {
+  it('stores UTM fields and derives the channel server-side', () => {
+    const row = normalizeEvent({
+      utm_source: ' Google ', utm_medium: 'CPC', utm_campaign: 'Spring Sale', click_id_type: 'gclid',
+      landing_path: '/promo?x=1', channel: 'Direct',
+    }, ctx)!;
+    expect(row).toMatchObject({
+      utm_source: 'Google', utm_medium: 'cpc', utm_campaign: 'Spring Sale', click_id_type: 'gclid',
+      landing_path: '/promo?x=1', channel: 'Paid Search',
+    });
+  });
+
+  it('ignores unknown click ID types', () => {
+    expect(normalizeEvent({ click_id_type: 'secret_token' }, ctx)!.click_id_type).toBeNull();
+  });
+
+  it('uses session_referrer for the channel of later page views, and the referrer for legacy events', () => {
+    const later = normalizeEvent({ referrer: 'https://acme.sg/about', session_referrer: 'https://www.google.com/' }, { ...ctx, siteHost: 'acme.sg' })!;
+    expect([later.referrer_host, later.channel]).toEqual(['acme.sg', 'Organic Search']);
+    const legacy = normalizeEvent({ referrer: 'https://www.facebook.com/' }, ctx)!;
+    expect(legacy.channel).toBe('Organic Social');
+    const internal = normalizeEvent({ referrer: 'https://acme.sg/' }, { ...ctx, siteHost: 'acme.sg' })!;
+    expect(internal.channel).toBe('Direct');
+  });
+});

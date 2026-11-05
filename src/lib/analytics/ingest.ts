@@ -1,4 +1,7 @@
 import { isBotUserAgent } from '@/lib/analytics/bots';
+import { CLICK_ID_PARAMS, deriveChannel, hostOf, type ExtraHost } from '@/lib/analytics/channels';
+
+export { hostOf };
 
 /**
  * Validation and server-side derivation for analytics beacon payloads, shared
@@ -25,6 +28,10 @@ export type IngestContext = {
   userAgent: string;
   country: string | null;
   nowMs: number;
+  /** The client's own site host (from `clients.website_url`), so self-referrals count as Direct. */
+  siteHost?: string | null;
+  /** Extra referrer hosts from `analytics_traffic_sources` (migration 028). */
+  extraHosts?: ExtraHost[];
 };
 
 export type AnalyticsEventRow = {
@@ -48,6 +55,14 @@ export type AnalyticsEventRow = {
   tracker_version: number | null;
   engaged_ms: number | null;
   scroll_pct: number | null;
+  utm_source: string | null;
+  utm_medium: string | null;
+  utm_campaign: string | null;
+  utm_term: string | null;
+  utm_content: string | null;
+  click_id_type: string | null;
+  landing_path: string | null;
+  channel: string;
   created_at: string;
 };
 
@@ -87,17 +102,6 @@ export function cleanPath(value: unknown) {
   }
 }
 
-/** Lower-cased hostname without a leading `www.`, or null. */
-export function hostOf(url: string | null | undefined): string | null {
-  if (!url) return null;
-  try {
-    const host = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
-    return host || null;
-  } catch {
-    return null;
-  }
-}
-
 /**
  * Referrer reduced to origin + path: query strings and fragments on a
  * referring URL can carry search terms, emails or tokens, and nothing in the
@@ -128,7 +132,11 @@ function int(v: unknown, min: number, max: number): number | null {
  * Accepted fields (all optional): `event_name`, `path`, `title`, `referrer`,
  * `visitor_id`, `session_id`, `metadata`, and from tracker v3: `tv` (tracker
  * version), `is_entry`, `is_new_visitor`, `screen_w`, `lang`, `engaged_ms`,
- * `scroll_pct`, `age_ms` (how long the event sat in the client queue).
+ * `scroll_pct`, `age_ms` (how long the event sat in the client queue), and
+ * the session's attribution: `utm_source|medium|campaign|term|content`,
+ * `click_id_type` (which ad click ID the landing URL carried — never its
+ * value), `landing_path`, `session_referrer` (the referrer the session landed
+ * with). `channel` is always derived here from those, never accepted.
  */
 export function normalizeEvent(body: unknown, ctx: IngestContext): AnalyticsEventRow | null {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
@@ -139,6 +147,15 @@ export function normalizeEvent(body: unknown, ctx: IngestContext): AnalyticsEven
   const referrer = cleanReferrer(b.referrer);
   const ageMs = int(b.age_ms, 0, MAX_EVENT_AGE_MS) ?? 0;
   const lang = str(b.lang, 35)?.toLowerCase().replace(/[^a-z0-9-]/g, '') || null;
+  const utm = (v: unknown) => str(typeof v === 'string' ? v.trim() : v, 100);
+  const utmSource = utm(b.utm_source);
+  const utmMedium = utm(b.utm_medium)?.toLowerCase() ?? null;
+  const clickIdType = typeof b.click_id_type === 'string' && (CLICK_ID_PARAMS as readonly string[]).includes(b.click_id_type)
+    ? b.click_id_type
+    : null;
+  // Older trackers send no session_referrer; their `referrer` on the session's
+  // first page view is the landing referrer.
+  const landingReferrer = typeof b.session_referrer === 'string' ? cleanReferrer(b.session_referrer) : referrer;
 
   return {
     client_id: ctx.clientId,
@@ -161,6 +178,17 @@ export function normalizeEvent(body: unknown, ctx: IngestContext): AnalyticsEven
     tracker_version: int(b.tv, 1, 1_000),
     engaged_ms: isLeave ? int(b.engaged_ms, 0, MAX_ENGAGED_MS) : null,
     scroll_pct: isLeave ? int(b.scroll_pct, 0, 100) : null,
+    utm_source: utmSource,
+    utm_medium: utmMedium,
+    utm_campaign: utm(b.utm_campaign),
+    utm_term: utm(b.utm_term),
+    utm_content: utm(b.utm_content),
+    click_id_type: clickIdType,
+    landing_path: typeof b.landing_path === 'string' && b.landing_path ? cleanPath(b.landing_path) : null,
+    channel: deriveChannel({
+      utmSource, utmMedium, clickIdType, landingReferrer,
+      siteHost: ctx.siteHost, extraHosts: ctx.extraHosts,
+    }),
     created_at: new Date(ctx.nowMs - ageMs).toISOString(),
   };
 }
