@@ -1,6 +1,8 @@
 'use client';
 
 import Topbar from '@/components/Topbar';
+import { RevisionCompare } from '@/components/revisions/RevisionCompare';
+import { diffSnapshot, entryDiffFields, flattenEntry, type FieldSpec } from '@/lib/revisions/diff';
 import Link from 'next/link';
 import { use, useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowLeft, Save, Send, Loader2, History, X, AlertCircle, Eye } from 'lucide-react';
@@ -697,6 +699,9 @@ export default function CollectionEntryEditor({
         onClose={() => setHistoryOpen(false)}
         entryId={entryId}
         onRestore={(row) => applyItemToForm(row as unknown as CollectionItem)}
+        current={flattenEntry({ slug: form.slug, status: form.status, data: form.data })}
+        fields={entryDiffFields(collection ? visibleFields(collection.fields) : [])}
+        flatten={flattenEntry}
       />
 
     </>
@@ -711,13 +716,24 @@ export default function CollectionEntryEditor({
  * sites that differ only in `entity_type`/`entity_id`/restore-callback).
  */
 function RevisionPanel({
-  open, onClose, entryId, onRestore,
+  open, onClose, entryId, onRestore, current, fields, flatten,
 }: {
   open: boolean;
   onClose: () => void;
   entryId: string;
   onRestore: (row: Record<string, unknown>) => void;
+  /** The editor's current state, in the same row shape as a revision snapshot. */
+  current: Record<string, unknown>;
+  fields: FieldSpec[];
+  /** Maps a snapshot to the shape `current` uses (entries keep fields under `data`). */
+  flatten?: (row: Record<string, unknown>) => Record<string, unknown>;
 }) {
+  const [comparing, setComparing] = useState<RevisionListItem | null>(null);
+  // Reopening the drawer should land on the list, not a stale comparison.
+  function closePanel() {
+    setComparing(null);
+    onClose();
+  }
   const [revisions, setRevisions] = useState<RevisionListItem[]>([]);
   const confirm = useConfirm();
   const [loading, setLoading] = useState(false);
@@ -770,7 +786,7 @@ function RevisionPanel({
       const body = await res.json();
       if (!res.ok) throw new Error(body?.error ?? 'Failed to restore revision');
       onRestore(body);
-      onClose();
+      closePanel();
       toast.success('Earlier version restored.');
     } catch (err) {
       setError(errorMessage(err, { entity: 'entry' }));
@@ -782,10 +798,10 @@ function RevisionPanel({
   if (!open) return null;
 
   return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.4)', zIndex: 200 }} onClick={onClose}>
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.4)', zIndex: 200 }} onClick={closePanel}>
       <div
         style={{
-          position: 'fixed', top: 0, bottom: 0, right: 0, width: 380, maxWidth: '92vw',
+          position: 'fixed', top: 0, bottom: 0, right: 0, width: comparing ? 560 : 380, maxWidth: '92vw',
           background: 'var(--surface)', borderLeft: '1px solid var(--border)',
           boxShadow: '-16px 0 48px rgba(0,0,0,.15)', display: 'flex', flexDirection: 'column',
         }}
@@ -793,7 +809,7 @@ function RevisionPanel({
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '18px 20px', borderBottom: '1px solid var(--border)' }}>
           <div style={{ fontWeight: 800, fontSize: 15 }}>Revision History</div>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg3)' }}>
+          <button onClick={closePanel} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg3)' }}>
             <X size={18} />
           </button>
         </div>
@@ -814,6 +830,16 @@ function RevisionPanel({
               No revisions yet.
             </div>
           )}
+          {comparing ? (
+            <RevisionCompare
+              savedAt={comparing.created_at}
+              authorName={comparing.author_name}
+              changes={diffSnapshot((flatten ?? ((row) => row))(comparing.snapshot), current, fields)}
+              restoring={restoringId === comparing.id}
+              onBack={() => setComparing(null)}
+              onRestore={() => handleRestore(comparing.id)}
+            />
+          ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             {revisions.map((rev) => (
               <div key={rev.id} style={{ border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '10px 12px' }}>
@@ -823,18 +849,29 @@ function RevisionPanel({
                 <div style={{ fontSize: 11.5, color: 'var(--fg3)', marginBottom: 8 }}>
                   {rev.author_name ?? 'Unknown'}
                 </div>
-                <button
-                  className="btn-outline-ne"
-                  style={{ fontSize: 12, padding: '5px 10px' }}
-                  onClick={() => handleRestore(rev.id)}
-                  disabled={restoringId === rev.id}
-                >
-                  {restoringId === rev.id ? <Loader2 size={12} className="spin" /> : null}
-                  Restore
-                </button>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button
+                    type="button"
+                    className="btn-outline-ne"
+                    style={{ fontSize: 12, padding: '5px 10px' }}
+                    onClick={() => setComparing(rev)}
+                  >
+                    Compare
+                  </button>
+                  <button
+                    className="btn-outline-ne"
+                    style={{ fontSize: 12, padding: '5px 10px' }}
+                    onClick={() => handleRestore(rev.id)}
+                    disabled={restoringId === rev.id}
+                  >
+                    {restoringId === rev.id ? <Loader2 size={12} className="spin" /> : null}
+                    Restore
+                  </button>
+                </div>
               </div>
             ))}
           </div>
+          )}
         </div>
       </div>
     </div>

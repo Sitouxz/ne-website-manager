@@ -1,6 +1,8 @@
 'use client';
 
 import Topbar from '@/components/Topbar';
+import { RevisionCompare } from '@/components/revisions/RevisionCompare';
+import { POST_DIFF_FIELDS, diffSnapshot, type FieldSpec } from '@/lib/revisions/diff';
 import Link from 'next/link';
 import Image from 'next/image';
 import { useEffect, useState, use, useRef, useCallback } from 'react';
@@ -931,6 +933,8 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
           onClose={() => setHistoryOpen(false)}
           postId={id}
           onRestore={(row) => applyPostToForm(row)}
+          current={{ ...buildContentPayload(form), status: form.status }}
+          fields={POST_DIFF_FIELDS}
         />
       )}
 
@@ -947,13 +951,22 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
  * used anywhere else in this codebase.
  */
 function RevisionPanel({
-  open, onClose, postId, onRestore,
+  open, onClose, postId, onRestore, current, fields,
 }: {
   open: boolean;
   onClose: () => void;
   postId: string;
   onRestore: (row: Record<string, unknown>) => void;
+  /** The editor's current state, in the same row shape as a revision snapshot. */
+  current: Record<string, unknown>;
+  fields: FieldSpec[];
 }) {
+  const [comparing, setComparing] = useState<RevisionListItem | null>(null);
+  // Reopening the drawer should land on the list, not a stale comparison.
+  function closePanel() {
+    setComparing(null);
+    onClose();
+  }
   const [revisions, setRevisions] = useState<RevisionListItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -1006,7 +1019,7 @@ function RevisionPanel({
       const body = await res.json();
       if (!res.ok) throw new Error(body?.error ?? 'restore failed');
       onRestore(body);
-      onClose();
+      closePanel();
       toast.success('Earlier version restored.');
     } catch (err) {
       setError(errorMessage(err, { entity: 'post' }));
@@ -1018,10 +1031,10 @@ function RevisionPanel({
   if (!open) return null;
 
   return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.4)', zIndex: 200 }} onClick={onClose}>
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.4)', zIndex: 200 }} onClick={closePanel}>
       <div
         style={{
-          position: 'fixed', top: 0, bottom: 0, right: 0, width: 380, maxWidth: '92vw',
+          position: 'fixed', top: 0, bottom: 0, right: 0, width: comparing ? 560 : 380, maxWidth: '92vw',
           background: 'var(--surface)', borderLeft: '1px solid var(--border)',
           boxShadow: '-16px 0 48px rgba(0,0,0,.15)', display: 'flex', flexDirection: 'column',
         }}
@@ -1029,7 +1042,7 @@ function RevisionPanel({
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '18px 20px', borderBottom: '1px solid var(--border)' }}>
           <div style={{ fontWeight: 800, fontSize: 15 }}>Revision History</div>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg3)' }}>
+          <button onClick={closePanel} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg3)' }}>
             <X size={18} />
           </button>
         </div>
@@ -1050,6 +1063,16 @@ function RevisionPanel({
               No revisions yet.
             </div>
           )}
+          {comparing ? (
+            <RevisionCompare
+              savedAt={comparing.created_at}
+              authorName={comparing.author_name}
+              changes={diffSnapshot(comparing.snapshot, current, fields)}
+              restoring={restoringId === comparing.id}
+              onBack={() => setComparing(null)}
+              onRestore={() => handleRestore(comparing.id, comparing.created_at)}
+            />
+          ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             {revisions.map((rev) => (
               <div key={rev.id} style={{ border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '10px 12px' }}>
@@ -1059,18 +1082,29 @@ function RevisionPanel({
                 <div style={{ fontSize: 11.5, color: 'var(--fg3)', marginBottom: 8 }}>
                   {rev.author_name ?? 'Unknown'}
                 </div>
-                <button
-                  className="btn-outline-ne"
-                  style={{ fontSize: 12, padding: '5px 10px' }}
-                  onClick={() => handleRestore(rev.id, rev.created_at)}
-                  disabled={restoringId === rev.id}
-                >
-                  {restoringId === rev.id ? <Loader2 size={12} className="spin" /> : null}
-                  Restore
-                </button>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button
+                    type="button"
+                    className="btn-outline-ne"
+                    style={{ fontSize: 12, padding: '5px 10px' }}
+                    onClick={() => setComparing(rev)}
+                  >
+                    Compare
+                  </button>
+                  <button
+                    className="btn-outline-ne"
+                    style={{ fontSize: 12, padding: '5px 10px' }}
+                    onClick={() => handleRestore(rev.id, rev.created_at)}
+                    disabled={restoringId === rev.id}
+                  >
+                    {restoringId === rev.id ? <Loader2 size={12} className="spin" /> : null}
+                    Restore
+                  </button>
+                </div>
               </div>
             ))}
           </div>
+          )}
         </div>
       </div>
     </div>
