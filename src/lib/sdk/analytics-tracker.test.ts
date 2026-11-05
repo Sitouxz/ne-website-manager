@@ -266,3 +266,44 @@ describe('generated v3 files type-check under strict TypeScript', () => {
     expect(diags).toEqual([]);
   }, 30_000);
 });
+
+describe('generated tracker v3 — attribution', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    sent = [];
+    localStorage.clear();
+    sessionStorage.clear();
+    vi.stubGlobal('fetch', vi.fn((_url: string, init: RequestInit) => {
+      collect(init.body as string);
+      return Promise.resolve(new Response(null, { status: 204 }));
+    }));
+  });
+
+  it('captures UTM and click-ID type on landing and attaches them to every event in the session', () => {
+    originalReplace.call(history, null, '', '/promo?utm_source=google&utm_medium=cpc&utm_campaign=spring&gclid=SECRET123');
+    const t = load();
+    t.installAnalytics({ trackLocalhost: true });
+    history.pushState({}, '', '/contact');
+    vi.advanceTimersByTime(10);
+    t.trackEvent('form_submit');
+    vi.advanceTimersByTime(1100);
+
+    expect(sent.length).toBeGreaterThanOrEqual(3);
+    for (const e of sent) {
+      expect(e).toMatchObject({
+        utm_source: 'google', utm_medium: 'cpc', utm_campaign: 'spring', click_id_type: 'gclid',
+        landing_path: '/promo', session_referrer: 'https://www.google.com/',
+      });
+    }
+    // The click ID value itself is never sent.
+    expect(JSON.stringify(sent)).not.toContain('SECRET123');
+  });
+
+  it('records landing path and referrer even without campaign parameters', () => {
+    originalReplace.call(history, null, '', '/');
+    load().installAnalytics({ trackLocalhost: true });
+    vi.advanceTimersByTime(1100);
+    expect(sent[0]).toMatchObject({ landing_path: '/', session_referrer: 'https://www.google.com/' });
+    expect(sent[0].utm_source).toBeUndefined();
+  });
+});

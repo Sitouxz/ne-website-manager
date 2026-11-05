@@ -27,6 +27,11 @@
  *   bottom reached, %).
  * - **Audience fields.** `is_entry`, `is_new_visitor`, `screen_w`, `lang`,
  *   and `tv` (tracker version) on every event.
+ * - **Attribution.** On the session's first page view (or any page view whose
+ *   URL carries campaign parameters) the tracker records `utm_*`, which ad
+ *   click ID is present (`click_id_type`, never its value), `landing_path` and
+ *   `session_referrer` in sessionStorage, and attaches them to every event in
+ *   the session. The server derives the channel from them.
  * - **Batching.** Events are queued and sent to `…/analytics/batch` (≤ 20
  *   per request, 1 s debounce), with `navigator.sendBeacon` on unload. Bodies
  *   are `text/plain` so no CORS preflight is needed.
@@ -78,6 +83,9 @@ const VISITOR_KEY = 'ne_visitor_id';
 const SESSION_KEY = 'ne_session_id';
 const NEW_VISITOR_KEY = 'ne_visitor_new';
 const ENTRY_KEY = 'ne_entry_sent';
+const ATTRIBUTION_KEY = 'ne_attribution';
+const UTM_PARAMS = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content'];
+const CLICK_ID_PARAMS = ['gclid', 'gbraid', 'wbraid', 'msclkid', 'dclid', 'fbclid', 'ttclid', 'li_fat_id', 'twclid'];
 const ENGAGE_WINDOW_MS = 10000;
 const DEDUPE_MS = 1000;
 const FLUSH_DELAY_MS = 1000;
@@ -173,9 +181,48 @@ function allowed(): boolean {
   return true;
 }
 
+function attribution(): Payload {
+  try {
+    const raw = read('session', ATTRIBUTION_KEY);
+    return raw ? (JSON.parse(raw) as Payload) : {};
+  } catch {
+    return {};
+  }
+}
+
+function captureAttribution(isEntry: boolean, referrer: string | null) {
+  let params: URLSearchParams;
+  try {
+    params = new URLSearchParams(window.location.search);
+  } catch {
+    return;
+  }
+  const found: Payload = {};
+  let campaign = false;
+  for (const key of UTM_PARAMS) {
+    const value = params.get(key);
+    if (value) {
+      found[key] = value.slice(0, 100);
+      campaign = true;
+    }
+  }
+  for (const key of CLICK_ID_PARAMS) {
+    if (params.has(key)) {
+      found.click_id_type = key;
+      campaign = true;
+      break;
+    }
+  }
+  if (!isEntry && !campaign) return;
+  found.landing_path = window.location.pathname;
+  found.session_referrer = referrer;
+  write('session', ATTRIBUTION_KEY, JSON.stringify(found));
+}
+
 function basePayload(eventName: string): Payload {
   const id = identity();
   return {
+    ...attribution(),
     event_name: eventName,
     path: window.location.pathname,
     title: document.title,
@@ -278,9 +325,10 @@ function recordPageView(metadata: AnalyticsMetadata, referrer: string | null) {
   if (key === lastView.key && now - lastView.at < DEDUPE_MS) return;
   lastView = { key, at: now };
 
-  const payload = basePayload('page_view');
   const isEntry = read('session', ENTRY_KEY) !== '1';
   if (isEntry) write('session', ENTRY_KEY, '1');
+  captureAttribution(isEntry, referrer);
+  const payload = basePayload('page_view');
   payload.is_entry = isEntry;
   payload.referrer = referrer;
   payload.metadata = metadata;
