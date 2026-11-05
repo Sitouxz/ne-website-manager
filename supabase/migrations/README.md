@@ -32,3 +32,11 @@ one) — a real, additive fix applied as part of documenting this schema.
 Going forward, apply directly via the Supabase MCP `apply_migration` tool
 as part of the same session that writes the migration file, rather than
 deferring application to a separate release step.
+
+## Testing analytics SQL locally (2026-11)
+
+`027_analytics_v2.sql` (applied live as `analytics_v2`) adds the analytics
+aggregation RPCs. `scripts/test-analytics-sql.sh` runs migrations 025–027
+on any local Postgres (with `supabase/tests/bootstrap.sql` standing in for
+Supabase's auth schema and roles) and asserts the RPC results, including RLS
+isolation between clients. `SEED_EVENTS=500000` adds a timing run.
