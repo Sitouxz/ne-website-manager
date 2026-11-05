@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createRateLimiter, getClientIp } from '@/lib/api/rate-limit';
+import { isBotUserAgent } from '@/lib/analytics/bots';
 
 /**
  * Rate limit: 120 events per rolling 60s per (IP, client) pair.
@@ -115,6 +116,7 @@ export async function POST(
     browser: parseBrowser(userAgent),
     country: headers.get('x-vercel-ip-country') ?? headers.get('cf-ipcountry') ?? null,
     metadata: boundedMetadata(body.metadata),
+    is_bot: isBotUserAgent(userAgent),
   });
 
   if (error) return json({ error: error.message }, { status: 500 });

@@ -5,15 +5,13 @@ import { createClient } from '@/lib/supabase/client';
 import { useSelectedClient } from '@/components/AppShell';
 import { computeLivePath } from '@/lib/publish-client';
 import {
-  Activity, BarChart2, Eye, MousePointerClick, MonitorSmartphone, Users, Loader2,
+  Activity, BarChart2, Download, Eye, MousePointerClick, MonitorSmartphone, Users, Loader2,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 
-import { DAY_MS, daysSince, utcDayKey } from '@/lib/dates';
-
-const RANGES = [7, 30, 90] as const;
-type RangeDays = (typeof RANGES)[number];
+import { DAY_MS, daysSince } from '@/lib/dates';
+import { RANGE_PRESETS, isDayKey, resolveRange, type RangePreset, type ResolvedRange } from '@/lib/analytics/range';
 
 type CmsPost = {
   client_id: string;
@@ -48,14 +46,6 @@ export type AnalyticsEvent = {
   browser: string | null;
   country: string | null;
   created_at: string;
-};
-
-/** One pre-aggregated row from `analytics_daily` (migration 020) — day/path granularity only, no referrer/device/browser/country (see Task 8.1 brief). */
-export type RollupRow = {
-  day: string;
-  path: string;
-  views: number;
-  visitors: number;
 };
 
 function fmtDate(iso: string | null | undefined) {
@@ -98,42 +88,14 @@ function countBy<T>(items: T[], getKey: (item: T) => string | null | undefined) 
     .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
 }
 
-/** Sums `views` per distinct `path` across rollup rows — the rollup equivalent of `countBy(pageViews, e => e.path)` for raw events. */
-function topPathsFromRollup(rows: RollupRow[]) {
-  const counts = new Map<string, number>();
-  for (const row of rows) {
-    counts.set(row.path, (counts.get(row.path) ?? 0) + row.views);
-  }
-  return [...counts.entries()]
-    .map(([name, count]) => ({ name, count }))
-    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
-}
-
-/**
- * Builds the UTC-midnight instant that begins the `days`-day window ending
- * "today" (UTC). `analytics_daily.day` is written from
- * `new Date(created_at).toISOString().slice(0, 10)` by the rollup cron
- * (src/app/api/cron/rollup-analytics/route.ts) — i.e. always a UTC calendar
- * day — so bucket boundaries here must be computed with UTC date methods
- * (`getUTCFullYear`/`getUTCMonth`/`getUTCDate` via `Date.UTC`), never local
- * `setHours`/`getDate`/`setDate`. Using local methods would shift the
- * midnight instant (and therefore every bucket's UTC-day key) whenever the
- * browser (or, for the dashboard's server component, the server process) is
- * not running in UTC.
- */
-export function utcWindowStart(days: number) {
-  const now = new Date();
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - (days - 1)));
-}
-
-export function dailyBuckets(events: AnalyticsEvent[], days: number) {
-  const start = utcWindowStart(days);
+/** One bucket per UTC day from `start` for `days` days; events outside that span are ignored. */
+export function dailyBuckets(events: AnalyticsEvent[], start: Date, days: number) {
 
   const buckets = Array.from({ length: days }, (_, index) => {
     const date = new Date(start.getTime() + index * DAY_MS);
     return {
       key: date.toISOString().slice(0, 10),
-      label: date.toLocaleDateString('en-SG', { day: 'numeric', month: 'short' }),
+      label: date.toLocaleDateString('en-SG', { day: 'numeric', month: 'short', timeZone: 'UTC' }),
       count: 0,
     };
   });
@@ -143,27 +105,6 @@ export function dailyBuckets(events: AnalyticsEvent[], days: number) {
     const key = new Date(event.created_at).toISOString().slice(0, 10);
     const bucket = byKey.get(key);
     if (bucket) bucket.count += 1;
-  }
-  return buckets;
-}
-
-/** Rollup equivalent of `dailyBuckets` — sums `views` per day (keyed on the rollup's own `day` column) instead of counting raw events. */
-export function dailyBucketsFromRollup(rows: RollupRow[], days: number) {
-  const start = utcWindowStart(days);
-
-  const buckets = Array.from({ length: days }, (_, index) => {
-    const date = new Date(start.getTime() + index * DAY_MS);
-    return {
-      key: date.toISOString().slice(0, 10),
-      label: date.toLocaleDateString('en-SG', { day: 'numeric', month: 'short' }),
-      count: 0,
-    };
-  });
-
-  const byKey = new Map(buckets.map((bucket) => [bucket.key, bucket]));
-  for (const row of rows) {
-    const bucket = byKey.get(row.day);
-    if (bucket) bucket.count += row.views;
   }
   return buckets;
 }
@@ -183,12 +124,6 @@ function CardHead({ title, action }: { title: string; action?: React.ReactNode }
       {action}
     </div>
   );
-}
-
-/** Small muted caption used on cards whose data can't follow the 30/90-day rollup (referrer/device/browser/country/custom-event breakdowns need raw events — see Task 8.1 brief). */
-function ScopeNote({ show }: { show: boolean }) {
-  if (!show) return null;
-  return <span style={{ fontSize: 11, color: 'var(--fg3)' }}>Last 7 days</span>;
 }
 
 function StatCard({ label, value, sub, icon: Icon, color }: {
@@ -244,18 +179,22 @@ function MiniMetric({ label, value, sub }: { label: string; value: string; sub: 
 
 export default function AnalyticsPage() {
   const { selectedClientId, clientName } = useSelectedClient();
-  const [range, setRange] = useState<RangeDays>(7);
+  const [preset, setPreset] = useState<RangePreset>('7d');
+  const [customFrom, setCustomFrom] = useState('');
+  const [customTo, setCustomTo] = useState('');
+  // The range the currently displayed data was fetched for. Kept separate from
+  // the selection controls so the chart, tiles and PDF always describe the data
+  // actually on screen, even while a new range is still loading.
+  const [range, setRange] = useState<ResolvedRange>(() => resolveRange('7d', Date.now()));
   const [loading, setLoading] = useState(true);
-  // Always the last 7 days of raw events, regardless of the selected range —
-  // referrer/device/browser/country/custom-event breakdowns and the Recent
-  // Events table need raw per-event data that `analytics_daily` doesn't
-  // capture, so those cards stay scoped to this fixed 7-day raw window even
-  // when a 30/90-day range is selected (see Task 8.1 brief).
+  // Raw events for the selected range, from the start of the UTC-day window
+  // the trend chart uses. Every card on the page derives from this one set, so
+  // the stat tiles, chart and breakdowns can never disagree with each other.
   const [events, setEvents] = useState<AnalyticsEvent[]>([]);
-  // Populated only when `range !== 7` — pre-aggregated day/path rows
-  // covering the full selected range, used for the page-view trend, Top
-  // Pages, and per-post performance instead of scanning raw events.
-  const [rollupRows, setRollupRows] = useState<RollupRow[]>([]);
+  const [eventsTruncated, setEventsTruncated] = useState(false);
+  const [includeBots, setIncludeBots] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [posts, setPosts] = useState<CmsPost[]>([]);
   const [pages, setPages] = useState<CmsPage[]>([]);
   // A post's live path depends on where its client's site publishes the blog
@@ -273,15 +212,33 @@ export default function AnalyticsPage() {
     setLoading(true);
     const supabase = createClient();
     const nowMs = Date.now();
-    const since7 = new Date(nowMs - 7 * DAY_MS).toISOString();
+    const resolved = resolveRange(preset, nowMs, customFrom, customTo);
 
-    let eventsQuery = supabase
-      .from('analytics_events')
-      .select('id, event_name, path, title, referrer, visitor_id, session_id, device, browser, country, created_at')
-      .gte('created_at', since7)
-      .order('created_at', { ascending: false })
-      .limit(1000);
-    if (selectedClientId) eventsQuery = eventsQuery.eq('client_id', selectedClientId);
+    // PostgREST caps a single response at 1000 rows, so page through the
+    // window instead of silently truncating busy ranges (the old single
+    // `.limit(1000)` under-counted everything once a week exceeded 1000 events).
+    const PAGE = 1000;
+    const MAX_PAGES = 30;
+    const fetchEvents = async () => {
+      const rows: AnalyticsEvent[] = [];
+      for (let page = 0; page < MAX_PAGES; page++) {
+        let q = supabase
+          .from('analytics_events')
+          .select('id, event_name, path, title, referrer, visitor_id, session_id, device, browser, country, created_at')
+          .gte('created_at', resolved.start.toISOString())
+          .lt('created_at', resolved.endExclusive.toISOString())
+          .order('created_at', { ascending: false })
+          .order('id', { ascending: false })
+          .range(page * PAGE, page * PAGE + PAGE - 1);
+        if (selectedClientId) q = q.eq('client_id', selectedClientId);
+        if (!includeBots) q = q.eq('is_bot', false);
+        const { data, error } = await q;
+        if (error) return { rows, error: error.message, truncated: false };
+        rows.push(...((data ?? []) as AnalyticsEvent[]));
+        if ((data?.length ?? 0) < PAGE) return { rows, error: null, truncated: false };
+      }
+      return { rows, error: null, truncated: true };
+    };
 
     let postsQuery = supabase
       .from('posts')
@@ -295,84 +252,56 @@ export default function AnalyticsPage() {
       .order('updated_at', { ascending: false });
     if (selectedClientId) pagesQuery = pagesQuery.eq('client_id', selectedClientId);
 
-    // Only query the rollup table for ranges the raw-event window doesn't
-    // already cover — the 7-day view stays on raw events (full per-event
-    // granularity, matching the original page's behavior), while 30/90-day
-    // views read the much cheaper pre-aggregated `analytics_daily` table.
-    let rollupQuery = null;
-    if (range !== 7) {
-      const sinceRange = utcDayKey(nowMs - range * DAY_MS);
-      let q = supabase.from('analytics_daily').select('day, path, views, visitors').gte('day', sinceRange);
-      if (selectedClientId) q = q.eq('client_id', selectedClientId);
-      rollupQuery = q;
-    }
-
     const clientsQuery = supabase.from('clients').select('id, blog_path');
 
-    const [eventsRes, postsRes, pagesRes, rollupRes, clientsRes] = await Promise.all([
-      eventsQuery,
+    const [eventsRes, postsRes, pagesRes, clientsRes] = await Promise.all([
+      fetchEvents(),
       postsQuery,
       pagesQuery,
-      rollupQuery ?? Promise.resolve({ data: [] as RollupRow[] }),
       clientsQuery,
     ]);
 
-    setEvents((eventsRes.data ?? []) as AnalyticsEvent[]);
+    const errors = [eventsRes.error, postsRes.error?.message, pagesRes.error?.message, clientsRes.error?.message].filter(Boolean);
+    setLoadError(errors.length ? errors.join(' · ') : null);
+    setEvents(eventsRes.rows);
+    setEventsTruncated(eventsRes.truncated);
     setPosts((postsRes.data ?? []) as CmsPost[]);
     setPages((pagesRes.data ?? []) as CmsPage[]);
-    setRollupRows((rollupRes.data ?? []) as RollupRow[]);
     setBlogPathByClient(Object.fromEntries(
       ((clientsRes.data ?? []) as { id: string; blog_path: string | null }[])
         .map((client) => [client.id, client.blog_path || '/blog']),
     ));
+    setRange(resolved);
     setNowMs(nowMs);
     setLoading(false);
-  }, [selectedClientId, range]);
+  }, [selectedClientId, preset, customFrom, customTo, includeBots]);
+
+  // A custom range only fetches once both dates are valid, so half-typed
+  // input never triggers a request.
+  const customReady = preset !== 'custom' || (isDayKey(customFrom) && isDayKey(customTo));
 
   useEffect(() => {
+    if (!customReady) return;
     const timer = window.setTimeout(() => {
       fetchData();
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [fetchData]);
+  }, [fetchData, customReady]);
 
-  const isRollupRange = range !== 7;
-
-  // Always derived from the fixed 7-day raw-event window — inherently can't
-  // follow the rollup for 30/90-day ranges (no referrer/device/browser/
-  // country/session data in `analytics_daily`).
-  const pageViews7d = events.filter((event) => event.event_name === 'page_view');
-  const customEvents7d = events.filter((event) => event.event_name !== 'page_view');
+  const pageViews = events.filter((event) => event.event_name === 'page_view');
+  const customEvents = events.filter((event) => event.event_name !== 'page_view');
   const sessions = new Set(events.map((event) => event.session_id).filter(Boolean)).size;
-  const last24h = events.filter((event) => nowMs - new Date(event.created_at).getTime() <= DAY_MS).length;
-  const referrers = countBy(pageViews7d, (event) => host(event.referrer));
+  const referrers = countBy(pageViews, (event) => host(event.referrer));
   const devices = countBy(events, (event) => event.device);
   const browsers = countBy(events, (event) => event.browser);
   const countries = countBy(events, (event) => event.country);
   const eventTypes = countBy(events, (event) => event.event_name);
 
-  // Range-dependent: raw 7-day events when range === 7, pre-aggregated
-  // `analytics_daily` rows otherwise. `rangeVisitors` for a rollup range is
-  // a sum of each day's distinct-visitor count, not a true distinct count
-  // across the whole range (a visitor active on multiple days is counted
-  // once per day) — an inherent limitation of a day/path rollup without
-  // per-visitor rows; documented here rather than fetching raw events for
-  // 90 days just to get an exact number.
-  const trendBuckets = isRollupRange ? dailyBucketsFromRollup(rollupRows, range) : dailyBuckets(pageViews7d, range);
-  // `rangeViews` is derived from the same bucketed window as the trend chart
-  // (rather than summing every fetched rollup row) so the two always agree:
-  // the `.gte('day', ...)` query below can return one extra day older than
-  // the UTC bucket window's start (its lower bound is computed with a plain
-  // `range`-day offset, not the `range - 1`-day, UTC-aligned offset the
-  // buckets use), and rows outside the bucket window are silently dropped by
-  // `dailyBucketsFromRollup`. Summing from the fetched rows directly would
-  // double-count that extra day into the stat card while the chart ignores
-  // it.
-  const rangeViews = isRollupRange ? trendBuckets.reduce((sum, bucket) => sum + bucket.count, 0) : pageViews7d.length;
-  const rangeVisitors = isRollupRange
-    ? rollupRows.reduce((sum, row) => sum + row.visitors, 0)
-    : new Set(events.map((event) => event.visitor_id).filter(Boolean)).size;
-  const topPages = isRollupRange ? topPathsFromRollup(rollupRows) : countBy(pageViews7d, (event) => event.path);
+  const trendBuckets = dailyBuckets(pageViews, range.start, range.days);
+  const rangeViews = trendBuckets.reduce((sum, bucket) => sum + bucket.count, 0);
+  const avgPerDay = Math.round(rangeViews / range.days);
+  const rangeVisitors = new Set(events.map((event) => event.visitor_id).filter(Boolean)).size;
+  const topPages = countBy(pageViews, (event) => event.path);
   const maxBucket = Math.max(1, ...trendBuckets.map((bucket) => bucket.count));
   const viewsByPath = new Map(topPages.map((row) => [row.name, row.count]));
 
@@ -399,58 +328,123 @@ export default function AnalyticsPage() {
     .sort((a, b) => b.views - a.views || a.post.title.localeCompare(b.post.title))
     .slice(0, 8);
 
+  const exportPdf = async () => {
+    setExporting(true);
+    try {
+      const { buildAnalyticsPdf } = await import('@/lib/analytics/pdf');
+      const doc = await buildAnalyticsPdf({
+        clientName,
+        rangeLabel: range.label,
+        rangeDays: range.days,
+        generatedAt: new Date(),
+        includesBots: includeBots,
+        kpis: [
+          { label: 'Page views', value: rangeViews.toLocaleString('en-US'), sub: `${avgPerDay.toLocaleString('en-US')} per day on average` },
+          { label: 'Visitors', value: rangeVisitors.toLocaleString('en-US'), sub: 'Unique visitors' },
+          { label: 'Sessions', value: sessions.toLocaleString('en-US'), sub: 'Browser sessions in this period' },
+          { label: 'Custom events', value: customEvents.length.toLocaleString('en-US'), sub: `${eventTypes.length} event types` },
+        ],
+        trend: trendBuckets.map((b) => ({ label: b.label, count: b.count })),
+        pages: topPages,
+        referrers,
+        countries,
+        devices,
+        browsers,
+        eventTypes,
+        posts: postPerformance.map((row) => ({ title: row.post.title, path: row.path, views: row.views })),
+      });
+      const slug = clientName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'client';
+      doc.save(`analytics-${slug}-${range.startKey}_to_${range.endKey}.pdf`);
+    } finally {
+      setExporting(false);
+    }
+  };
+
   return (
     <>
       <Topbar title="Analytics" subtitle={`${clientName} · Traffic and CMS performance`} />
       <div className="page-body">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, gap: 12, flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            {RANGES.map((r) => (
-              <button key={r} onClick={() => setRange(r)} style={{
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+            {RANGE_PRESETS.map((r) => (
+              <button key={r.id} onClick={() => {
+                if (r.id === 'custom' && !customFrom) {
+                  setCustomFrom(range.startKey);
+                  setCustomTo(range.endKey);
+                }
+                setPreset(r.id);
+              }} style={{
                 padding: '6px 14px', borderRadius: 99, fontSize: 12.5, fontWeight: 600, cursor: 'pointer', border: 'none',
-                background: range === r ? 'var(--ne-blue)' : 'var(--surface)',
-                color: range === r ? '#fff' : 'var(--fg2)',
+                background: preset === r.id ? 'var(--ne-blue)' : 'var(--surface)',
+                color: preset === r.id ? '#fff' : 'var(--fg2)',
                 boxShadow: 'var(--shadow-sm)',
               }}>
-                {r} days
+                {r.label}
               </button>
             ))}
+            {preset === 'custom' && (
+              <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: 'var(--fg2)' }}>
+                <input type="date" aria-label="From date" value={customFrom} max={customTo || undefined} onChange={(e) => setCustomFrom(e.target.value)} style={{ padding: '5px 8px', border: '1px solid var(--border)', borderRadius: 8, background: 'var(--surface)', color: 'var(--fg1)', fontSize: 12.5 }} />
+                to
+                <input type="date" aria-label="To date" value={customTo} min={customFrom || undefined} onChange={(e) => setCustomTo(e.target.value)} style={{ padding: '5px 8px', border: '1px solid var(--border)', borderRadius: 8, background: 'var(--surface)', color: 'var(--fg1)', fontSize: 12.5 }} />
+              </span>
+            )}
           </div>
-          {loading && (
-            <span style={{ fontSize: 12, color: 'var(--fg3)', display: 'flex', alignItems: 'center', gap: 6 }}>
-              <Loader2 size={14} className="spin" /> Loading…
-            </span>
-          )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+            {loading && (
+              <span style={{ fontSize: 12, color: 'var(--fg3)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <Loader2 size={14} className="spin" /> Loading…
+              </span>
+            )}
+            <label style={{ fontSize: 12.5, color: 'var(--fg2)', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+              <input type="checkbox" checked={includeBots} onChange={(e) => setIncludeBots(e.target.checked)} />
+              Include bot traffic
+            </label>
+            <button
+              onClick={exportPdf}
+              disabled={loading || exporting}
+              style={{ padding: '6px 14px', borderRadius: 99, fontSize: 12.5, fontWeight: 600, cursor: loading || exporting ? 'default' : 'pointer', border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--fg1)', display: 'flex', alignItems: 'center', gap: 6, opacity: loading || exporting ? 0.6 : 1 }}
+            >
+              {exporting ? <Loader2 size={14} className="spin" /> : <Download size={14} />}
+              Export PDF
+            </button>
+          </div>
         </div>
+
+        {loadError && (
+          <div role="alert" style={{ marginBottom: 20, background: 'var(--ne-danger-bg, #fef2f2)', border: '1px solid var(--ne-danger, #dc2626)', borderRadius: 'var(--r-md)', padding: '12px 18px', fontSize: 12.5, color: 'var(--fg1)' }}>
+            Some analytics data failed to load, so the numbers below may be incomplete: {loadError}
+          </div>
+        )}
 
         <div style={{ marginBottom: 20, background: 'var(--ne-blue-bg)', border: '1px solid var(--ne-blue-muted)', borderRadius: 'var(--r-md)', padding: '14px 18px', display: 'flex', gap: 12, alignItems: 'center' }}>
           <BarChart2 size={17} color="var(--ne-blue)" style={{ flexShrink: 0 }} />
           <p style={{ fontSize: 12.5, color: 'var(--fg2)', margin: 0 }}>
-            Tracking the last {range} days of first-party page views collected through the NE Website Manager analytics endpoint.
-            {isRollupRange && ' Page views and top pages use pre-aggregated daily rollups for this range; referrers, devices, browsers, countries, custom events and recent events below are always based on the last 7 days.'}
+            Showing {range.label} ({range.days} {range.days === 1 ? 'day' : 'days'}, UTC) of first-party page views collected through the NE Website Manager analytics endpoint.{includeBots ? ' Bot traffic is included.' : ' Bot and crawler traffic is excluded.'}
+            {eventsTruncated && ' Showing the most recent 30,000 events for this range.'}
           </p>
         </div>
 
         <div className="grid-stats">
-          <StatCard label="Page Views" value={String(rangeViews)} sub={`${last24h} events in the last 24h`} icon={Eye} color="var(--ne-blue)" />
-          <StatCard label="Visitors" value={String(rangeVisitors)} sub={rangeVisitors === 0 ? 'Install tracker to begin' : isRollupRange ? 'Approx. — summed per day' : 'Known unique visitors'} icon={Users} color="var(--ne-success)" />
-          <StatCard label="Sessions" value={String(sessions)} sub="Browser sessions, last 7 days" icon={Activity} color="#6366f1" />
-          <StatCard label="Custom Events" value={String(customEvents7d.length)} sub={`${eventTypes.length} event types, last 7 days`} icon={MousePointerClick} color="var(--ne-warning)" />
+          <StatCard label="Page Views" value={String(rangeViews)} sub={`${avgPerDay} per day on average`} icon={Eye} color="var(--ne-blue)" />
+          <StatCard label="Visitors" value={String(rangeVisitors)} sub={rangeVisitors === 0 ? 'Install tracker to begin' : 'Unique visitors'} icon={Users} color="var(--ne-success)" />
+          <StatCard label="Sessions" value={String(sessions)} sub="Browser sessions in this period" icon={Activity} color="#6366f1" />
+          <StatCard label="Custom Events" value={String(customEvents.length)} sub={`${eventTypes.length} event types in this period`} icon={MousePointerClick} color="var(--ne-warning)" />
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1.35fr .65fr', gap: 20, marginBottom: 24 }}>
           <Card>
-            <CardHead title="Page Views Trend" action={<span style={{ fontSize: 12, color: 'var(--fg3)' }}>Last {range} days</span>} />
+            <CardHead title="Page Views Trend" action={<span style={{ fontSize: 12, color: 'var(--fg3)' }}>{range.label}</span>} />
             <div style={{ padding: 20 }}>
               {rangeViews === 0 ? (
                 <div style={{ color: 'var(--fg3)', fontSize: 13, padding: '48px 0', textAlign: 'center' }}>No page views recorded yet. Add the generated analytics helper to the client website.</div>
               ) : (
-                <div style={{ display: 'grid', gridTemplateColumns: `repeat(${trendBuckets.length}, 1fr)`, gap: range > 30 ? 2 : 8, alignItems: 'end', minHeight: 220 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: `repeat(${trendBuckets.length}, 1fr)`, gap: range.days > 31 ? 2 : 8, alignItems: 'end', minHeight: 220 }}>
                   {trendBuckets.map((bucket) => (
                     <div key={bucket.key} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
-                      {range <= 30 && <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--fg1)' }}>{bucket.count}</div>}
+                      {range.days <= 31 && <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--fg1)' }}>{bucket.count}</div>}
                       <div style={{ width: '100%', height: Math.max(4, Math.round((bucket.count / maxBucket) * 154)), borderRadius: '6px 6px 0 0', background: 'var(--ne-blue)' }} />
-                      {range <= 30 && <div style={{ fontSize: 10.5, color: 'var(--fg3)', whiteSpace: 'nowrap' }}>{bucket.label}</div>}
+                      {range.days <= 31 && <div style={{ fontSize: 10.5, color: 'var(--fg3)', whiteSpace: 'nowrap' }}>{bucket.label}</div>}
                     </div>
                   ))}
                 </div>
@@ -459,9 +453,9 @@ export default function AnalyticsPage() {
           </Card>
 
           <Card>
-            <CardHead title="Event Types" action={<ScopeNote show={isRollupRange} />} />
+            <CardHead title="Event Types" />
             <div style={{ padding: 20 }}>
-              <BarList rows={eventTypes} total={events.length} />
+              <BarList rows={eventTypes} total={Math.max(1, events.length)} />
             </div>
           </Card>
         </div>
@@ -475,36 +469,36 @@ export default function AnalyticsPage() {
           </Card>
 
           <Card>
-            <CardHead title="Referrers" action={<ScopeNote show={isRollupRange} />} />
+            <CardHead title="Referrers" />
             <div style={{ padding: 20 }}>
-              <BarList rows={referrers} total={pageViews7d.length} />
+              <BarList rows={referrers} total={Math.max(1, pageViews.length)} />
             </div>
           </Card>
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 20, marginBottom: 24 }}>
           <Card>
-            <CardHead title="Devices" action={<ScopeNote show={isRollupRange} />} />
+            <CardHead title="Devices" />
             <div style={{ padding: 20 }}>
-              <BarList rows={devices} total={events.length} />
+              <BarList rows={devices} total={Math.max(1, events.length)} />
             </div>
           </Card>
           <Card>
-            <CardHead title="Browsers" action={<ScopeNote show={isRollupRange} />} />
+            <CardHead title="Browsers" />
             <div style={{ padding: 20 }}>
-              <BarList rows={browsers} total={events.length} />
+              <BarList rows={browsers} total={Math.max(1, events.length)} />
             </div>
           </Card>
           <Card>
-            <CardHead title="Countries" action={<ScopeNote show={isRollupRange} />} />
+            <CardHead title="Countries" />
             <div style={{ padding: 20 }}>
-              <BarList rows={countries} total={events.length} />
+              <BarList rows={countries} total={Math.max(1, events.length)} />
             </div>
           </Card>
         </div>
 
         <Card style={{ marginBottom: 24 }}>
-          <CardHead title="Top Posts" action={<span style={{ fontSize: 12, color: 'var(--fg3)' }}>By views, last {range} days</span>} />
+          <CardHead title="Top Posts" action={<span style={{ fontSize: 12, color: 'var(--fg3)' }}>By views · {range.label}</span>} />
           <div className="table-responsive">
             <table className="data-table">
               <thead>
@@ -533,7 +527,7 @@ export default function AnalyticsPage() {
 
         <div style={{ display: 'grid', gridTemplateColumns: '1.1fr .9fr', gap: 20, marginBottom: 24 }}>
           <Card>
-            <CardHead title="Recent Events" action={<ScopeNote show={isRollupRange} />} />
+            <CardHead title="Recent Events" />
             <div className="table-responsive">
               <table className="data-table">
                 <thead>
