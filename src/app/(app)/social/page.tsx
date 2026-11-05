@@ -103,7 +103,7 @@ function ConnectPanel({ clientId, onSaved }: { clientId: string; onSaved: () => 
         <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: 'var(--fg2)', margin: '16px 0 6px' }}>Metricool brand</label>
         {brands === null ? (
           <div style={{ fontSize: 12.5, color: 'var(--fg3)', display: 'flex', gap: 6, alignItems: 'center' }}>
-            <Loader2 size={13} style={{ animation: 'spin .6s linear infinite' }} /> Loading brands…
+            <Loader2 size={13} className="spin" /> Loading brands…
           </div>
         ) : brands.length > 0 ? (
           <select
@@ -132,7 +132,7 @@ function ConnectPanel({ clientId, onSaved }: { clientId: string; onSaved: () => 
           disabled={!blogId || saving}
           style={{ marginTop: 18, padding: '10px 18px', borderRadius: 8, border: 'none', background: 'var(--ne-blue)', color: '#fff', fontSize: 13, fontWeight: 700, cursor: blogId && !saving ? 'pointer' : 'not-allowed', opacity: blogId && !saving ? 1 : 0.6, display: 'inline-flex', gap: 8, alignItems: 'center' }}
         >
-          {saving && <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} />}
+          {saving && <Loader2 size={14} className="spin" />}
           Save brand mapping
         </button>
       </div>
@@ -197,14 +197,14 @@ export default function SocialPage() {
           </div>
           {loading && (
             <span style={{ fontSize: 12, color: 'var(--fg3)', display: 'flex', alignItems: 'center', gap: 6 }}>
-              <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> Loading…
+              <Loader2 size={14} className="spin" /> Loading…
             </span>
           )}
         </div>
 
         {loading && !data ? (
           <div style={{ color: 'var(--fg3)', fontSize: 13, padding: '60px 0', textAlign: 'center' }}>
-            <Loader2 size={18} style={{ animation: 'spin .6s linear infinite' }} />
+            <Loader2 size={18} className="spin" />
           </div>
         ) : !data || !data.configured ? (
           selectedClientId ? (

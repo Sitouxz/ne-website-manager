@@ -193,12 +193,11 @@ function ConfirmOverlay({
               cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.7 : 1,
             }}
           >
-            {busy && <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} />}
+            {busy && <Loader2 size={14} className="spin" />}
             {options.confirmLabel ?? 'Confirm'}
           </button>
         </div>
       </div>
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   );
 }

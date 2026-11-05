@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { useState } from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import FieldInput from './FieldInput';
 import type { FieldDef } from '@/lib/collections/types';
@@ -66,22 +67,184 @@ describe('FieldInput', () => {
     expect(onChange).toHaveBeenCalledWith('more text');
   });
 
-  it('number: renders an input[type=number] and coerces to/from number', () => {
+  /**
+   * Number commits on blur, not on every keystroke, and uses
+   * `type="text" inputMode="decimal"` rather than `type="number"`. Both are
+   * deliberate: rounding to `format.precision` as you type makes "12.50"
+   * impossible to enter at precision 1, and a native number input reports
+   * `''` for partially-typed values like "12." or "-", which makes the text
+   * buffer (needed for prefix/suffix and for revision-restore resync)
+   * unreliable.
+   */
+  it('number: buffers text and commits a real number on blur', () => {
     const onChange = vi.fn();
     const { rerender } = render(<FieldInput def={def({ type: 'number' })} value={42} onChange={onChange} />);
 
-    const input = document.querySelector('input[type="number"]') as HTMLInputElement;
+    const input = document.querySelector('input[inputmode="decimal"]') as HTMLInputElement;
     expect(input.value).toBe('42');
 
     fireEvent.change(input, { target: { value: '7' } });
+    expect(onChange).not.toHaveBeenCalled();
+
+    fireEvent.blur(input);
     expect(onChange).toHaveBeenCalledWith(7);
     expect(typeof onChange.mock.calls[0][0]).toBe('number');
 
     fireEvent.change(input, { target: { value: '' } });
+    fireEvent.blur(input);
     expect(onChange).toHaveBeenCalledWith(undefined);
 
     rerender(<FieldInput def={def({ type: 'number' })} value={undefined} onChange={onChange} />);
-    expect((document.querySelector('input[type="number"]') as HTMLInputElement).value).toBe('');
+    expect((document.querySelector('input[inputmode="decimal"]') as HTMLInputElement).value).toBe('');
+  });
+
+  it('number: rounds to format.precision and shows prefix/suffix', () => {
+    const numberDef = def({ type: 'number', format: { precision: 2, prefix: 'S$', suffix: 'psf' } });
+    const seen: unknown[] = [];
+
+    // A stateful wrapper, because the resync effect's whole job is to tell an
+    // echo of this component's own change apart from an external replacement
+    // — a `vi.fn()` that swallows the change can't exercise that.
+    function Harness() {
+      const [value, setValue] = useState<unknown>(1234.5);
+      return (
+        <FieldInput
+          def={numberDef}
+          value={value}
+          onChange={(v) => { seen.push(v); setValue(v); }}
+        />
+      );
+    }
+    render(<Harness />);
+
+    expect(screen.getByText('S$')).toBeTruthy();
+    expect(screen.getByText('psf')).toBeTruthy();
+
+    const input = document.querySelector('input[inputmode="decimal"]') as HTMLInputElement;
+    // Display carries the trailing zeros `precision` implies.
+    expect(input.value).toBe('1234.50');
+
+    fireEvent.change(input, { target: { value: '10.005' } });
+    fireEvent.blur(input);
+    expect(seen).toEqual([10.01]);
+    expect(input.value).toBe('10.01');
+  });
+
+  it('number: an external value change (revision restore) replaces the text', () => {
+    const onChange = vi.fn();
+    const numberDef = def({ type: 'number', format: { precision: 2 } });
+    const { rerender } = render(<FieldInput def={numberDef} value={5} onChange={onChange} />);
+
+    const input = document.querySelector('input[inputmode="decimal"]') as HTMLInputElement;
+    expect(input.value).toBe('5.00');
+
+    rerender(<FieldInput def={numberDef} value={99} onChange={onChange} />);
+    expect((document.querySelector('input[inputmode="decimal"]') as HTMLInputElement).value).toBe('99.00');
+  });
+
+  it('number: keeps unparseable text so the user can see and fix it', () => {
+    const onChange = vi.fn();
+    render(<FieldInput def={def({ type: 'number' })} value={undefined} onChange={onChange} />);
+
+    const input = document.querySelector('input[inputmode="decimal"]') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'abc' } });
+    fireEvent.blur(input);
+    expect(onChange).toHaveBeenCalledWith('abc');
+  });
+
+  it('taglist: adds on Enter, on comma, and removes a tag', () => {
+    const onChange = vi.fn();
+    const { rerender } = render(
+      <FieldInput def={def({ type: 'taglist' })} value={['MRT']} onChange={onChange} />,
+    );
+
+    expect(screen.getByText('MRT')).toBeTruthy();
+
+    const input = screen.getByRole('textbox') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'Bus' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(onChange).toHaveBeenCalledWith(['MRT', 'Bus']);
+
+    onChange.mockClear();
+    fireEvent.change(input, { target: { value: 'Schools, Parks' } });
+    expect(onChange).toHaveBeenCalledWith(['MRT', 'Schools', 'Parks']);
+
+    onChange.mockClear();
+    fireEvent.click(screen.getByLabelText('Remove MRT'));
+    expect(onChange).toHaveBeenCalledWith([]);
+
+    // A duplicate is ignored rather than rejected with an error.
+    onChange.mockClear();
+    rerender(<FieldInput def={def({ type: 'taglist' })} value={['MRT']} onChange={onChange} />);
+    const input2 = screen.getByRole('textbox') as HTMLInputElement;
+    fireEvent.change(input2, { target: { value: 'MRT' } });
+    fireEvent.keyDown(input2, { key: 'Enter' });
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('taglist: backspace on an empty input removes the last tag', () => {
+    const onChange = vi.fn();
+    render(<FieldInput def={def({ type: 'taglist' })} value={['a', 'b']} onChange={onChange} />);
+
+    const input = screen.getByRole('textbox') as HTMLInputElement;
+    fireEvent.keyDown(input, { key: 'Backspace' });
+    expect(onChange).toHaveBeenCalledWith(['a']);
+  });
+
+  it('repeater: renders one sub-form per row and edits the right row', () => {
+    const onChange = vi.fn();
+    const repeaterDef = def({
+      key: 'highlights',
+      label: 'Highlight',
+      type: 'repeater',
+      fields: [
+        { key: 'heading', label: 'Heading', type: 'text' },
+        { key: 'body', label: 'Body', type: 'textarea' },
+      ],
+    });
+    render(
+      <FieldInput
+        def={repeaterDef}
+        value={[{ heading: 'Near MRT' }, { heading: 'New launch' }]}
+        onChange={onChange}
+      />,
+    );
+
+    // Two rows, each with its own heading + body control.
+    expect(screen.getAllByText('Heading')).toHaveLength(2);
+    const headingInputs = screen.getAllByDisplayValue(/Near MRT|New launch/) as HTMLInputElement[];
+    expect(headingInputs).toHaveLength(2);
+
+    fireEvent.change(headingInputs[1], { target: { value: 'Renovated' } });
+    expect(onChange).toHaveBeenCalledWith([{ heading: 'Near MRT' }, { heading: 'Renovated' }]);
+  });
+
+  it('repeater: adds, duplicates and removes rows', () => {
+    const onChange = vi.fn();
+    const repeaterDef = def({
+      key: 'highlights',
+      label: 'Highlight',
+      type: 'repeater',
+      fields: [{ key: 'heading', label: 'Heading', type: 'text' }],
+    });
+    const { rerender } = render(
+      <FieldInput def={repeaterDef} value={[{ heading: 'One' }]} onChange={onChange} />,
+    );
+
+    fireEvent.click(screen.getByText('Add Highlight'));
+    expect(onChange).toHaveBeenCalledWith([{ heading: 'One' }, {}]);
+
+    onChange.mockClear();
+    fireEvent.click(screen.getByLabelText('Duplicate item 1'));
+    expect(onChange).toHaveBeenCalledWith([{ heading: 'One' }, { heading: 'One' }]);
+
+    onChange.mockClear();
+    fireEvent.click(screen.getByLabelText('Remove item 1'));
+    expect(onChange).toHaveBeenCalledWith([]);
+
+    // A repeater with no sub-schema explains itself instead of rendering blank.
+    rerender(<FieldInput def={def({ type: 'repeater', fields: [] })} value={[]} onChange={onChange} />);
+    expect(screen.getByText(/no sub-fields set up yet/i)).toBeTruthy();
   });
 
   it('boolean: renders a checkbox wired to value/onChange', () => {

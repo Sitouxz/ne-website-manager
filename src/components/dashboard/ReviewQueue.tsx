@@ -54,7 +54,7 @@ export default async function ReviewQueue({ clientId }: ReviewQueueProps) {
   const items = (data ?? []) as QueueItem[];
 
   return (
-    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
+    <div className="panel">
       <div style={{ padding: '18px 20px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: 14, color: 'var(--fg1)' }}>
           <ClipboardList size={16} color="var(--ne-warning)" /> Awaiting Review

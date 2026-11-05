@@ -339,6 +339,85 @@ describe('validateEntry', () => {
     });
   });
 
+  describe('taglist type', () => {
+    const fields: FieldDef[] = [{ key: 'amenities', label: 'Amenities', type: 'taglist' }];
+
+    it('passes for an array of non-blank strings', () => {
+      expect(validateEntry(fields, { amenities: ['Pool', 'Gym'] })).toEqual({ ok: true });
+    });
+
+    it('fails for a bare string', () => {
+      const result = validateEntry(fields, { amenities: 'Pool' });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.errors.amenities).toBeDefined();
+    });
+
+    it('fails when an entry is blank or not a string', () => {
+      for (const bad of [['Pool', '  '], ['Pool', 42]]) {
+        const result = validateEntry(fields, { amenities: bad });
+        expect(result.ok).toBe(false);
+      }
+    });
+
+    it('treats an empty array as missing for a required field', () => {
+      const required: FieldDef[] = [{ ...fields[0], required: true }];
+      const result = validateEntry(required, { amenities: [] });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.errors.amenities).toContain('required');
+    });
+  });
+
+  describe('repeater type', () => {
+    const fields: FieldDef[] = [
+      {
+        key: 'highlights',
+        label: 'Highlights',
+        type: 'repeater',
+        fields: [
+          { key: 'label', label: 'Label', type: 'text', required: true },
+          { key: 'score', label: 'Score', type: 'number' },
+        ],
+      },
+    ];
+
+    it('passes for rows that satisfy the sub-schema', () => {
+      expect(validateEntry(fields, { highlights: [{ label: 'Near MRT', score: 5 }, { label: 'Quiet' }] }))
+        .toEqual({ ok: true });
+    });
+
+    it('fails for a non-array value', () => {
+      const result = validateEntry(fields, { highlights: { label: 'Near MRT' } });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.errors.highlights).toBeDefined();
+    });
+
+    it('keys a sub-field error by its row path so the editor can point at it', () => {
+      const result = validateEntry(fields, { highlights: [{ label: 'ok' }, { score: 3 }] });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.errors['highlights[1].label']).toBeDefined();
+        expect(result.errors['highlights[0].label']).toBeUndefined();
+      }
+    });
+
+    it('reports a row that is not an object', () => {
+      const result = validateEntry(fields, { highlights: ['just a string'] });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.errors['highlights[0]']).toBeDefined();
+    });
+
+    it('validates a sub-field type, not just presence', () => {
+      const result = validateEntry(fields, { highlights: [{ label: 'ok', score: 'five' }] });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.errors['highlights[0].score']).toBeDefined();
+    });
+
+    it('ignores rows when the schema defines no sub-fields', () => {
+      const noSub: FieldDef[] = [{ key: 'rows', label: 'Rows', type: 'repeater' }];
+      expect(validateEntry(noSub, { rows: [{ anything: 1 }] })).toEqual({ ok: true });
+    });
+  });
+
   it('reports multiple field errors keyed by their field key', () => {
     const fields: FieldDef[] = [
       { key: 'title', label: 'Title', type: 'text', required: true },
@@ -350,5 +429,80 @@ describe('validateEntry', () => {
       expect(result.errors.title).toBeDefined();
       expect(result.errors.price).toBeDefined();
     }
+  });
+});
+
+describe('validateFieldDefs — repeater and format', () => {
+  const sub: FieldDef[] = [{ key: 'label', label: 'Label', type: 'text' }];
+
+  it('accepts a repeater with a valid sub-schema', () => {
+    expect(validateFieldDefs([{ key: 'rows', label: 'Rows', type: 'repeater', fields: sub }]))
+      .toEqual({ ok: true });
+  });
+
+  it('rejects a repeater with no sub-fields', () => {
+    for (const fields of [undefined, []]) {
+      const result = validateFieldDefs([{ key: 'rows', label: 'Rows', type: 'repeater', fields }]);
+      expect(result.ok).toBe(false);
+    }
+  });
+
+  it('validates sub-field keys recursively and names the path', () => {
+    const result = validateFieldDefs([
+      { key: 'rows', label: 'Rows', type: 'repeater', fields: [{ key: 'Bad Key', label: 'X', type: 'text' }] },
+    ]);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.errors.some((e) => e.includes('rows'))).toBe(true);
+  });
+
+  it('lets a sub-field reuse a top-level key (different objects)', () => {
+    expect(validateFieldDefs([
+      { key: 'label', label: 'Label', type: 'text' },
+      { key: 'rows', label: 'Rows', type: 'repeater', fields: [{ key: 'label', label: 'Label', type: 'text' }] },
+    ])).toEqual({ ok: true });
+  });
+
+  it('still catches duplicate keys within one sub-schema', () => {
+    const result = validateFieldDefs([
+      {
+        key: 'rows',
+        label: 'Rows',
+        type: 'repeater',
+        fields: [
+          { key: 'label', label: 'A', type: 'text' },
+          { key: 'label', label: 'B', type: 'text' },
+        ],
+      },
+    ]);
+    expect(result.ok).toBe(false);
+  });
+
+  it('allows two levels of repeater nesting but rejects a third', () => {
+    const twoDeep: FieldDef[] = [
+      { key: 'sections', label: 'Sections', type: 'repeater', fields: [
+        { key: 'cards', label: 'Cards', type: 'repeater', fields: sub },
+      ] },
+    ];
+    expect(validateFieldDefs(twoDeep)).toEqual({ ok: true });
+
+    const threeDeep: FieldDef[] = [
+      { key: 'sections', label: 'Sections', type: 'repeater', fields: [
+        { key: 'cards', label: 'Cards', type: 'repeater', fields: [
+          { key: 'bullets', label: 'Bullets', type: 'repeater', fields: sub },
+        ] },
+      ] },
+    ];
+    const result = validateFieldDefs(threeDeep);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.errors.some((e) => e.includes('levels deep'))).toBe(true);
+  });
+
+  it('rejects an out-of-range decimal places setting', () => {
+    for (const precision of [-1, 7, 1.5]) {
+      const result = validateFieldDefs([{ key: 'price', label: 'Price', type: 'number', format: { precision } }]);
+      expect(result.ok).toBe(false);
+    }
+    expect(validateFieldDefs([{ key: 'price', label: 'Price', type: 'number', format: { precision: 2, prefix: 'S$' } }]))
+      .toEqual({ ok: true });
   });
 });

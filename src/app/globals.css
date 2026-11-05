@@ -189,6 +189,10 @@ button, input, textarea, select { font: inherit; }
 .command-results { max-height: min(440px, 60vh); overflow-y: auto; padding: 8px; }
 .command-results button { width: 100%; min-height: 54px; display: grid; grid-template-columns: 36px 1fr auto; align-items: center; gap: 11px; padding: 7px 10px; border: 0; border-radius: 7px; background: transparent; color: var(--fg1); text-align: left; cursor: pointer; }
 .command-results button:hover, .command-results button:focus-visible { background: var(--ne-blue-bg); }
+/* The row the arrow keys are on. Focus stays in the search input while
+   navigating, so without this the keyboard highlight would be invisible. */
+.command-results button[data-active] { background: var(--ne-blue-bg); box-shadow: inset 2px 0 0 var(--ne-blue); }
+.command-results button[data-active] .command-enter { opacity: 1; }
 .command-icon { width: 34px; height: 34px; display: grid; place-items: center; border: 1px solid var(--border); border-radius: 7px; color: var(--ne-blue); background: #fff; }
 .command-results strong, .command-results small { display: block; }
 .command-results strong { font-size: 13px; font-weight: 700; }
@@ -261,6 +265,7 @@ button, input, textarea, select { font: inherit; }
 .attention-icon { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 7px; }
 .attention-icon.warning { color: #B45309; background: #FFF7E8; }
 .attention-icon.blue { color: var(--ne-blue); background: var(--ne-blue-bg); }
+.attention-icon.danger { color: var(--ne-danger); background: #FEF2F2; }
 .attention-row strong, .attention-row small { display: block; }
 .attention-row strong { font-size: 13.5px; font-weight: 720; }
 .attention-row small { margin-top: 4px; color: var(--fg3); font-size: 12px; line-height: 1.4; }
@@ -313,9 +318,73 @@ button, input, textarea, select { font: inherit; }
 .drag-handle:hover, .drag-handle:focus-visible { border-right-color: var(--border); background: var(--ne-blue-bg); color: var(--ne-blue); }
 .drag-handle:active { cursor: grabbing; }
 .sortable-row-content { min-width: 0; }
+/* ── Entries list toolbar (search / filters / result count) ── */
+.entry-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 12px; }
+.entry-search { display: flex; align-items: center; gap: 7px; min-width: 200px; flex: 1 1 220px; max-width: 340px; padding: 0 11px; border: 1px solid var(--border); border-radius: var(--r-sm); background: #fff; color: var(--fg3); }
+.entry-search input { width: 100%; min-height: 38px; border: 0; background: transparent; color: var(--fg1); font-family: inherit; font-size: 13px; outline: none; }
+.entry-filter { display: flex; align-items: center; gap: 6px; color: var(--fg3); font-size: 11.5px; font-weight: 650; }
+.entry-filter select { min-height: 38px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--r-sm); background: #fff; color: var(--fg1); font-family: inherit; font-size: 12.5px; }
+.entry-clear-filters { display: inline-flex; align-items: center; gap: 5px; min-height: 38px; padding: 0 11px; border: 1px solid var(--border); border-radius: var(--r-sm); background: transparent; color: var(--fg2); font-family: inherit; font-size: 12px; font-weight: 650; cursor: pointer; }
+.entry-clear-filters:hover { border-color: var(--ne-blue); color: var(--ne-blue); }
+.entry-result-count { margin-left: auto; color: var(--fg3); font-size: 11.5px; }
+
 .entry-sort-list { overflow: hidden; border: 1px solid var(--border); border-radius: var(--r-md); background: #fff; }
-.entry-sort-header { min-height: 40px; display: grid; grid-template-columns: minmax(200px,1fr) 140px 130px 44px; align-items: center; padding-left: 56px; border-bottom: 1px solid var(--border); background: var(--surface-2); color: var(--fg3); font-size: 10px; font-weight: 750; text-transform: uppercase; letter-spacing: .06em; }
-.entry-sort-row { min-height: 62px; display: grid; grid-template-columns: minmax(200px,1fr) 140px 130px 88px; align-items: center; gap: 8px; padding: 7px 10px 7px 12px; }
+/* Track lists come from `--entry-cols`/`--entry-cols-row`, set on
+   `.entry-sort-list` by the entries page when the collection configures extra
+   columns. Kept as custom properties rather than inline styles on the rows
+   themselves so the ≤768px rules below can still override the layout. */
+.entry-sort-header { min-height: 40px; display: grid; grid-template-columns: var(--entry-cols, 34px minmax(200px,1fr) 140px 130px 44px); align-items: center; padding-left: 56px; border-bottom: 1px solid var(--border); background: var(--surface-2); color: var(--fg3); font-size: 10px; font-weight: 750; text-transform: uppercase; letter-spacing: .06em; }
+.entry-sort-row { min-height: 62px; display: grid; grid-template-columns: var(--entry-cols-row, 34px minmax(200px,1fr) 140px 130px 88px); align-items: center; gap: 8px; padding: 7px 10px 7px 12px; }
+/* Rows rendered without a drag handle (any non-manual order) are indented to
+   line up with the sortable ones, so switching order doesn't shift the list. */
+.entry-static-row { padding-left: 44px; border-bottom: 1px solid var(--border); }
+.entry-static-row:last-child { border-bottom: 0; }
+.entry-cell { overflow: hidden; color: var(--fg2); font-size: 12.5px; text-overflow: ellipsis; white-space: nowrap; }
+.entry-cell-empty { color: var(--fg3); }
+
+/* ── Form/panel primitives ──
+   Extracted from the settings screen, where the same six shapes were repeated
+   as inline style objects 30+ times. Classes rather than exported JS objects
+   so a token change lands everywhere at once and the markup stays readable —
+   the audit's "centralize semantic tokens before restyling" finding. */
+.panel { overflow: hidden; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); }
+.panel-header { display: flex; align-items: center; gap: 10px; padding: 16px 20px; border-bottom: 1px solid var(--border); }
+.panel-header strong, .panel-title { font-size: 14px; font-weight: 700; }
+.panel-body { display: flex; flex-direction: column; gap: 16px; padding: 20px; }
+.field-label { display: block; margin-bottom: 6px; color: var(--fg2); font-size: 12.5px; font-weight: 600; }
+.field-hint { color: var(--fg3); font-size: 11.5px; }
+.text-input { width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface); color: var(--fg1); font-size: 13.5px; outline: none; }
+.text-input-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+/* One definition for the loading spinner. It was previously an inline
+   `animation` style at 81 call sites, each of which needed its own
+   `@keyframes spin` in a per-page <style> tag — 26 duplicate copies of the
+   same three lines. `prefers-reduced-motion` is honoured here once, which no
+   inline copy did: the icon still indicates loading, it just stops spinning. */
+@keyframes spin { to { transform: rotate(360deg); } }
+.spin { animation: spin .6s linear infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .spin { animation-duration: 2.4s; }
+}
+
+/* The editor sidebar's panel heading (Publishing, Entry Settings, Featured
+   Image…) — same shape in all four editors. */
+.panel-subhead { padding: 14px 16px; border-bottom: 1px solid var(--border); font-size: 13px; font-weight: 700; }
+/* A table cell standing in for rows: loading, empty, or "nothing matched". */
+.table-placeholder { padding: 48px; color: var(--fg3); text-align: center; }
+
+.error-box { padding: 10px 14px; border-radius: var(--r-sm); background: #FEF2F2; color: var(--ne-danger); font-size: 13px; }
+.media-select-all { display: inline-flex; align-items: center; gap: 8px; margin-bottom: 10px; color: var(--fg2); font-size: 12.5px; font-weight: 600; cursor: pointer; }
+.media-select-all input { width: 16px; height: 16px; cursor: pointer; }
+.entry-select { display: flex; align-items: center; justify-content: center; }
+.entry-select input { width: 16px; height: 16px; cursor: pointer; }
+
+/* Bulk action bar — appears only while something is selected. */
+.entry-bulk-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; padding: 10px 14px; border: 1px solid var(--ne-blue-muted); border-radius: var(--r-md); background: var(--ne-blue-bg); }
+.entry-bulk-bar strong { margin-right: 4px; color: var(--fg1); font-size: 12.5px; }
+.entry-bulk-delete { color: var(--ne-danger); }
+.entry-bulk-delete:hover { border-color: var(--ne-danger); }
+.entry-bulk-clear { margin-left: auto; min-height: 34px; padding: 0 10px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--fg2); font-family: inherit; font-size: 12px; font-weight: 650; cursor: pointer; }
+.entry-bulk-clear:hover { color: var(--ne-blue); }
 .entry-sort-row > span:first-child a, .entry-sort-row > span:first-child small { display: block; }
 .entry-sort-row > span:first-child a { overflow: hidden; color: var(--fg1); font-size: 13.5px; font-weight: 650; text-decoration: none; text-overflow: ellipsis; white-space: nowrap; }
 .entry-sort-row > span:first-child a:hover { color: var(--ne-blue); }
@@ -395,10 +464,15 @@ button, input, textarea, select { font: inherit; }
   .attention-row { grid-template-columns: 40px minmax(0, 1fr); }
   .attention-action { grid-column: 2; margin-top: -8px; padding-bottom: 6px; }
   .entry-sort-header { display: none; }
-  .entry-sort-row { grid-template-columns: minmax(0,1fr) 88px; padding-right: 8px; }
-  .entry-sort-row > span:nth-child(2), .entry-sort-row > span:nth-child(3) { grid-column: 1; }
-  .entry-sort-row > span:nth-child(2) { margin-top: 3px; }
-  .entry-row-actions { grid-column: 2; grid-row: 1 / span 3; }
+  /* Overrides the `--entry-cols-row` track list: on a phone every cell
+     stacks under the title in one column, whatever the collection configured. */
+  .entry-sort-row { grid-template-columns: 30px minmax(0,1fr) 88px; padding-right: 8px; }
+  .entry-sort-row > span:not(.entry-select):not(.entry-row-actions) { grid-column: 2; }
+  .entry-select { grid-column: 1; grid-row: 1; align-items: flex-start; padding-top: 4px; }
+  .entry-row-actions { grid-column: 3; grid-row: 1 / span 6; }
+  .entry-bulk-clear { margin-left: 0; }
+  .entry-static-row { padding-left: 12px; }
+  .entry-result-count { margin-left: 0; }
   .navigation-preview-bar { align-items: flex-start; flex-direction: column; }
   .navigation-preview-bar nav { flex-wrap: wrap; justify-content: flex-start; }
 }

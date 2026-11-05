@@ -192,10 +192,9 @@ export default function TeamPage() {
       <>
         <Topbar title="Team Members" />
         <div className="page-body" style={{ display: 'flex', justifyContent: 'center', paddingTop: 80 }}>
-          <Loader2 size={24} color="var(--ne-blue)" style={{ animation: 'spin .6s linear infinite' }} />
+          <Loader2 size={24} color="var(--ne-blue)" className="spin" />
         </div>
-        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-      </>
+        </>
     );
   }
 
@@ -241,7 +240,7 @@ export default function TeamPage() {
               </div>
             )}
 
-            <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
+            <div className="panel">
               <div className="table-responsive">
                 <table className="data-table">
                   <thead>
@@ -255,15 +254,15 @@ export default function TeamPage() {
                   <tbody>
                     {loading ? (
                       <tr>
-                        <td colSpan={4} style={{ textAlign: 'center', padding: 48, color: 'var(--fg3)' }}>
+                        <td colSpan={4} className="table-placeholder">
                           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-                            <Loader2 size={16} style={{ animation: 'spin .6s linear infinite' }} /> Loading...
+                            <Loader2 size={16} className="spin" /> Loading...
                           </div>
                         </td>
                       </tr>
                     ) : members.length === 0 ? (
                       <tr>
-                        <td colSpan={4} style={{ textAlign: 'center', padding: 48, color: 'var(--fg3)' }}>
+                        <td colSpan={4} className="table-placeholder">
                           No team members yet. Invite your first one!
                         </td>
                       </tr>
@@ -324,7 +323,7 @@ export default function TeamPage() {
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
               {inviteError && (
-                <div style={{ padding: '10px 14px', background: '#FEF2F2', color: 'var(--ne-danger)', borderRadius: 'var(--r-sm)', fontSize: 13 }}>
+                <div className="error-box">
                   {inviteError}
                 </div>
               )}
@@ -358,7 +357,7 @@ export default function TeamPage() {
               </div>
               <div style={{ display: 'flex', gap: 8 }}>
                 <button className="btn-ne" style={{ flex: 1, justifyContent: 'center' }} onClick={handleInvite} disabled={inviting}>
-                  {inviting ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Plus size={14} />}
+                  {inviting ? <Loader2 size={14} className="spin" /> : <Plus size={14} />}
                   Send Invite
                 </button>
                 <button className="btn-outline-ne" onClick={closeInviteDialog}>Cancel</button>
@@ -368,7 +367,6 @@ export default function TeamPage() {
         </div>
       )}
 
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </>
   );
 }

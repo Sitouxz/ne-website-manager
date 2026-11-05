@@ -15,6 +15,8 @@ import { statusDescription, statusLabel, liveUrl } from '@/lib/content-status';
 import { useSelectedClient } from '@/components/AppShell';
 import { logActivity } from '@/lib/activity';
 import { firePublishNotify, computeLivePath } from '@/lib/publish-client';
+import { checkArticleBeforePublish, type PublishWarning } from '@/lib/publish-checks';
+import { PublishWarnings } from '@/components/editor/PublishWarnings';
 import RichTextEditor from '@/components/editor/RichTextEditor';
 import type { PageStatus } from '@/lib/supabase/types';
 
@@ -67,6 +69,10 @@ export default function PageEditor({ params }: { params: Promise<{ id: string }>
   const [saving,      setSaving]    = useState(false);
   const [saved,       setSaved]     = useState(false);
   const [error,       setError]     = useState('');
+  // Publish preflight — mirrors the post editor. Cleared by edits to the
+  // things the checks read, so an unrelated edit does not re-arm the warning.
+  const [warnings, setWarnings] = useState<PublishWarning[]>([]);
+  const [warningsAcknowledged, setWarningsAcknowledged] = useState(false);
   const [clientId,    setClientId]  = useState<string | null>(null);
   const [isAdmin,     setIsAdmin]   = useState(false);
   // Whether this user's role is allowed to publish a page at all
@@ -245,10 +251,31 @@ export default function PageEditor({ params }: { params: Promise<{ id: string }>
     form.title, form.path, form.content, form.contentJson, form.seoTitle, form.seoDesc,
   ]);
 
+  function resetPublishWarnings() {
+    setWarnings([]);
+    setWarningsAcknowledged(false);
+  }
+
   async function handleSave(statusOverride?: PageStatus) {
     if (!clientId) { setError('No client linked to your account. Contact Neu Entity support.'); return; }
 
     const status = statusOverride ?? form.status;
+
+    // Publish preflight — quality warnings that never block. See
+    // `src/lib/publish-checks.ts`.
+    if (status === 'published') {
+      const checks = checkArticleBeforePublish({
+        html: form.content,
+        seoTitle: form.seoTitle,
+        seoDescription: form.seoDesc,
+      });
+      if (checks.length > 0 && !warningsAcknowledged) {
+        setWarnings(checks);
+        setWarningsAcknowledged(true);
+        return;
+      }
+    }
+    setWarnings([]);
 
     setSaving(true);
     setError('');
@@ -370,9 +397,8 @@ export default function PageEditor({ params }: { params: Promise<{ id: string }>
       <>
         <Topbar title="Edit Page" subtitle="Loading..." />
         <div className="page-body" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 300 }}>
-          <Loader2 size={24} color="var(--ne-blue)" style={{ animation: 'spin .6s linear infinite' }} />
-          <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-        </div>
+          <Loader2 size={24} color="var(--ne-blue)" className="spin" />
+            </div>
       </>
     );
   }
@@ -390,17 +416,17 @@ export default function PageEditor({ params }: { params: Promise<{ id: string }>
             <ArrowLeft size={14} /> Back to Pages
           </Link>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            {isAdmin && isNew && !clientId && <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ne-danger)', padding: '8px 14px', background: '#FEF2F2', borderRadius: 'var(--r-sm)' }}>Select a client in the sidebar first.</div>}
-            {error && <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ne-danger)', padding: '8px 14px', background: '#FEF2F2', borderRadius: 'var(--r-sm)' }}>{error}</div>}
+            {isAdmin && isNew && !clientId && <div className="error-box">Select a client in the sidebar first.</div>}
+            {error && <div className="error-box">{error}</div>}
             {!isNew && autosaveState === 'error' && (
-              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ne-danger)', padding: '8px 14px', background: '#FEF2F2', borderRadius: 'var(--r-sm)' }}>
+              <div className="error-box">
                 Autosave failed — your last change may not be saved. Use Save Draft to be sure.
               </div>
             )}
             {!isNew && (autosaveState === 'saving' || autosaveState === 'saved') && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11.5, fontWeight: 600, color: 'var(--fg3)' }}>
                 {autosaveState === 'saving'
-                  ? <><Loader2 size={12} style={{ animation: 'spin .6s linear infinite' }} /> Saving…</>
+                  ? <><Loader2 size={12} className="spin" /> Saving…</>
                   : 'All changes saved'}
               </div>
             )}
@@ -431,7 +457,7 @@ export default function PageEditor({ params }: { params: Promise<{ id: string }>
               disabled={saving || isElevatedLocked}
               title={elevatedLockedTitle}
             >
-              {saving ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Save size={14} />}
+              {saving ? <Loader2 size={14} className="spin" /> : <Save size={14} />}
               Save Draft
             </button>
             {/* Publish shortcut: hidden entirely for `editor` — RLS
@@ -441,18 +467,20 @@ export default function PageEditor({ params }: { params: Promise<{ id: string }>
                 `in_review` state, so there's nothing else to submit into. */}
             {canPublish && (
               <button className="btn-ne" onClick={() => handleSave()} disabled={saving || isElevatedLocked} title={elevatedLockedTitle}>
-                {saving ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Send size={14} />}
+                {saving ? <Loader2 size={14} className="spin" /> : <Send size={14} />}
                 {form.status === 'published' ? 'Publish changes' : 'Save changes'}
               </button>
             )}
           </div>
         </div>
 
+        <PublishWarnings warnings={warnings} />
+
         <div className="editor-layout">
           {/* Main editor */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             {/* Title + path */}
-            <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
+            <div className="panel">
               <input
                 value={form.title}
                 onChange={(e) => setForm((f) => ({ ...f, title: e.target.value, path: f.path || `/${slugify(e.target.value)}` }))}
@@ -491,7 +519,7 @@ export default function PageEditor({ params }: { params: Promise<{ id: string }>
             <RichTextEditor
               valueJson={form.contentJson}
               fallbackHtml={form.content}
-              onChange={(json, html) => setForm((f) => ({ ...f, contentJson: json as Record<string, unknown>, content: html }))}
+              onChange={(json, html) => { resetPublishWarnings(); setForm((f) => ({ ...f, contentJson: json as Record<string, unknown>, content: html })); }}
             />
 
             {/* SEO */}
@@ -502,7 +530,7 @@ export default function PageEditor({ params }: { params: Promise<{ id: string }>
                   <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--fg3)', display: 'block', marginBottom: 5 }}>SEO Title</label>
                   <input
                     value={form.seoTitle || form.title}
-                    onChange={(e) => setForm({ ...form, seoTitle: e.target.value })}
+                    onChange={(e) => { resetPublishWarnings(); setForm({ ...form, seoTitle: e.target.value }); }}
                     style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '9px 12px', fontSize: 13.5, color: 'var(--fg1)', outline: 'none' }}
                   />
                 </div>
@@ -510,7 +538,7 @@ export default function PageEditor({ params }: { params: Promise<{ id: string }>
                   <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--fg3)', display: 'block', marginBottom: 5 }}>Meta Description</label>
                   <textarea
                     value={form.seoDesc}
-                    onChange={(e) => setForm({ ...form, seoDesc: e.target.value })}
+                    onChange={(e) => { resetPublishWarnings(); setForm({ ...form, seoDesc: e.target.value }); }}
                     rows={2}
                     style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '9px 12px', fontSize: 13.5, color: 'var(--fg1)', resize: 'none', outline: 'none', fontFamily: 'inherit' }}
                   />
@@ -525,8 +553,8 @@ export default function PageEditor({ params }: { params: Promise<{ id: string }>
           {/* Sidebar panel */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             {/* Publish */}
-            <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
-              <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)', fontWeight: 700, fontSize: 13 }}>Publish Settings</div>
+            <div className="panel">
+              <div className="panel-subhead">Publish Settings</div>
               <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
                 <div>
                   <label style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--fg3)', display: 'block', marginBottom: 5 }}>Status</label>
@@ -596,7 +624,6 @@ export default function PageEditor({ params }: { params: Promise<{ id: string }>
         />
       )}
 
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </>
   );
 }
@@ -696,7 +723,7 @@ function RevisionPanel({
         <div style={{ flex: 1, overflowY: 'auto', padding: '14px 16px' }}>
           {loading && (
             <div style={{ display: 'flex', justifyContent: 'center', padding: 30 }}>
-              <Loader2 size={18} color="var(--ne-blue)" style={{ animation: 'spin .6s linear infinite' }} />
+              <Loader2 size={18} color="var(--ne-blue)" className="spin" />
             </div>
           )}
           {error && (
@@ -724,7 +751,7 @@ function RevisionPanel({
                   onClick={() => handleRestore(rev.id)}
                   disabled={restoringId === rev.id}
                 >
-                  {restoringId === rev.id ? <Loader2 size={12} style={{ animation: 'spin .6s linear infinite' }} /> : null}
+                  {restoringId === rev.id ? <Loader2 size={12} className="spin" /> : null}
                   Restore
                 </button>
               </div>

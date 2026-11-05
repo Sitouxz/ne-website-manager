@@ -5,7 +5,7 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   Save, Globe, Webhook, Loader2, CheckCircle, Code2,
   GitBranch, ExternalLink, Copy, Check, Zap, Terminal,
-  KeyRound, Plus, Trash2, X, AlertTriangle,
+  KeyRound, Plus, Trash2, X, AlertTriangle, RefreshCw,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useConfirm } from '@/components/ConfirmDialog';
@@ -14,6 +14,19 @@ import { createClient } from '@/lib/supabase/client';
 import type { Client, ClientPublishConfig, WebhookDelivery } from '@/lib/supabase/types';
 
 type Tab = 'general' | 'deploy' | 'integration' | 'api';
+
+const TABS: Tab[] = ['general', 'deploy', 'integration', 'api'];
+
+function isTab(value: string | null): value is Tab {
+  return value !== null && (TABS as string[]).includes(value);
+}
+
+/**
+ * A retry's delivery happens in the background (the notify route wraps it in
+ * `after()`), so the new `webhook_deliveries` row does not exist yet when the
+ * response returns. Reloading immediately would just re-render the same log.
+ */
+const DELIVERY_REFRESH_DELAY_MS = 1500;
 
 interface ApiKeyRow {
   id: string;
@@ -62,6 +75,7 @@ export default function SettingsPage() {
   // site" across two separate tabs.
   const [deliveries,        setDeliveries]        = useState<WebhookDelivery[]>([]);
   const [deliveriesLoading, setDeliveriesLoading]  = useState(false);
+  const [retryingId, setRetryingId] = useState<string | null>(null);
   const [deliveriesErr,     setDeliveriesErr]      = useState('');
 
   // Integration state
@@ -142,6 +156,19 @@ export default function SettingsPage() {
     return () => { cancelled = true; };
   }, [client?.id]);
 
+  // Opens the tab named by `?tab=` so a link can point at a specific one —
+  // the dashboard's failed-publish alert deep-links to `?tab=deploy`, and
+  // landing on "General" instead would leave the reader to hunt for the thing
+  // the alert just told them was broken. Read once on mount rather than via
+  // `useSearchParams` so switching tabs by hand doesn't fight the URL.
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const requested = new URLSearchParams(window.location.search).get('tab');
+      if (isTab(requested)) setTab(requested);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
+
   useEffect(() => {
     const originTimer = window.setTimeout(() => {
       setCmsBase(window.location.origin.replace(/\/$/, ''));
@@ -205,6 +232,49 @@ export default function SettingsPage() {
     if (!form.deploy_hook) return;
     await fetch(form.deploy_hook, { method: 'POST' });
     toast.success('Website rebuild started. It usually takes a minute or two to appear.');
+  }
+
+  /**
+   * Re-fires a failed delivery through the real `/api/publish/notify`
+   * pipeline, reusing the payload recorded on the failed row — so the retry
+   * signs and delivers exactly what the original publish tried to send.
+   *
+   * Note this re-runs `notifyPublish` as a whole, which fires whichever of
+   * `revalidate_url`/`deploy_hook` are configured — not only the one URL that
+   * failed. That is the intent: the goal is "make the live site current
+   * again", and re-notifying an endpoint that already succeeded is harmless
+   * (both are idempotent revalidation triggers) where re-sending to only one
+   * of them could leave the other stale.
+   */
+  async function retryDelivery(delivery: WebhookDelivery) {
+    if (!client) return;
+    const payload = delivery.payload ?? {};
+    setRetryingId(delivery.id);
+    try {
+      const res = await fetch('/api/publish/notify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          clientId: client.id,
+          event: payload.event ?? delivery.event,
+          entityType: payload.entityType ?? 'retry',
+          entityId: payload.entityId ?? delivery.id,
+          slug: payload.slug ?? null,
+          path: payload.path ?? null,
+        }),
+      });
+      if (!res.ok) throw new Error(`The CMS refused the retry (${res.status}).`);
+      toast.success('Update sent again. The log below will show the result shortly.');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not send the update again.');
+    } finally {
+      setRetryingId(null);
+      // The delivery happens in the background (`after()` in the notify
+      // route), so the new row is not written by the time the response
+      // returns. Reload on a short delay rather than immediately, or the log
+      // refreshes to exactly what it already showed.
+      window.setTimeout(() => { if (client?.id) loadDeliveries(client.id); }, DELIVERY_REFRESH_DELAY_MS);
+    }
   }
 
   const loadDeliveries = useCallback(async (clientId: string) => {
@@ -359,9 +429,8 @@ export default function SettingsPage() {
     <>
       <Topbar title="Site Settings" />
       <div className="page-body" style={{ display: 'flex', justifyContent: 'center', paddingTop: 80 }}>
-        <Loader2 size={24} color="var(--ne-blue)" style={{ animation: 'spin .6s linear infinite' }} />
+        <Loader2 size={24} color="var(--ne-blue)" className="spin" />
       </div>
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </>
   );
 
@@ -484,7 +553,7 @@ const pages = await fetch('${pagesUrl}').then(r => r.json());`,
             </div>
           )}
           <button className="btn-ne" onClick={handleSave} disabled={saving}>
-            {saving ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Save size={14} />}
+            {saving ? <Loader2 size={14} className="spin" /> : <Save size={14} />}
             Save Settings
           </button>
           </div>
@@ -515,19 +584,19 @@ const pages = await fetch('${pagesUrl}').then(r => r.json());`,
 
         {/* ── General ── */}
         {tab === 'general' && (
-          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
-            <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div className="panel">
+            <div className="panel-header">
               <Globe size={16} color="var(--ne-blue)" />
-              <div style={{ fontWeight: 700, fontSize: 14 }}>General</div>
+              <div className="panel-title">General</div>
             </div>
-            <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div className="panel-body">
               <div>
-                <label style={{ display: 'block', fontSize: 12.5, fontWeight: 600, color: 'var(--fg2)', marginBottom: 6 }}>Site Name</label>
+                <label className="field-label">Site Name</label>
                 <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
-                  style={{ width: '100%', padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', fontSize: 13.5, outline: 'none', color: 'var(--fg1)' }} />
+                  className="text-input" />
               </div>
               <div>
-                <label style={{ display: 'block', fontSize: 12.5, fontWeight: 600, color: 'var(--fg2)', marginBottom: 6 }}>Website URL</label>
+                <label className="field-label">Website URL</label>
                 <input value={form.website_url} onChange={(e) => setForm({ ...form, website_url: e.target.value })}
                   placeholder="https://your-site.com"
                   style={{ width: '100%', padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', fontSize: 13.5, outline: 'none', color: 'var(--fg1)', fontFamily: 'monospace' }} />
@@ -541,17 +610,17 @@ const pages = await fetch('${pagesUrl}').then(r => r.json());`,
           <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
 
             {/* Vercel Deploy Hook */}
-            <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
-              <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div className="panel">
+              <div className="panel-header">
                 <Webhook size={16} color="var(--ne-blue)" />
                 <div>
-                  <div style={{ fontWeight: 700, fontSize: 14 }}>Vercel Deploy Hook</div>
-                  <div style={{ fontSize: 11.5, color: 'var(--fg3)' }}>Triggers a full site rebuild when you publish content</div>
+                  <div className="panel-title">Vercel Deploy Hook</div>
+                  <div className="field-hint">Triggers a full site rebuild when you publish content</div>
                 </div>
               </div>
-              <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
+              <div className="panel-body">
                 <div>
-                  <label style={{ display: 'block', fontSize: 12.5, fontWeight: 600, color: 'var(--fg2)', marginBottom: 6 }}>Deploy Hook URL</label>
+                  <label className="field-label">Deploy Hook URL</label>
                   <input value={form.deploy_hook} onChange={(e) => setForm({ ...form, deploy_hook: e.target.value })}
                     placeholder="https://api.vercel.com/v1/integrations/deploy/..."
                     style={{ width: '100%', padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', fontSize: 12.5, outline: 'none', color: 'var(--fg1)', fontFamily: 'monospace' }} />
@@ -574,29 +643,29 @@ const pages = await fetch('${pagesUrl}').then(r => r.json());`,
             </div>
 
             {/* Revalidate URL (Task 7.1) */}
-            <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
-              <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div className="panel">
+              <div className="panel-header">
                 <Webhook size={16} color="var(--ne-blue)" />
                 <div>
-                  <div style={{ fontWeight: 700, fontSize: 14 }}>Revalidate Webhook</div>
-                  <div style={{ fontSize: 11.5, color: 'var(--fg3)' }}>Signed POST sent to your site on every publish/update — lets it revalidate just the affected page instead of a full rebuild</div>
+                  <div className="panel-title">Revalidate Webhook</div>
+                  <div className="field-hint">Signed POST sent to your site on every publish/update — lets it revalidate just the affected page instead of a full rebuild</div>
                 </div>
               </div>
-              <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
+              <div className="panel-body">
                 <div>
-                  <label style={{ display: 'block', fontSize: 12.5, fontWeight: 600, color: 'var(--fg2)', marginBottom: 6 }}>Revalidate URL</label>
+                  <label className="field-label">Revalidate URL</label>
                   <input value={form.revalidate_url} onChange={(e) => setForm({ ...form, revalidate_url: e.target.value })}
                     placeholder="https://your-site.com/api/revalidate"
                     style={{ width: '100%', padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', fontSize: 12.5, outline: 'none', color: 'var(--fg1)', fontFamily: 'monospace' }} />
                 </div>
                 <div>
-                  <label style={{ display: 'block', fontSize: 12.5, fontWeight: 600, color: 'var(--fg2)', marginBottom: 6 }}>Signing Secret</label>
+                  <label className="field-label">Signing Secret</label>
                   <input
                     type="password"
                     value={form.revalidate_secret}
                     onChange={(e) => setForm({ ...form, revalidate_secret: e.target.value })}
                     placeholder="a long random string, shared with your site's revalidate handler"
-                    style={{ width: '100%', padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', fontSize: 13, outline: 'none', color: 'var(--fg1)', fontFamily: 'monospace' }}
+                    className="text-input text-input-mono"
                   />
                   <p style={{ fontSize: 11.5, color: 'var(--fg3)', margin: '5px 0 0' }}>
                     Every request to the Revalidate URL is signed with this secret via an <code>x-ne-signature</code> header
@@ -612,7 +681,7 @@ const pages = await fetch('${pagesUrl}').then(r => r.json());`,
             </div>
 
             {/* Delivery log (Task 7.1) */}
-            <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
+            <div className="panel">
               <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', fontWeight: 700, fontSize: 14 }}>
                 Recent Deliveries
                 <span style={{ fontWeight: 500, fontSize: 11.5, color: 'var(--fg3)', marginLeft: 8 }}>Last 20 webhook attempts for this client</span>
@@ -653,6 +722,19 @@ const pages = await fetch('${pagesUrl}').then(r => r.json());`,
                       <span style={{ fontSize: 11, color: 'var(--fg3)', flexShrink: 0 }}>
                         {new Date(d.created_at).toLocaleString()}
                       </span>
+                      {!d.ok && (
+                        <button
+                          className="btn-outline-ne"
+                          onClick={() => retryDelivery(d)}
+                          disabled={retryingId === d.id}
+                          style={{ flexShrink: 0, minHeight: 32, padding: '0 10px', fontSize: 11.5 }}
+                        >
+                          {retryingId === d.id
+                            ? <Loader2 size={12} className="spin" />
+                            : <RefreshCw size={12} />}
+                          Try again
+                        </button>
+                      )}
                     </div>
                   ))
                 )}
@@ -666,26 +748,26 @@ const pages = await fetch('${pagesUrl}').then(r => r.json());`,
           <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
 
             {/* GitHub Auto-PR */}
-            <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
-              <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div className="panel">
+              <div className="panel-header">
                 <GitBranch size={16} color="var(--ne-blue)" />
                 <div>
-                  <div style={{ fontWeight: 700, fontSize: 14 }}>GitHub Auto-Integration</div>
-                  <div style={{ fontSize: 11.5, color: 'var(--fg3)' }}>Push <code>lib/cms.ts</code> to your repo and open a PR automatically</div>
+                  <div className="panel-title">GitHub Auto-Integration</div>
+                  <div className="field-hint">Push <code>lib/cms.ts</code> to your repo and open a PR automatically</div>
                 </div>
               </div>
               <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 14 }}>
                 <div>
-                  <label style={{ display: 'block', fontSize: 12.5, fontWeight: 600, color: 'var(--fg2)', marginBottom: 6 }}>GitHub Repository</label>
+                  <label className="field-label">GitHub Repository</label>
                   <input
                     value={form.github_repo}
                     onChange={(e) => setForm({ ...form, github_repo: e.target.value })}
                     placeholder="username/repo-name (e.g. Sitouxz/alisla)"
-                    style={{ width: '100%', padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', fontSize: 13, outline: 'none', color: 'var(--fg1)', fontFamily: 'monospace' }}
+                    className="text-input text-input-mono"
                   />
                 </div>
                 <div>
-                  <label style={{ display: 'block', fontSize: 12.5, fontWeight: 600, color: 'var(--fg2)', marginBottom: 6 }}>
+                  <label className="field-label">
                     GitHub Personal Access Token
                     <a href="https://github.com/settings/tokens/new?scopes=repo&description=NE+Website+Manager" target="_blank" rel="noopener" style={{ marginLeft: 8, fontSize: 11, color: 'var(--ne-blue)', fontWeight: 500 }}>
                       Generate token <ExternalLink size={10} style={{ verticalAlign: 'middle' }} />
@@ -696,7 +778,7 @@ const pages = await fetch('${pagesUrl}').then(r => r.json());`,
                     value={ghToken}
                     onChange={(e) => setGhToken(e.target.value)}
                     placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
-                    style={{ width: '100%', padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', fontSize: 13, outline: 'none', color: 'var(--fg1)', fontFamily: 'monospace' }}
+                    className="text-input text-input-mono"
                   />
                   <p style={{ fontSize: 11.5, color: 'var(--fg3)', margin: '5px 0 0' }}>Needs <code>repo</code> scope. Token is used once and never stored.</p>
                 </div>
@@ -717,7 +799,7 @@ const pages = await fetch('${pagesUrl}').then(r => r.json());`,
                 </label>
 
                 {intErr && (
-                  <div style={{ padding: '10px 14px', background: '#FEF2F2', color: 'var(--ne-danger)', borderRadius: 'var(--r-sm)', fontSize: 13 }}>
+                  <div className="error-box">
                     {intErr}
                   </div>
                 )}
@@ -740,7 +822,7 @@ const pages = await fetch('${pagesUrl}').then(r => r.json());`,
                     disabled={pushing || !ghToken || !form.github_repo}
                   >
                     {pushing
-                      ? <><Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> Pushing...</>
+                      ? <><Loader2 size={14} className="spin" /> Pushing...</>
                       : <><GitBranch size={14} /> Push lib/cms.ts &amp; Open PR</>}
                   </button>
                   <button className="btn-outline-ne" onClick={handleSave} disabled={saving}>
@@ -767,10 +849,10 @@ const pages = await fetch('${pagesUrl}').then(r => r.json());`,
             </div>
 
             {/* Code Snippets */}
-            <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
-              <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div className="panel">
+              <div className="panel-header">
                 <Code2 size={16} color="var(--ne-blue)" />
-                <div style={{ fontWeight: 700, fontSize: 14 }}>Code Snippets</div>
+                <div className="panel-title">Code Snippets</div>
               </div>
               <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 20 }}>
                 {Object.entries(snippets).map(([framework, items]) => (
@@ -803,7 +885,7 @@ const pages = await fetch('${pagesUrl}').then(r => r.json());`,
         {/* ── API Access ── */}
         {tab === 'api' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
+          <div className="panel">
             <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', fontWeight: 700, fontSize: 14 }}>API Endpoints (public read-only)</div>
             <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 12 }}>
               <p style={{ fontSize: 12.5, color: 'var(--fg3)', margin: '0 0 8px' }}>
@@ -827,13 +909,13 @@ const pages = await fetch('${pagesUrl}').then(r => r.json());`,
 
           {/* API Keys — ne_admin + client_admin only */}
           {canManageKeys && client && (
-            <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
+            <div className="panel">
               <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                   <KeyRound size={16} color="var(--ne-blue)" />
                   <div>
-                    <div style={{ fontWeight: 700, fontSize: 14 }}>API Keys</div>
-                    <div style={{ fontSize: 11.5, color: 'var(--fg3)' }}>Optional Bearer-token auth for the endpoints above</div>
+                    <div className="panel-title">API Keys</div>
+                    <div className="field-hint">Optional Bearer-token auth for the endpoints above</div>
                   </div>
                 </div>
                 <button className="btn-ne" onClick={() => setShowKeyDialog(true)}>
@@ -842,7 +924,7 @@ const pages = await fetch('${pagesUrl}').then(r => r.json());`,
               </div>
               <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 10 }}>
                 {keysErr && (
-                  <div style={{ padding: '10px 14px', background: '#FEF2F2', color: 'var(--ne-danger)', borderRadius: 'var(--r-sm)', fontSize: 13 }}>
+                  <div className="error-box">
                     {keysErr}
                   </div>
                 )}
@@ -882,7 +964,7 @@ const pages = await fetch('${pagesUrl}').then(r => r.json());`,
                           }}
                         >
                           {revokingId === k.id
-                            ? <Loader2 size={12} style={{ animation: 'spin .6s linear infinite' }} />
+                            ? <Loader2 size={12} className="spin" />
                             : <Trash2 size={12} />}
                           Revoke
                         </button>
@@ -925,22 +1007,22 @@ const pages = await fetch('${pagesUrl}').then(r => r.json());`,
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
                 {keysErr && (
-                  <div style={{ padding: '10px 14px', background: '#FEF2F2', color: 'var(--ne-danger)', borderRadius: 'var(--r-sm)', fontSize: 13 }}>
+                  <div className="error-box">
                     {keysErr}
                   </div>
                 )}
                 <div>
-                  <label style={{ display: 'block', fontSize: 12.5, fontWeight: 600, color: 'var(--fg2)', marginBottom: 6 }}>Key Name</label>
+                  <label className="field-label">Key Name</label>
                   <input
                     value={newKeyName}
                     onChange={(e) => setNewKeyName(e.target.value)}
                     placeholder="e.g. Production website"
-                    style={{ width: '100%', padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', fontSize: 13.5, outline: 'none', color: 'var(--fg1)' }}
+                    className="text-input"
                   />
                 </div>
                 <div style={{ display: 'flex', gap: 8 }}>
                   <button className="btn-ne" style={{ flex: 1, justifyContent: 'center' }} onClick={handleGenerateKey} disabled={generating}>
-                    {generating ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Plus size={14} />}
+                    {generating ? <Loader2 size={14} className="spin" /> : <Plus size={14} />}
                     Generate
                   </button>
                   <button className="btn-outline-ne" onClick={closeKeyDialog}>Cancel</button>
@@ -951,7 +1033,6 @@ const pages = await fetch('${pagesUrl}').then(r => r.json());`,
         </div>
       )}
 
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </>
   );
 }

@@ -3,7 +3,8 @@
 import Topbar from '@/components/Topbar';
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Plus, Search, Filter, MoreHorizontal, Edit, Trash2, Loader2, FileText } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { Plus, Search, Filter, MoreHorizontal, Edit, Trash2, Loader2, FileText, Copy } from 'lucide-react';
 import { toast } from 'sonner';
 import { createClient } from '@/lib/supabase/client';
 import { useSelectedClient } from '@/components/AppShell';
@@ -12,7 +13,11 @@ import { firePublishNotify, computeLivePath } from '@/lib/publish-client';
 import { errorMessage } from '@/lib/errors';
 import { statusDescription, statusLabel } from '@/lib/content-status';
 import { EmptyState, NoResultsState } from '@/components/EmptyState';
+import { BulkActionBar, SelectCell } from '@/components/builder/BulkActionBar';
+import { useBulkSelection } from '@/lib/hooks/useBulkSelection';
 import type { Post } from '@/lib/supabase/types';
+import { copyTitle, nextCopySlug } from '@/lib/duplicate';
+import { statusChangeEvent } from '@/lib/publish-events';
 
 const STATUSES = ['All', 'published', 'scheduled', 'in_review', 'draft', 'archived'];
 
@@ -24,7 +29,14 @@ export default function PostsPage() {
   const [status,   setStatus]   = useState('All');
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [duplicating, setDuplicating] = useState<string | null>(null);
+  // Publishing a post is restricted to client_admin/ne_admin by migration 015.
+  // RLS is the real gate; this only keeps a plain editor from firing a screenful
+  // of writes the database will reject one by one.
+  const [canPublish, setCanPublish] = useState(false);
   const { selectedClientId } = useSelectedClient();
+  const router = useRouter();
   const confirm = useConfirm();
 
   const fetchPosts = useCallback(async () => {
@@ -37,6 +49,13 @@ export default function PostsPage() {
     if (selectedClientId) query = query.eq('client_id', selectedClientId);
     const { data } = await query;
     setPosts(data ?? []);
+
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user) {
+      const { data: profile } = await supabase.from('profiles').select('role').eq('id', user.id).single();
+      setCanPublish(profile?.role === 'ne_admin' || profile?.role === 'client_admin');
+    }
+
     setLoading(false);
   }, [selectedClientId]);
 
@@ -99,11 +118,194 @@ export default function PostsPage() {
     toast.success(`"${title}" was deleted.`);
   }
 
+  /**
+   * Copies a post as a draft and opens it.
+   *
+   * Always a draft, whatever the original was: a duplicate is a starting
+   * point, and silently publishing a second copy of a live article — at the
+   * same moment, under a near-identical slug — is the opposite of what
+   * "duplicate" means to anyone clicking it.
+   *
+   * The slug gets a `-copy-N` suffix, N being one past the highest existing
+   * copy, mirroring the entries list. `posts.slug` is unique per client, so
+   * guessing a colliding suffix would fail the insert outright.
+   */
+  async function handleDuplicate(post: Post) {
+    setDuplicating(post.id);
+    setOpenMenu(null);
+
+
+    const supabase = createClient();
+    const { data: created, error } = await supabase
+      .from('posts')
+      .insert({
+        client_id: post.client_id,
+        title: copyTitle(post.title),
+        slug: nextCopySlug(post.slug, posts.map((current) => current.slug)),
+        excerpt: post.excerpt,
+        content: post.content,
+        content_json: post.content_json,
+        category: post.category,
+        tags: post.tags,
+        cover_url: post.cover_url,
+        cover_alt: post.cover_alt,
+        seo_title: post.seo_title,
+        seo_description: post.seo_description,
+        status: 'draft',
+      })
+      .select()
+      .single();
+    setDuplicating(null);
+
+    if (error) {
+      toast.error(errorMessage(error, { entity: 'post', action: 'save' }));
+      return;
+    }
+    toast.success(`Duplicated "${post.title || '(Untitled)'}" as a draft.`);
+    router.push(`/cms/posts/${created.id}`);
+  }
+
+  /**
+   * Publishes or unpublishes every selected post.
+   *
+   * Unlike collection entries there is no schema to validate against, but a
+   * post with no title or no body is still not something to put on a website
+   * unannounced — those are reported as skipped rather than published, using
+   * the same rule the publish preflight applies in the editor.
+   *
+   * Unpublishing skips every check: taking something down must never be
+   * blocked by the content being incomplete.
+   */
+  /**
+   * Narrower than `PostStatus` on purpose. `scheduled` needs a
+   * `scheduled_at`, and `in_review` is a per-author workflow step — passing
+   * either here would write a post into a state the rest of the app assumes
+   * is impossible (a scheduled post with no date never publishes, and the
+   * cron would never pick it up).
+   */
+  async function bulkSetStatus(target: 'published' | 'draft' | 'archived') {
+    const chosen = posts.filter((p) => selection.selectedVisibleIds.includes(p.id));
+    if (chosen.length === 0) return;
+
+    const skipped: string[] = [];
+    const eligible = target === 'published'
+      ? chosen.filter((p) => {
+          const usable = p.title.trim() !== '' && p.content.replace(/<[^>]*>/g, '').trim() !== '';
+          if (!usable) skipped.push(p.title || '(Untitled)');
+          return usable;
+        })
+      : chosen;
+
+    if (eligible.length === 0) {
+      toast.error(`Nothing could be published — ${skipped.join(', ')} ${skipped.length === 1 ? 'has' : 'have'} no title or no content yet.`);
+      return;
+    }
+
+    setBulkBusy(true);
+    const supabase = createClient();
+    const publishedAt = new Date().toISOString();
+
+    const results = await Promise.all(eligible.map((p) => supabase
+      .from('posts')
+      .update({
+        status: target,
+        // Only stamp on the transition INTO published, so re-publishing an old
+        // post does not re-date it and reshuffle the client's blog ordering.
+        ...(target === 'published' && p.status !== 'published' ? { published_at: publishedAt } : {}),
+      })
+      .eq('id', p.id)));
+
+    const succeeded = eligible.filter((_, i) => !results[i].error);
+    const failed = eligible.length - succeeded.length;
+
+    // Taking a post down only notifies if it was actually up — moving forty
+    // drafts to draft changes nothing a reader can see, and firing forty
+    // `content.deleted` events would rebuild the client's site for nothing.
+    for (const post of succeeded) {
+      if (!post.client_id) continue;
+      const event = statusChangeEvent(post.status === 'published', target === 'published');
+      if (!event) continue;
+
+      firePublishNotify({
+        clientId: post.client_id,
+        event,
+        entityType: 'post',
+        entityId: post.id,
+        slug: post.slug,
+        path: computeLivePath('post', { slug: post.slug }),
+      });
+    }
+
+    setPosts((prev) => prev.map((p) => (
+      succeeded.some((x) => x.id === p.id) ? { ...p, status: target } : p
+    )));
+    selection.clear();
+    setBulkBusy(false);
+
+    const verb = target === 'published' ? 'published'
+      : target === 'archived' ? 'archived'
+      : 'moved to draft';
+    const parts = [`${succeeded.length} ${succeeded.length === 1 ? 'post' : 'posts'} ${verb}`];
+    if (skipped.length > 0) parts.push(`${skipped.length} skipped as incomplete: ${skipped.join(', ')}`);
+    if (failed > 0) parts.push(`${failed} failed`);
+
+    if (failed > 0 || skipped.length > 0) toast.warning(parts.join('. ') + '.');
+    else toast.success(parts[0] + '.');
+  }
+
+  async function bulkDelete() {
+    const chosen = posts.filter((p) => selection.selectedVisibleIds.includes(p.id));
+    if (chosen.length === 0) return;
+    const liveCount = chosen.filter((p) => p.status === 'published').length;
+
+    const ok = await confirm({
+      title: `Delete ${chosen.length} ${chosen.length === 1 ? 'post' : 'posts'}?`,
+      body: 'This permanently removes them from your CMS. It cannot be undone.',
+      consequences: liveCount > 0
+        ? [
+            `${liveCount} of them ${liveCount === 1 ? 'is' : 'are'} published, so ${liveCount === 1 ? 'it' : 'they'} will disappear from your website.`,
+            'Anyone who has a link, or finds one in Google, will see a "page not found" error.',
+          ]
+        : ['None of them are published, so nothing on your website will change.'],
+      confirmLabel: `Delete ${chosen.length === 1 ? 'post' : 'posts'}`,
+    });
+    if (!ok) return;
+
+    setBulkBusy(true);
+    const supabase = createClient();
+    const results = await Promise.all(chosen.map((p) => supabase.from('posts').delete().eq('id', p.id)));
+    const deleted = chosen.filter((_, i) => !results[i].error);
+    const failed = chosen.length - deleted.length;
+
+    // One notification per deleted post, and only for ones that were live —
+    // deleting a draft changes nothing a visitor can see.
+    for (const post of deleted) {
+      if (post.status !== 'published' || !post.client_id) continue;
+      firePublishNotify({
+        clientId: post.client_id,
+        event: 'content.deleted',
+        entityType: 'post',
+        entityId: post.id,
+        slug: post.slug,
+        path: computeLivePath('post', { slug: post.slug }),
+      });
+    }
+
+    setPosts((prev) => prev.filter((p) => !deleted.some((d) => d.id === p.id)));
+    selection.clear();
+    setBulkBusy(false);
+
+    if (failed > 0) toast.warning(`${deleted.length} deleted, ${failed} could not be deleted.`);
+    else toast.success(`${deleted.length} ${deleted.length === 1 ? 'post' : 'posts'} deleted.`);
+  }
+
   const filtered = posts.filter((p) =>
     (cat    === 'All' || p.category === cat) &&
     (status === 'All' || p.status   === status) &&
     p.title.toLowerCase().includes(search.toLowerCase())
   );
+
+  const selection = useBulkSelection(filtered.map((p) => p.id));
 
   const categories = useMemo(() => {
     const values = new Set(posts.map((post) => post.category).filter(Boolean));
@@ -155,12 +357,43 @@ export default function PostsPage() {
             </div>
           </div>
 
+          <BulkActionBar
+            count={selection.count}
+            busy={bulkBusy}
+            onClear={selection.clear}
+            onDelete={bulkDelete}
+          >
+            {canPublish && (
+              <>
+                <button className="btn-outline-ne" onClick={() => bulkSetStatus('published')} disabled={bulkBusy}>
+                  Publish
+                </button>
+                <button className="btn-outline-ne" onClick={() => bulkSetStatus('draft')} disabled={bulkBusy}>
+                  Move to draft
+                </button>
+                {/* Gated with the other two: archiving a published post is a
+                    de-facto unpublish, which migration 016's trigger blocks
+                    for a non-admin regardless of what this button offers. */}
+                <button className="btn-outline-ne" onClick={() => bulkSetStatus('archived')} disabled={bulkBusy}>
+                  Archive
+                </button>
+              </>
+            )}
+          </BulkActionBar>
+
           {/* Table */}
           <div className="table-responsive">
           <table className="data-table">
             <thead>
               <tr>
-                <th style={{ paddingLeft: 20 }}>Title</th>
+                <th style={{ width: 40, paddingLeft: 16 }}>
+                  <SelectCell
+                    checked={selection.allVisibleSelected}
+                    onToggle={selection.toggleAllVisible}
+                    label={selection.allVisibleSelected ? 'Clear selection' : 'Select all shown posts'}
+                  />
+                </th>
+                <th>Title</th>
                 <th>Category</th>
                 <th>Status</th>
                 <th>Date</th>
@@ -170,15 +403,15 @@ export default function PostsPage() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={5} style={{ textAlign: 'center', padding: 48, color: 'var(--fg3)' }}>
+                  <td colSpan={6} className="table-placeholder">
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-                      <Loader2 size={16} style={{ animation: 'spin .6s linear infinite' }} /> Loading posts...
+                      <Loader2 size={16} className="spin" /> Loading posts...
                     </div>
                   </td>
                 </tr>
               ) : filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={5} style={{ padding: 0 }}>
+                  <td colSpan={6} style={{ padding: 0 }}>
                     {posts.length === 0 ? (
                       <EmptyState
                         icon={FileText}
@@ -197,7 +430,14 @@ export default function PostsPage() {
                 </tr>
               ) : filtered.map((p) => (
                 <tr key={p.id} style={{ position: 'relative' }}>
-                  <td style={{ paddingLeft: 20, maxWidth: 340 }}>
+                  <td style={{ paddingLeft: 16 }}>
+                    <SelectCell
+                      checked={selection.isSelected(p.id)}
+                      onToggle={() => selection.toggle(p.id)}
+                      label={`Select ${p.title || '(Untitled)'}`}
+                    />
+                  </td>
+                  <td style={{ maxWidth: 340 }}>
                     <Link href={`/cms/posts/${p.id}`} style={{ color: 'var(--fg1)', textDecoration: 'none', fontWeight: 600, fontSize: 13.5 }}>
                       {p.title || '(Untitled)'}
                     </Link>
@@ -232,11 +472,19 @@ export default function PostsPage() {
                           <Edit size={14} /> Edit
                         </Link>
                         <button
+                          style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '10px 14px', fontSize: 13, color: 'var(--fg1)', background: 'none', border: 'none', cursor: 'pointer', width: '100%' }}
+                          onClick={() => handleDuplicate(p)}
+                          disabled={duplicating === p.id}
+                        >
+                          {duplicating === p.id ? <Loader2 size={14} className="spin" /> : <Copy size={14} />}
+                          Duplicate
+                        </button>
+                        <button
                           style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '10px 14px', fontSize: 13, color: 'var(--ne-danger)', background: 'none', border: 'none', cursor: 'pointer', width: '100%' }}
                           onClick={() => handleDelete(p)}
                           disabled={deleting === p.id}
                         >
-                          {deleting === p.id ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Trash2 size={14} />}
+                          {deleting === p.id ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />}
                           Delete
                         </button>
                       </div>
@@ -253,7 +501,6 @@ export default function PostsPage() {
           </div>
         </div>
       </div>
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </>
   );
 }

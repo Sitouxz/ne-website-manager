@@ -4,10 +4,12 @@ import Topbar from '@/components/Topbar';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
+import { collectionBlueprints, getCollectionBlueprint } from '@/lib/templates/catalog';
 import { Plus, Loader2, Lock, ShieldCheck, X, Boxes } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { useSelectedClient } from '@/components/AppShell';
 import type { Collection } from '@/lib/supabase/types';
+import { EmptyState } from '@/components/EmptyState';
 
 /**
  * Collection list — Task 4.2. Deliberately scoped to `storage='generic'`
@@ -36,6 +38,8 @@ export default function CollectionsPage() {
   const [slugTouched,     setSlugTouched]     = useState(false);
   const [creating,        setCreating]        = useState(false);
   const [createError,     setCreateError]     = useState('');
+  // '' means a blank collection — the previous, and still default, behaviour.
+  const [blueprintSlug,   setBlueprintSlug]   = useState('');
 
   const slugify = (s: string) => s.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 
@@ -72,12 +76,29 @@ export default function CollectionsPage() {
     if (!slugTouched) setNewSlug(slugify(value));
   }
 
+  /**
+   * Picking a blueprint prefills the three name fields, but only ones the
+   * operator has not typed into — someone who has already named this
+   * "Whats On" should not have it silently renamed to "Events" by choosing a
+   * starting point for its fields.
+   */
+  function handleBlueprintChange(slug: string) {
+    setBlueprintSlug(slug);
+    const blueprint = getCollectionBlueprint(slug);
+    if (!blueprint) return;
+
+    if (!newName.trim()) setNewName(blueprint.name);
+    if (!newNameSingular.trim()) setNewNameSingular(blueprint.name_singular);
+    if (!slugTouched && !newSlug.trim()) setNewSlug(blueprint.slug);
+  }
+
   function closeNewDialog() {
     setShowNewDialog(false);
     setNewName('');
     setNewNameSingular('');
     setNewSlug('');
     setSlugTouched(false);
+    setBlueprintSlug('');
     setCreateError('');
   }
 
@@ -92,6 +113,8 @@ export default function CollectionsPage() {
     if (!slug) { setCreateError('Slug is required.'); return; }
     if (!selectedClientId) { setCreateError('Select a client in the sidebar first.'); return; }
 
+    const blueprint = getCollectionBlueprint(blueprintSlug);
+
     setCreating(true);
     const supabase = createClient();
     const { data: created, error } = await supabase
@@ -102,8 +125,13 @@ export default function CollectionsPage() {
         name,
         name_singular: nameSingular,
         storage: 'generic',
-        fields: [],
-        options: {},
+        // The blueprint supplies the schema; the operator's typed name/slug
+        // always win, so "Events" can be created as "Whats On" without
+        // losing the fields.
+        description: blueprint?.description ?? null,
+        icon: blueprint?.icon ?? null,
+        fields: blueprint?.fields ?? [],
+        options: blueprint?.options ?? {},
       })
       .select()
       .single();
@@ -112,6 +140,8 @@ export default function CollectionsPage() {
     if (error) { setCreateError(error.message); return; }
     router.push(`/cms/collections/${created.id}/schema`);
   }
+
+  const selectedBlueprint = getCollectionBlueprint(blueprintSlug);
 
   const editableFor = (c: Collection) => c.storage === 'generic' && c.client_id !== null && isAdmin;
 
@@ -144,16 +174,28 @@ export default function CollectionsPage() {
               <tbody>
                 {loading ? (
                   <tr>
-                    <td colSpan={6} style={{ textAlign: 'center', padding: 48, color: 'var(--fg3)' }}>
+                    <td colSpan={6} className="table-placeholder">
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-                        <Loader2 size={16} style={{ animation: 'spin .6s linear infinite' }} /> Loading...
+                        <Loader2 size={16} className="spin" /> Loading...
                       </div>
                     </td>
                   </tr>
                 ) : collections.length === 0 ? (
                   <tr>
-                    <td colSpan={6} style={{ textAlign: 'center', padding: 48, color: 'var(--fg3)' }}>
-                      No collections yet. {isAdmin ? 'Create your first one!' : ''}
+                    <td colSpan={6} style={{ padding: 0 }}>
+                      {/* Points at the ready-made starting points rather than
+                          just reporting emptiness — the blueprint picker is
+                          the fastest route out of this state, and nothing
+                          else on screen mentions it exists. */}
+                      <EmptyState
+                        icon={Boxes}
+                        title="No collections yet"
+                        body={isAdmin
+                          ? 'Collections hold repeating content — services, events, listings, staff. Start from a ready-made one and adjust it, or build the fields yourself.'
+                          : 'Collections hold repeating content like services or events. Ask Neu Entity to set one up for this website.'}
+                        actionLabel={isAdmin ? 'Add a collection' : undefined}
+                        onAction={isAdmin ? () => setShowNewDialog(true) : undefined}
+                      />
                     </td>
                   </tr>
                 ) : collections.map((c) => {
@@ -219,12 +261,33 @@ export default function CollectionsPage() {
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
               {createError && (
-                <div style={{ padding: '10px 14px', background: '#FEF2F2', color: 'var(--ne-danger)', borderRadius: 'var(--r-sm)', fontSize: 13 }}>
+                <div className="error-box">
                   {createError}
                 </div>
               )}
               <div>
-                <label style={{ display: 'block', fontSize: 12.5, fontWeight: 600, color: 'var(--fg2)', marginBottom: 6 }}>Name (plural)</label>
+                <label htmlFor="new-collection-blueprint" className="field-label">
+                  Start from
+                </label>
+                <select
+                  id="new-collection-blueprint"
+                  value={blueprintSlug}
+                  onChange={(e) => handleBlueprintChange(e.target.value)}
+                  style={{ width: '100%', padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', fontSize: 13.5, color: 'var(--fg1)', background: 'var(--surface)' }}
+                >
+                  <option value="">Nothing — build the fields myself</option>
+                  {collectionBlueprints().map((b) => (
+                    <option key={b.slug} value={b.slug}>{b.name} ({b.fromTemplate})</option>
+                  ))}
+                </select>
+                {selectedBlueprint && (
+                  <div style={{ fontSize: 11.5, color: 'var(--fg3)', marginTop: 6 }}>
+                    {selectedBlueprint.description} Comes with {selectedBlueprint.fields.length} fields ready to use.
+                  </div>
+                )}
+              </div>
+              <div>
+                <label className="field-label">Name (plural)</label>
                 <input
                   value={newName}
                   onChange={(e) => handleNameChange(e.target.value)}
@@ -234,7 +297,7 @@ export default function CollectionsPage() {
                 />
               </div>
               <div>
-                <label style={{ display: 'block', fontSize: 12.5, fontWeight: 600, color: 'var(--fg2)', marginBottom: 6 }}>Singular name</label>
+                <label className="field-label">Singular name</label>
                 <input
                   value={newNameSingular}
                   onChange={(e) => setNewNameSingular(e.target.value)}
@@ -243,7 +306,7 @@ export default function CollectionsPage() {
                 />
               </div>
               <div>
-                <label style={{ display: 'block', fontSize: 12.5, fontWeight: 600, color: 'var(--fg2)', marginBottom: 6 }}>Slug</label>
+                <label className="field-label">Slug</label>
                 <input
                   value={newSlug}
                   onChange={(e) => { setNewSlug(e.target.value); setSlugTouched(true); }}
@@ -253,7 +316,7 @@ export default function CollectionsPage() {
               </div>
               <div style={{ display: 'flex', gap: 8 }}>
                 <button className="btn-ne" style={{ flex: 1, justifyContent: 'center' }} onClick={handleCreate} disabled={creating}>
-                  {creating ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Plus size={14} />}
+                  {creating ? <Loader2 size={14} className="spin" /> : <Plus size={14} />}
                   Create
                 </button>
                 <button className="btn-outline-ne" onClick={closeNewDialog}>Cancel</button>
@@ -263,7 +326,6 @@ export default function CollectionsPage() {
         </div>
       )}
 
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </>
   );
 }

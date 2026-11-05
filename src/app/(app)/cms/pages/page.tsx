@@ -3,7 +3,8 @@
 import Topbar from '@/components/Topbar';
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
-import { Plus, Globe, Lock, MoreHorizontal, Edit, Trash2, Loader2, FileEdit } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { Plus, Globe, Lock, MoreHorizontal, Edit, Trash2, Loader2, FileEdit, Copy } from 'lucide-react';
 import { toast } from 'sonner';
 import { createClient } from '@/lib/supabase/client';
 import { useConfirm } from '@/components/ConfirmDialog';
@@ -12,6 +13,10 @@ import { errorMessage } from '@/lib/errors';
 import { statusDescription, statusLabel } from '@/lib/content-status';
 import { EmptyState } from '@/components/EmptyState';
 import { useSelectedClient } from '@/components/AppShell';
+import { BulkActionBar, SelectCell } from '@/components/builder/BulkActionBar';
+import { copyTitle, nextCopySlug } from '@/lib/duplicate';
+import { statusChangeEvent } from '@/lib/publish-events';
+import { useBulkSelection } from '@/lib/hooks/useBulkSelection';
 import type { Page } from '@/lib/supabase/types';
 
 function fmtDate(iso: string | null) {
@@ -24,7 +29,14 @@ export default function PagesPage() {
   const [loading,  setLoading]  = useState(true);
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
   const confirm = useConfirm();
+  const router = useRouter();
+  const [duplicating, setDuplicating] = useState<string | null>(null);
+  // Publishing a page is client_admin/ne_admin only (migration 015). RLS is
+  // the real gate; this stops a plain editor firing a screenful of rejected
+  // writes and seeing a screenful of unexplained failures.
+  const [canPublish, setCanPublish] = useState(false);
   const { selectedClientId } = useSelectedClient();
 
   const fetchPages = useCallback(async () => {
@@ -37,6 +49,13 @@ export default function PagesPage() {
     if (selectedClientId) query = query.eq('client_id', selectedClientId);
     const { data } = await query;
     setPages((data ?? []) as Page[]);
+
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user) {
+      const { data: profile } = await supabase.from('profiles').select('role').eq('id', user.id).single();
+      setCanPublish(profile?.role === 'ne_admin' || profile?.role === 'client_admin');
+    }
+
     setLoading(false);
   }, [selectedClientId]);
 
@@ -46,6 +65,163 @@ export default function PagesPage() {
     }, 0);
     return () => window.clearTimeout(timer);
   }, [fetchPages]);
+
+  const selection = useBulkSelection(pages.map((page) => page.id));
+
+  /**
+   * Copies a page as a draft and opens it.
+   *
+   * Always a draft, and always at a new path: `pages.path` is what the live
+   * site routes on, so a copy sharing the original's path would either fail
+   * the unique index or start competing with a live page for the same URL.
+   */
+  async function handleDuplicate(page: Page) {
+    setDuplicating(page.id);
+    setOpenMenu(null);
+
+
+    const supabase = createClient();
+    const { data: created, error } = await supabase
+      .from('pages')
+      .insert({
+        client_id: page.client_id,
+        title: copyTitle(page.title),
+        path: nextCopySlug(page.path, pages.map((current) => current.path)),
+        content: page.content,
+        content_json: page.content_json,
+        seo_title: page.seo_title,
+        seo_description: page.seo_description,
+        visibility: page.visibility,
+        status: 'draft',
+      })
+      .select()
+      .single();
+    setDuplicating(null);
+
+    if (error) {
+      toast.error(errorMessage(error, { entity: 'page', action: 'save' }));
+      return;
+    }
+    toast.success(`Duplicated "${page.title || '(Untitled)'}" as a draft.`);
+    router.push(`/cms/pages/${created.id}`);
+  }
+
+  /**
+   * Publishes or unpublishes every selected page.
+   *
+   * A page with no content is skipped rather than published: unlike a post,
+   * a page is usually reached from the site menu, so an empty one is a dead
+   * end a visitor arrives at deliberately. Unpublishing skips the check —
+   * taking something down is never blocked by it being incomplete.
+   *
+   * Only pages that are both published AND public are announced as live
+   * changes, matching how the single delete decides whether to notify: a
+   * private page was never visible, so nothing on the website changed.
+   */
+  async function bulkSetStatus(target: 'published' | 'draft') {
+    const chosen = pages.filter((page) => selection.selectedVisibleIds.includes(page.id));
+    if (chosen.length === 0) return;
+
+    const skipped: string[] = [];
+    const eligible = target === 'published'
+      ? chosen.filter((page) => {
+          const usable = page.content.replace(/<[^>]*>/g, '').trim() !== '';
+          if (!usable) skipped.push(page.title || page.path || '(Untitled)');
+          return usable;
+        })
+      : chosen;
+
+    if (eligible.length === 0) {
+      toast.error(`Nothing could be published — ${skipped.join(', ')} ${skipped.length === 1 ? 'has' : 'have'} no content yet.`);
+      return;
+    }
+
+    setBulkBusy(true);
+    const supabase = createClient();
+    const results = await Promise.all(eligible.map((page) => supabase
+      .from('pages')
+      .update({ status: target })
+      .eq('id', page.id)));
+
+    const succeeded = eligible.filter((_, i) => !results[i].error);
+    const failed = eligible.length - succeeded.length;
+
+    // As with posts: only announce a takedown for a page that was actually
+    // live. A private or draft page was never visible, so nothing changed.
+    for (const page of succeeded) {
+      // A page must be public as well as published to have ever been live.
+      if (!page.client_id || page.visibility !== 'public') continue;
+      const event = statusChangeEvent(page.status === 'published', target === 'published');
+      if (!event) continue;
+
+      firePublishNotify({
+        clientId: page.client_id,
+        event,
+        entityType: 'page',
+        entityId: page.id,
+        slug: page.path,
+        path: computeLivePath('page', { path: page.path }),
+      });
+    }
+
+    setPages((prev) => prev.map((page) => (
+      succeeded.some((x) => x.id === page.id) ? { ...page, status: target } : page
+    )));
+    selection.clear();
+    setBulkBusy(false);
+
+    const verb = target === 'published' ? 'published' : 'moved to draft';
+    const parts = [`${succeeded.length} ${succeeded.length === 1 ? 'page' : 'pages'} ${verb}`];
+    if (skipped.length > 0) parts.push(`${skipped.length} skipped as empty: ${skipped.join(', ')}`);
+    if (failed > 0) parts.push(`${failed} failed`);
+
+    if (failed > 0 || skipped.length > 0) toast.warning(parts.join('. ') + '.');
+    else toast.success(parts[0] + '.');
+  }
+
+  async function bulkDelete() {
+    const chosen = pages.filter((page) => selection.selectedVisibleIds.includes(page.id));
+    if (chosen.length === 0) return;
+    const liveCount = chosen.filter((page) => page.status === 'published').length;
+
+    const ok = await confirm({
+      title: `Delete ${chosen.length} ${chosen.length === 1 ? 'page' : 'pages'}?`,
+      body: 'This permanently removes them from your CMS. It cannot be undone.',
+      consequences: liveCount > 0
+        ? [
+            `${liveCount} of them ${liveCount === 1 ? 'is' : 'are'} published, so ${liveCount === 1 ? 'it' : 'they'} will disappear from your website.`,
+            'Any link to them, in your menu or from Google, will lead to a "page not found" error.',
+          ]
+        : ['None of them are published, so nothing on your website will change.'],
+      confirmLabel: `Delete ${chosen.length === 1 ? 'page' : 'pages'}`,
+    });
+    if (!ok) return;
+
+    setBulkBusy(true);
+    const supabase = createClient();
+    const results = await Promise.all(chosen.map((page) => supabase.from('pages').delete().eq('id', page.id)));
+    const deleted = chosen.filter((_, i) => !results[i].error);
+    const failed = chosen.length - deleted.length;
+
+    for (const page of deleted) {
+      if (page.status !== 'published' || !page.client_id) continue;
+      firePublishNotify({
+        clientId: page.client_id,
+        event: 'content.deleted',
+        entityType: 'page',
+        entityId: page.id,
+        slug: page.path,
+        path: computeLivePath('page', { path: page.path }),
+      });
+    }
+
+    setPages((prev) => prev.filter((page) => !deleted.some((d) => d.id === page.id)));
+    selection.clear();
+    setBulkBusy(false);
+
+    if (failed > 0) toast.warning(`${deleted.length} deleted, ${failed} could not be deleted.`);
+    else toast.success(`${deleted.length} ${deleted.length === 1 ? 'page' : 'pages'} deleted.`);
+  }
 
   async function handleDelete(page: Page) {
     const title = page.title || page.path || '(Untitled)';
@@ -111,12 +287,37 @@ export default function PagesPage() {
           </Link>
         </div>
 
-        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
+        <div className="panel">
+          <BulkActionBar
+            count={selection.count}
+            busy={bulkBusy}
+            onClear={selection.clear}
+            onDelete={bulkDelete}
+          >
+            {canPublish && (
+              <>
+                <button className="btn-outline-ne" onClick={() => bulkSetStatus('published')} disabled={bulkBusy}>
+                  Publish
+                </button>
+                <button className="btn-outline-ne" onClick={() => bulkSetStatus('draft')} disabled={bulkBusy}>
+                  Move to draft
+                </button>
+              </>
+            )}
+          </BulkActionBar>
+
           <div className="table-responsive">
             <table className="data-table">
               <thead>
                 <tr>
-                  <th style={{ paddingLeft: 20 }}>Page Title</th>
+                  <th style={{ width: 40, paddingLeft: 16 }}>
+                    <SelectCell
+                      checked={selection.allVisibleSelected}
+                      onToggle={selection.toggleAllVisible}
+                      label={selection.allVisibleSelected ? 'Clear selection' : 'Select all pages'}
+                    />
+                  </th>
+                  <th>Page Title</th>
                   <th>URL Path</th>
                   <th>Status</th>
                   <th>Visibility</th>
@@ -127,15 +328,15 @@ export default function PagesPage() {
               <tbody>
                 {loading ? (
                   <tr>
-                    <td colSpan={6} style={{ textAlign: 'center', padding: 48, color: 'var(--fg3)' }}>
+                    <td colSpan={7} className="table-placeholder">
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-                        <Loader2 size={16} style={{ animation: 'spin .6s linear infinite' }} /> Loading pages...
+                        <Loader2 size={16} className="spin" /> Loading pages...
                       </div>
                     </td>
                   </tr>
                 ) : pages.length === 0 ? (
                   <tr>
-                    <td colSpan={6} style={{ padding: 0 }}>
+                    <td colSpan={7} style={{ padding: 0 }}>
                       <EmptyState
                         icon={FileEdit}
                         title="No pages yet"
@@ -147,7 +348,14 @@ export default function PagesPage() {
                   </tr>
                 ) : pages.map((page) => (
                   <tr key={page.id} style={{ position: 'relative' }}>
-                    <td style={{ paddingLeft: 20 }}>
+                    <td style={{ paddingLeft: 16 }}>
+                      <SelectCell
+                        checked={selection.isSelected(page.id)}
+                        onToggle={() => selection.toggle(page.id)}
+                        label={`Select ${page.title || '(Untitled)'}`}
+                      />
+                    </td>
+                    <td>
                       <Link href={`/cms/pages/${page.id}`} style={{ color: 'var(--fg1)', textDecoration: 'none', fontWeight: 600, fontSize: 13.5 }}>
                         {page.title || '(Untitled)'}
                       </Link>
@@ -178,11 +386,19 @@ export default function PagesPage() {
                             <Edit size={14} /> Edit
                           </Link>
                           <button
+                            style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '10px 14px', fontSize: 13, color: 'var(--fg1)', background: 'none', border: 'none', cursor: 'pointer', width: '100%' }}
+                            onClick={() => handleDuplicate(page)}
+                            disabled={duplicating === page.id}
+                          >
+                            {duplicating === page.id ? <Loader2 size={14} className="spin" /> : <Copy size={14} />}
+                            Duplicate
+                          </button>
+                          <button
                             style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '10px 14px', fontSize: 13, color: 'var(--ne-danger)', background: 'none', border: 'none', cursor: 'pointer', width: '100%' }}
                             onClick={() => handleDelete(page)}
                             disabled={deleting === page.id}
                           >
-                            {deleting === page.id ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Trash2 size={14} />}
+                            {deleting === page.id ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />}
                             Delete
                           </button>
                         </div>
@@ -199,7 +415,6 @@ export default function PagesPage() {
           </div>
         </div>
       </div>
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </>
   );
 }

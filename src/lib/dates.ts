@@ -57,6 +57,17 @@ export function daysAgoKey(days: number, from: Date | number = Date.now()): stri
   return utcDayKey(fromMs - days * DAY_MS);
 }
 
+/**
+ * A full ISO timestamp `days` days before `from` — the lower bound for a
+ * `gte` against a `TIMESTAMPTZ` column, where `daysAgoKey`'s `YYYY-MM-DD`
+ * would compare against the wrong type and silently widen the window to the
+ * start of that calendar day.
+ */
+export function daysAgoIso(days: number, from: Date | number = Date.now()): string {
+  const fromMs = from instanceof Date ? from.getTime() : from;
+  return new Date(fromMs - days * DAY_MS).toISOString();
+}
+
 /** Midnight UTC on the calendar day `value` falls in. */
 export function startOfUtcDay(value: Date | number = Date.now()): Date {
   const date = value instanceof Date ? value : new Date(value);

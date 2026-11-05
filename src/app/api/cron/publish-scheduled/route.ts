@@ -3,6 +3,8 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { logActivity } from '@/lib/activity';
 import { notifyPublish } from '@/lib/publish';
 import { computeLivePath } from '@/lib/publish-client';
+import { isDue, type Release } from '@/lib/releases/releases';
+import { publishRelease } from '@/lib/releases/publish';
 
 /**
  * Scheduled-publish cron: flips due `scheduled` posts to `published`.
@@ -57,11 +59,17 @@ export async function GET(req: Request) {
   // slightly-later per-row `new Date()`. scheduled_at is cleared to null now
   // that it's fulfilled, so a published row never carries a stale scheduled
   // time (the same bug class Task 3.3 fixed for published_at handling).
+  // `.is('release_id', null)` is load-bearing: a post that belongs to a
+  // content release must go live with its release, not on its own schedule.
+  // Without this filter a member carrying its own `scheduled_at` would
+  // publish early and reopen exactly the partial-publish window releases
+  // exist to close.
   const { data: publishedRows, error } = await supabase
     .from('posts')
     .update({ status: 'published', published_at: now, scheduled_at: null })
     .eq('status', 'scheduled')
     .lte('scheduled_at', now)
+    .is('release_id', null)
     .select();
 
   if (error) {
@@ -115,5 +123,33 @@ export async function GET(req: Request) {
     }
   }
 
-  return NextResponse.json({ published: rows.length, ids: rows.map((r) => r.id) });
+  // ── Content releases ──────────────────────────────────────────────────
+  // Runs in the same pass and on the same `now`, so a release and a
+  // standalone post scheduled for the same minute agree about what "due"
+  // means. Each release publishes its whole set and fires one notification;
+  // see `src/lib/releases/publish.ts`.
+  const { data: scheduledReleases } = await supabase
+    .from('releases')
+    .select('id, client_id, name, description, status, scheduled_at, published_at')
+    .eq('status', 'scheduled')
+    .lte('scheduled_at', now);
+
+  const releaseResults: { id: string; name: string; published: number; ok: boolean; reason?: string }[] = [];
+  const nowDate = new Date(now);
+
+  for (const release of (scheduledReleases ?? []) as Release[]) {
+    // Re-checked in JS as well as SQL: `isDue` is the rule the UI and the
+    // tests use, and a release that satisfied the query but not the rule
+    // would mean the two had drifted.
+    if (!isDue(release, nowDate)) continue;
+
+    const result = await publishRelease(supabase, release, now);
+    releaseResults.push({ id: release.id, name: release.name, ...result });
+  }
+
+  return NextResponse.json({
+    published: rows.length,
+    ids: rows.map((r) => r.id),
+    releases: releaseResults,
+  });
 }

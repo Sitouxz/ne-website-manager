@@ -87,6 +87,8 @@ export interface Post {
   content: string;
   excerpt: string;
   cover_url: string | null;
+  /** Description of `cover_url` for screen readers and search engines (migration 024). */
+  cover_alt: string | null;
   category: string;
   tags: string[];
   status: PostStatus;
@@ -197,8 +199,26 @@ export interface Collection {
   updated_at: string;
 }
 
+/**
+ * Ordering presets for a collection's entries list. Deliberately a small
+ * closed set rather than "sort by any field, any direction": these are the
+ * questions an operator actually asks of a list, and each one has a plain
+ * name they can pick without knowing what a field key is.
+ *
+ * `manual` is the only value under which drag-to-reorder is meaningful —
+ * dragging a row while the list is sorted by title would write a
+ * `sort_order` the user can't see the effect of.
+ */
+export type CollectionSortDefault = 'manual' | 'newest' | 'oldest' | 'recently_updated' | 'title';
+
 export interface CollectionOptions {
   title_field?: string; // FieldDef.key whose value is shown as the item's display title (no denormalized title column exists)
+  /** `FieldDef.key[]` shown as extra columns in the entries list, in order. */
+  list_columns?: string[];
+  /** `FieldDef.key[]` offered as filter dropdowns above the entries list. */
+  list_filters?: string[];
+  /** Ordering applied when the entries list first loads. Defaults to `manual`. */
+  sort_default?: CollectionSortDefault;
 }
 
 export interface CollectionItem {

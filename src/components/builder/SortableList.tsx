@@ -24,7 +24,7 @@ import { toast } from 'sonner';
 type SortableListProps<T> = {
   items: T[];
   getId: (item: T, index: number) => string;
-  getLabel: (item: T) => string;
+  getLabel: (item: T, index: number) => string;
   onReorder: (items: T[]) => void | Promise<void>;
   renderItem: (item: T, index: number) => ReactNode;
   className?: string;
@@ -71,7 +71,7 @@ export default function SortableList<T>({ items, getId, getLabel, onReorder, ren
     const next = arrayMove(items, oldIndex, newIndex);
     try {
       await onReorder(next);
-      const label = getLabel(items[oldIndex]);
+      const label = getLabel(items[oldIndex], oldIndex);
       toast.success(`Moved “${label}”`, {
         action: { label: 'Undo', onClick: () => void onReorder(previous) },
       });
@@ -86,7 +86,7 @@ export default function SortableList<T>({ items, getId, getLabel, onReorder, ren
       <SortableContext items={ids} strategy={verticalListSortingStrategy}>
         <div className={className}>
           {items.map((item, index) => (
-            <SortableRow key={getId(item, index)} id={getId(item, index)} label={getLabel(item)}>
+            <SortableRow key={getId(item, index)} id={getId(item, index)} label={getLabel(item, index)}>
               {renderItem(item, index)}
             </SortableRow>
           ))}

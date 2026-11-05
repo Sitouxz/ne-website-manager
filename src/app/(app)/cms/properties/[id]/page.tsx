@@ -10,6 +10,9 @@ import { createClient } from '@/lib/supabase/client';
 import { useSelectedClient } from '@/components/AppShell';
 import { logActivity } from '@/lib/activity';
 import { firePublishNotify } from '@/lib/publish-client';
+import { statusChangeEvent } from '@/lib/publish-events';
+import { checkArticleBeforePublish, type PublishWarning } from '@/lib/publish-checks';
+import { PublishWarnings } from '@/components/editor/PublishWarnings';
 import { errorMessage } from '@/lib/errors';
 import MediaPicker from '@/components/MediaPicker';
 import SortableList from '@/components/builder/SortableList';
@@ -66,6 +69,10 @@ export default function PropertyEditor({ params }: { params: Promise<{ id: strin
   const [saving,  setSaving]  = useState(false);
   const [saved,   setSaved]   = useState(false);
   const [error,   setError]   = useState('');
+  // Publish preflight — same warnings the post/page/entry editors show, fed
+  // this table's own hero/gallery columns.
+  const [warnings, setWarnings] = useState<PublishWarning[]>([]);
+  const [warningsAcknowledged, setWarningsAcknowledged] = useState(false);
   const [clientId, setClientId] = useState<string | null>(null);
   const [isAdmin,  setIsAdmin]  = useState(false);
 
@@ -89,7 +96,13 @@ export default function PropertyEditor({ params }: { params: Promise<{ id: strin
 
   const slugify = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 
-  const set = (k: keyof FormState, v: unknown) => setForm((f) => ({ ...f, [k]: v }));
+  // Every field edit retires the shown warnings, so the list is never stale
+  // and fixing one problem while introducing another still warns.
+  const set = (k: keyof FormState, v: unknown) => {
+    setWarnings([]);
+    setWarningsAcknowledged(false);
+    setForm((f) => ({ ...f, [k]: v }));
+  };
 
   useEffect(() => {
     async function load() {
@@ -156,6 +169,28 @@ export default function PropertyEditor({ params }: { params: Promise<{ id: strin
 
   async function handleSave(statusOverride?: 'active' | 'archived') {
     if (!clientId) { setError('No client linked. Contact Neu Entity support.'); return; }
+
+    // `active` is this table's published state (see migration 002). Warnings
+    // never block; a second click on the same button goes ahead.
+    if ((statusOverride ?? form.status) === 'active') {
+      const checks = checkArticleBeforePublish({
+        html: form.story,
+        seoTitle: form.seo_title,
+        seoDescription: form.seo_description,
+        images: [{ label: 'Main photo', url: form.hero_url, alt: form.hero_alt }],
+        galleries: [{ label: 'Photo gallery', items: form.gallery }],
+        // A listing is complete without a long story — it has thirty other
+        // fields carrying the substance.
+        requireBody: false,
+      });
+      if (checks.length > 0 && !warningsAcknowledged) {
+        setWarnings(checks);
+        setWarningsAcknowledged(true);
+        return;
+      }
+    }
+    setWarnings([]);
+
     setSaving(true); setError('');
 
     const supabase = createClient();
@@ -263,19 +298,15 @@ export default function PropertyEditor({ params }: { params: Promise<{ id: strin
       // See the comment on the insert branch above. An archive is just as much
       // a change to the live site as a publish, so it notifies too — as
       // `content.deleted`, matching how posts/pages signal leaving `published`.
-      if (newStatus === 'active') {
+      //
+      // `statusChangeEvent` owns the four-case rule (see `lib/publish-events.ts`);
+      // `active` is this table's name for live. It returns null for a row that
+      // was never live and still isn't, which is the case that must stay silent.
+      const event = statusChangeEvent(previousStatus === 'active', newStatus === 'active');
+      if (event) {
         firePublishNotify({
           clientId,
-          event: previousStatus === 'active' ? 'content.updated' : 'content.published',
-          entityType: 'property',
-          entityId: id,
-          slug: payload.slug,
-          path: null,
-        });
-      } else if (previousStatus === 'active') {
-        firePublishNotify({
-          clientId,
-          event: 'content.deleted',
+          event,
           entityType: 'property',
           entityId: id,
           slug: payload.slug,
@@ -295,9 +326,8 @@ export default function PropertyEditor({ params }: { params: Promise<{ id: strin
       <>
         <Topbar title="Edit Property" subtitle="Loading..." />
         <div className="page-body" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 300 }}>
-          <Loader2 size={24} color="var(--ne-blue)" style={{ animation: 'spin .6s linear infinite' }} />
-          <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-        </div>
+          <Loader2 size={24} color="var(--ne-blue)" className="spin" />
+            </div>
       </>
     );
   }
@@ -324,19 +354,21 @@ export default function PropertyEditor({ params }: { params: Promise<{ id: strin
             <ArrowLeft size={14} /> Back to Properties
           </Link>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            {isAdmin && isNew && !clientId && <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ne-danger)', padding: '8px 14px', background: '#FEF2F2', borderRadius: 'var(--r-sm)' }}>Select a client in the sidebar first.</div>}
-            {error && <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ne-danger)', padding: '8px 14px', background: '#FEF2F2', borderRadius: 'var(--r-sm)' }}>{error}</div>}
+            {isAdmin && isNew && !clientId && <div className="error-box">Select a client in the sidebar first.</div>}
+            {error && <div className="error-box">{error}</div>}
             {saved  && <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ne-success)', padding: '8px 14px', background: '#DCFCE7', borderRadius: 'var(--r-sm)' }}>Saved</div>}
             <button className="btn-outline-ne" onClick={() => handleSave('archived')} disabled={saving}>
-              {saving ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Save size={14} />}
+              {saving ? <Loader2 size={14} className="spin" /> : <Save size={14} />}
               Archive
             </button>
             <button className="btn-ne" onClick={() => handleSave('active')} disabled={saving}>
-              {saving ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Send size={14} />}
+              {saving ? <Loader2 size={14} className="spin" /> : <Send size={14} />}
               {form.status === 'active' ? 'Update' : 'Publish'}
             </button>
           </div>
         </div>
+
+        <PublishWarnings warnings={warnings} />
 
         <div className="editor-layout">
           {/* Main column */}
@@ -619,8 +651,8 @@ export default function PropertyEditor({ params }: { params: Promise<{ id: strin
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
 
             {/* Publish */}
-            <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
-              <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)', fontWeight: 700, fontSize: 13 }}>Listing Settings</div>
+            <div className="panel">
+              <div className="panel-subhead">Listing Settings</div>
               <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
                 <Field label="Status">
                   <select value={form.status} onChange={(e) => set('status', e.target.value as 'active' | 'archived')}
@@ -655,7 +687,7 @@ export default function PropertyEditor({ params }: { params: Promise<{ id: strin
 
             {/* Hero preview */}
             {form.hero_url && (
-              <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
+              <div className="panel">
                 <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', fontWeight: 700, fontSize: 13 }}>Hero Preview</div>
                 <Image unoptimized loading="eager" src={resolveMediaUrl(form.hero_url)} alt={form.hero_alt} width={480} height={160} style={{ width: '100%', height: 160, objectFit: 'cover', display: 'block' }} />
               </div>
@@ -694,7 +726,6 @@ export default function PropertyEditor({ params }: { params: Promise<{ id: strin
         }}
       />
 
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </>
   );
 }

@@ -393,7 +393,7 @@ export default function AnalyticsPage() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
             {loading && (
               <span style={{ fontSize: 12, color: 'var(--fg3)', display: 'flex', alignItems: 'center', gap: 6 }}>
-                <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> Loading…
+                <Loader2 size={14} className="spin" /> Loading…
               </span>
             )}
             <label style={{ fontSize: 12.5, color: 'var(--fg2)', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
@@ -405,7 +405,7 @@ export default function AnalyticsPage() {
               disabled={loading || exporting}
               style={{ padding: '6px 14px', borderRadius: 99, fontSize: 12.5, fontWeight: 600, cursor: loading || exporting ? 'default' : 'pointer', border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--fg1)', display: 'flex', alignItems: 'center', gap: 6, opacity: loading || exporting ? 0.6 : 1 }}
             >
-              {exporting ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Download size={14} />}
+              {exporting ? <Loader2 size={14} className="spin" /> : <Download size={14} />}
               Export PDF
             </button>
           </div>
@@ -540,7 +540,7 @@ export default function AnalyticsPage() {
                 </thead>
                 <tbody>
                   {loading ? (
-                    <tr><td colSpan={4} style={{ textAlign: 'center', padding: 34, color: 'var(--fg3)' }}><Loader2 size={16} style={{ animation: 'spin .6s linear infinite' }} /></td></tr>
+                    <tr><td colSpan={4} style={{ textAlign: 'center', padding: 34, color: 'var(--fg3)' }}><Loader2 size={16} className="spin" /></td></tr>
                   ) : events.slice(0, 8).length === 0 ? (
                     <tr><td colSpan={4} style={{ textAlign: 'center', padding: 34, color: 'var(--fg3)' }}>No analytics events have been captured yet.</td></tr>
                   ) : events.slice(0, 8).map((event) => (

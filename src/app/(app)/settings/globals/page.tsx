@@ -178,9 +178,8 @@ export default function SiteGlobalsPage() {
     <>
       <Topbar title="Site Globals" />
       <div className="page-body" style={{ display: 'flex', justifyContent: 'center', paddingTop: 80 }}>
-        <Loader2 size={24} color="var(--ne-blue)" style={{ animation: 'spin .6s linear infinite' }} />
+        <Loader2 size={24} color="var(--ne-blue)" className="spin" />
       </div>
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </>
   );
 
@@ -202,7 +201,7 @@ export default function SiteGlobalsPage() {
                 </div>
               )}
               <button className="btn-ne" onClick={handleSave} disabled={saving}>
-                {saving ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Save size={14} />}
+                {saving ? <Loader2 size={14} className="spin" /> : <Save size={14} />}
                 Save
               </button>
             </div>
@@ -230,7 +229,7 @@ export default function SiteGlobalsPage() {
 
             {/* ── Footer ── */}
             {tab === 'footer' && (
-              <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
+              <div className="panel">
                 <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', fontWeight: 700, fontSize: 14 }}>Footer</div>
                 <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
                   <div>
@@ -277,7 +276,7 @@ export default function SiteGlobalsPage() {
 
             {/* ── Theme ── */}
             {tab === 'theme' && (
-              <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
+              <div className="panel">
                 <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)' }}>
                   <div style={{ fontWeight: 700, fontSize: 14 }}>Theme tokens</div>
                   <div style={{ fontSize: 11.5, color: 'var(--fg3)' }}>Free-form CSS custom-property overrides a client site can apply (e.g. <code>--brand-primary</code>).</div>
@@ -315,7 +314,7 @@ export default function SiteGlobalsPage() {
 
             {/* ── Social ── */}
             {tab === 'social' && (
-              <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
+              <div className="panel">
                 <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)' }}>
                   <div style={{ fontWeight: 700, fontSize: 14 }}>Social links</div>
                   <div style={{ fontSize: 11.5, color: 'var(--fg3)' }}>Platform name to URL — add any platform your client needs.</div>
@@ -353,7 +352,7 @@ export default function SiteGlobalsPage() {
 
             {/* ── Contact ── */}
             {tab === 'contact' && (
-              <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
+              <div className="panel">
                 <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', fontWeight: 700, fontSize: 14 }}>Contact info</div>
                 <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
                   <div>
@@ -389,7 +388,6 @@ export default function SiteGlobalsPage() {
           </>
         )}
       </div>
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </>
   );
 }

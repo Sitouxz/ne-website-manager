@@ -10,12 +10,15 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { createClient } from '@/lib/supabase/client';
-import { useSelectedClient } from '@/components/AppShell';
+import { useSelectedClient, useSuggestionsEnabled } from '@/components/AppShell';
+import SuggestButton from '@/components/SuggestButton';
 import { useConfirm } from '@/components/ConfirmDialog';
 import { errorMessage } from '@/lib/errors';
 import { statusDescription, statusLabel, liveUrl } from '@/lib/content-status';
 import { logActivity } from '@/lib/activity';
 import { firePublishNotify, computeLivePath } from '@/lib/publish-client';
+import { checkArticleBeforePublish, type PublishWarning } from '@/lib/publish-checks';
+import { PublishWarnings } from '@/components/editor/PublishWarnings';
 import MediaPicker from '@/components/MediaPicker';
 import type { MediaItem } from '@/app/api/media/route';
 import RichTextEditor from '@/components/editor/RichTextEditor';
@@ -44,6 +47,7 @@ interface FormState {
   category: string;
   status: PostStatus;
   featuredImg: string;
+  featuredImgAlt: string;
   tags: string[];
   seoTitle: string;
   seoDesc: string;
@@ -54,7 +58,7 @@ interface FormState {
 const EMPTY_FORM: FormState = {
   title: '', slug: '', excerpt: '', content: '', contentJson: null,
   category: 'Worship', status: 'draft',
-  featuredImg: '', tags: [],
+  featuredImg: '', featuredImgAlt: '', tags: [],
   seoTitle: '', seoDesc: '',
   scheduledAt: '',
 };
@@ -88,6 +92,12 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
   const [saving,      setSaving]    = useState(false);
   const [saved,       setSaved]     = useState(false);
   const [error,       setError]     = useState('');
+  // Publish preflight. `warningsAcknowledged` is what lets the second publish
+  // click through; it is cleared by edits to the three things the checks
+  // actually read (body, search title, search description) rather than by any
+  // edit at all, so retitling the post doesn't silently re-arm the warning.
+  const [warnings, setWarnings] = useState<PublishWarning[]>([]);
+  const [warningsAcknowledged, setWarningsAcknowledged] = useState(false);
   const [clientId,    setClientId]  = useState<string | null>(null);
   const [isAdmin,     setIsAdmin]   = useState(false);
   // Whether this user's role is allowed to publish/schedule a post at all
@@ -116,6 +126,7 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
   // Where this client's site publishes its blog — '/blog' unless they route it elsewhere.
   const [blogPath, setBlogPath] = useState('/blog');
   const { selectedClientId } = useSelectedClient();
+  const suggestionsEnabled = useSuggestionsEnabled();
 
   // Guards against autosave firing in response to *this component* setting
   // `form` itself (initial load from the DB, or a revision restore) rather
@@ -136,6 +147,7 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
       category:    (post.category as string) ?? 'Worship',
       status,
       featuredImg: (post.cover_url as string) ?? '',
+      featuredImgAlt: (post.cover_alt as string) ?? '',
       tags:        (post.tags as string[]) ?? [],
       seoTitle:    (post.seo_title as string) ?? '',
       seoDesc:     (post.seo_description as string) ?? '',
@@ -221,6 +233,7 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
     category:        f.category,
     tags:            f.tags,
     cover_url:       f.featuredImg || null,
+    cover_alt:       f.featuredImgAlt || null,
     seo_title:       f.seoTitle || null,
     seo_description: f.seoDesc  || null,
   }), []);
@@ -297,6 +310,11 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
     form.category, form.tags, form.featuredImg, form.seoTitle, form.seoDesc,
   ]);
 
+  function resetPublishWarnings() {
+    setWarnings([]);
+    setWarningsAcknowledged(false);
+  }
+
   async function handleSave(statusOverride?: PostStatus) {
     if (!clientId) { setError('No client linked to your account. Contact Neu Entity support.'); return; }
 
@@ -305,6 +323,25 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
       setError('Pick a date and time to schedule this post.');
       return;
     }
+
+    // Publish preflight — quality warnings that never block. Shown once; the
+    // same click again publishes anyway. Scheduling counts too: a scheduled
+    // post goes live unattended, so this is the last moment anyone looks at it.
+    if (status === 'published' || status === 'scheduled') {
+      const checks = checkArticleBeforePublish({
+        html: form.content,
+        seoTitle: form.seoTitle,
+        seoDescription: form.seoDesc,
+        coverUrl: form.featuredImg,
+        coverAlt: form.featuredImgAlt,
+      });
+      if (checks.length > 0 && !warningsAcknowledged) {
+        setWarnings(checks);
+        setWarningsAcknowledged(true);
+        return;
+      }
+    }
+    setWarnings([]);
 
     setSaving(true);
     setError('');
@@ -485,9 +522,8 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
       <>
         <Topbar title="Edit Post" subtitle="Loading..." />
         <div className="page-body" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 300 }}>
-          <Loader2 size={24} color="var(--ne-blue)" style={{ animation: 'spin .6s linear infinite' }} />
-          <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-        </div>
+          <Loader2 size={24} color="var(--ne-blue)" className="spin" />
+            </div>
       </>
     );
   }
@@ -505,18 +541,18 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
             <ArrowLeft size={14} /> Back to Posts
           </Link>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            {isAdmin && isNew && !clientId && <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ne-danger)', padding: '8px 14px', background: '#FEF2F2', borderRadius: 'var(--r-sm)' }}>Select a client in the sidebar first.</div>}
-            {error && <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ne-danger)', padding: '8px 14px', background: '#FEF2F2', borderRadius: 'var(--r-sm)' }}>{error}</div>}
-            {previewError && <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ne-danger)', padding: '8px 14px', background: '#FEF2F2', borderRadius: 'var(--r-sm)' }}>{previewError}</div>}
+            {isAdmin && isNew && !clientId && <div className="error-box">Select a client in the sidebar first.</div>}
+            {error && <div className="error-box">{error}</div>}
+            {previewError && <div className="error-box">{previewError}</div>}
             {!isNew && autosaveState === 'error' && (
-              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ne-danger)', padding: '8px 14px', background: '#FEF2F2', borderRadius: 'var(--r-sm)' }}>
+              <div className="error-box">
                 Autosave failed — your last change may not be saved. Use Save Draft to be sure.
               </div>
             )}
             {!isNew && (autosaveState === 'saving' || autosaveState === 'saved') && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11.5, fontWeight: 600, color: 'var(--fg3)' }}>
                 {autosaveState === 'saving'
-                  ? <><Loader2 size={12} style={{ animation: 'spin .6s linear infinite' }} /> Saving…</>
+                  ? <><Loader2 size={12} className="spin" /> Saving…</>
                   : 'All changes saved'}
               </div>
             )}
@@ -543,7 +579,7 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
             )}
             {!isNew && (
               <button className="btn-outline-ne" onClick={handlePreview} disabled={previewLoading} title="Preview on live site">
-                {previewLoading ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Eye size={14} />}
+                {previewLoading ? <Loader2 size={14} className="spin" /> : <Eye size={14} />}
                 Preview
               </button>
             )}
@@ -553,7 +589,7 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
               disabled={saving || isElevatedLocked}
               title={elevatedLockedTitle}
             >
-              {saving ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Save size={14} />}
+              {saving ? <Loader2 size={14} className="spin" /> : <Save size={14} />}
               Save Draft
             </button>
             {/* Publish shortcut: hidden entirely for `editor` — RLS
@@ -564,18 +600,20 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
                 sidebar's status-aware action button below remain available. */}
             {canPublish && (
               <button className="btn-ne" onClick={() => handleSave()} disabled={saving || isElevatedLocked} title={elevatedLockedTitle}>
-                {saving ? <Loader2 size={14} style={{ animation: 'spin .6s linear infinite' }} /> : <Send size={14} />}
+                {saving ? <Loader2 size={14} className="spin" /> : <Send size={14} />}
                 {form.status === 'scheduled' ? 'Schedule post' : form.status === 'in_review' ? 'Submit for review' : form.status === 'published' ? 'Publish changes' : 'Save changes'}
               </button>
             )}
           </div>
         </div>
 
+        <PublishWarnings warnings={warnings} />
+
         <div className="editor-layout">
           {/* Main editor */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             {/* Title + slug */}
-            <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
+            <div className="panel">
               <input
                 value={form.title}
                 onChange={(e) => setForm({ ...form, title: e.target.value, slug: slugify(e.target.value) })}
@@ -614,7 +652,7 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
             <RichTextEditor
               valueJson={form.contentJson}
               fallbackHtml={form.content}
-              onChange={(json, html) => setForm((f) => ({ ...f, contentJson: json as Record<string, unknown>, content: html }))}
+              onChange={(json, html) => { resetPublishWarnings(); setForm((f) => ({ ...f, contentJson: json as Record<string, unknown>, content: html })); }}
             />
 
             {/* Excerpt */}
@@ -649,7 +687,7 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
                   <input
                     id="post-seo-title"
                     value={form.seoTitle || form.title}
-                    onChange={(e) => setForm({ ...form, seoTitle: e.target.value })}
+                    onChange={(e) => { resetPublishWarnings(); setForm({ ...form, seoTitle: e.target.value }); }}
                     style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '9px 12px', fontSize: 13.5, color: 'var(--fg1)', outline: 'none' }}
                   />
                 </div>
@@ -660,14 +698,29 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
                   <textarea
                     id="post-seo-desc"
                     value={form.seoDesc || form.excerpt}
-                    onChange={(e) => setForm({ ...form, seoDesc: e.target.value })}
+                    onChange={(e) => { resetPublishWarnings(); setForm({ ...form, seoDesc: e.target.value }); }}
                     rows={2}
                     style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '9px 12px', fontSize: 13.5, color: 'var(--fg1)', resize: 'none', outline: 'none', fontFamily: 'inherit' }}
                   />
-                  <div style={{ fontSize: 11, color: form.seoDesc.length > 160 ? 'var(--ne-danger)' : 'var(--fg3)', marginTop: 4 }}>
-                    {form.seoDesc.length > 160
-                      ? `${form.seoDesc.length} characters — Google will cut this off after about 160.`
-                      : `${form.seoDesc.length} of about 160 characters`}
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 4 }}>
+                    <div style={{ fontSize: 11, color: form.seoDesc.length > 160 ? 'var(--ne-danger)' : 'var(--fg3)' }}>
+                      {form.seoDesc.length > 160
+                        ? `${form.seoDesc.length} characters — Google will cut this off after about 160.`
+                        : `${form.seoDesc.length} of about 160 characters`}
+                    </div>
+                    <SuggestButton
+                      kind="seo-description"
+                      enabled={suggestionsEnabled}
+                      hasExistingValue={form.seoDesc.trim() !== ''}
+                      context={{ title: form.title, body: form.content }}
+                      onSuggestion={(text) => {
+                        // Goes through the same setter a keystroke does, so
+                        // the publish warnings reset and the autosave and
+                        // revision snapshot behave identically.
+                        resetPublishWarnings();
+                        setForm({ ...form, seoDesc: text });
+                      }}
+                    />
                   </div>
                 </div>
               </div>
@@ -677,8 +730,8 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
           {/* Sidebar panel */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             {/* Publish */}
-            <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
-              <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)', fontWeight: 700, fontSize: 13 }}>Publish Settings</div>
+            <div className="panel">
+              <div className="panel-subhead">Publish Settings</div>
               <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
                 <div>
                   <label style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--fg3)', display: 'block', marginBottom: 5 }}>Status</label>
@@ -763,22 +816,42 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
             </div>
 
             {/* Featured image */}
-            <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
-              <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)', fontWeight: 700, fontSize: 13 }}>Featured Image</div>
+            <div className="panel">
+              <div className="panel-subhead">Featured Image</div>
               <div style={{ padding: '14px 16px' }}>
                 {form.featuredImg ? (
                   <div style={{ position: 'relative' }}>
-                    <Image unoptimized src={form.featuredImg} alt="" width={480} height={140} style={{ width: '100%', borderRadius: 'var(--r-sm)', objectFit: 'cover', height: 140 }} />
+                    <Image unoptimized src={form.featuredImg} alt={form.featuredImgAlt} width={480} height={140} style={{ width: '100%', borderRadius: 'var(--r-sm)', objectFit: 'cover', height: 140 }} />
                     <button onClick={() => setShowImagePicker(true)}
                       style={{ position: 'absolute', bottom: 6, left: 6, background: 'rgba(0,0,0,.6)', border: 'none', borderRadius: 'var(--r-sm)', padding: '4px 10px', cursor: 'pointer', color: '#fff', fontSize: 11, fontWeight: 600 }}>
                       Change
                     </button>
-                    <button onClick={() => setForm({ ...form, featuredImg: '' })}
+                    <button onClick={() => { resetPublishWarnings(); setForm({ ...form, featuredImg: '', featuredImgAlt: '' }); }}
                       style={{ position: 'absolute', top: 6, right: 6, background: 'rgba(0,0,0,.6)', border: 'none', borderRadius: '50%', width: 22, height: 22, cursor: 'pointer', color: '#fff', display: 'grid', placeItems: 'center' }}>
                       <X size={11} />
                     </button>
                   </div>
-                ) : (
+                ) : null}
+
+                {form.featuredImg && (
+                  <div style={{ marginTop: 10 }}>
+                    <label htmlFor="post-cover-alt" style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--fg3)', display: 'block', marginBottom: 5 }}>
+                      Describe this image
+                    </label>
+                    <input
+                      id="post-cover-alt"
+                      value={form.featuredImgAlt}
+                      onChange={(e) => { resetPublishWarnings(); setForm({ ...form, featuredImgAlt: e.target.value }); }}
+                      placeholder="e.g. Volunteers packing food boxes"
+                      style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '8px 10px', fontSize: 13, color: 'var(--fg1)', background: 'var(--surface)' }}
+                    />
+                    <p style={{ fontSize: 11, color: 'var(--fg3)', margin: '5px 0 0', lineHeight: 1.5 }}>
+                      Read aloud to visitors who can&apos;t see the picture, and used by search engines.
+                    </p>
+                  </div>
+                )}
+
+                {!form.featuredImg && (
                   <button type="button" onClick={() => setShowImagePicker(true)} style={{ width: '100%', border: '2px dashed var(--border)', borderRadius: 'var(--r-sm)', padding: '28px 16px', textAlign: 'center', cursor: 'pointer', background: 'transparent' }}>
                     <ImageIcon size={22} color="var(--fg3)" style={{ margin: '0 auto 8px' }} />
                     <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--fg2)', marginBottom: 4 }}>Add Featured Image</div>
@@ -789,8 +862,8 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
             </div>
 
             {/* Tags */}
-            <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
-              <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)', fontWeight: 700, fontSize: 13 }}>Tags</div>
+            <div className="panel">
+              <div className="panel-subhead">Tags</div>
               <div style={{ padding: '14px 16px' }}>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
                   {form.tags.map((t) => (
@@ -825,7 +898,7 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
         open={showImagePicker}
         onOpenChange={setShowImagePicker}
         accept="image"
-        onSelect={(item: MediaItem) => setForm((f) => ({ ...f, featuredImg: item.url }))}
+        onSelect={(item: MediaItem) => { resetPublishWarnings(); setForm((f) => ({ ...f, featuredImg: item.url, featuredImgAlt: f.featuredImgAlt || item.alt || '' })); }}
       />
 
       {!isNew && (
@@ -837,7 +910,6 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
         />
       )}
 
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </>
   );
 }
@@ -941,7 +1013,7 @@ function RevisionPanel({
         <div style={{ flex: 1, overflowY: 'auto', padding: '14px 16px' }}>
           {loading && (
             <div style={{ display: 'flex', justifyContent: 'center', padding: 30 }}>
-              <Loader2 size={18} color="var(--ne-blue)" style={{ animation: 'spin .6s linear infinite' }} />
+              <Loader2 size={18} color="var(--ne-blue)" className="spin" />
             </div>
           )}
           {error && (
@@ -969,7 +1041,7 @@ function RevisionPanel({
                   onClick={() => handleRestore(rev.id, rev.created_at)}
                   disabled={restoringId === rev.id}
                 >
-                  {restoringId === rev.id ? <Loader2 size={12} style={{ animation: 'spin .6s linear infinite' }} /> : null}
+                  {restoringId === rev.id ? <Loader2 size={12} className="spin" /> : null}
                   Restore
                 </button>
               </div>

@@ -11,6 +11,8 @@ import { createClient } from '@/lib/supabase/client';
 import { useConfirm } from '@/components/ConfirmDialog';
 import { errorMessage } from '@/lib/errors';
 import type { Form, FormSubmission, FormSubmissionStatus } from '@/lib/supabase/types';
+import { BulkActionBar } from '@/components/builder/BulkActionBar';
+import { useBulkSelection } from '@/lib/hooks/useBulkSelection';
 
 type StatusFilter = 'all' | FormSubmissionStatus;
 
@@ -84,6 +86,7 @@ export default function FormSubmissionsPage({ params }: { params: Promise<{ id: 
   const confirm = useConfirm();
   const [expandedId,   setExpandedId]  = useState<string | null>(null);
   const [error,        setError]       = useState('');
+  const [bulkBusy,     setBulkBusy]    = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -128,14 +131,89 @@ export default function FormSubmissionsPage({ params }: { params: Promise<{ id: 
     toast.success('Enquiry deleted.');
   }
 
+  /**
+   * Exports whatever the active filter is showing.
+   *
+   * The filename records the filter and the date, because it is the only
+   * thing that survives into the user's Downloads folder. A "New only" export
+   * and a full export were previously the same filename, so a spreadsheet
+   * opened a week later gave no way to tell whether it was every enquiry or a
+   * slice of them — and the safest wrong assumption there is the damaging one.
+   */
   function handleExport() {
     if (!form) return;
     const rows = filter === 'all' ? submissions : submissions.filter((s) => s.status === filter);
     const csv = buildCsv(form, rows);
-    downloadCsv(`${form.slug}-submissions.csv`, csv);
+    const scope = filter === 'all' ? 'all' : filter;
+    const today = new Date().toISOString().slice(0, 10);
+    downloadCsv(`${form.slug}-submissions-${scope}-${today}.csv`, csv);
   }
 
   const filtered = filter === 'all' ? submissions : submissions.filter((s) => s.status === filter);
+  const selection = useBulkSelection(filtered.map((s) => s.id));
+
+  /**
+   * Marks every selected enquiry at once.
+   *
+   * Archiving in bulk is the point of this: an inbox of eighty enquiries is
+   * cleared by triaging, and doing that one dropdown at a time is why people
+   * stop triaging. Deleting stays a separate, confirmed action — an enquiry
+   * holds somebody's message and contact details, and there is no undo.
+   */
+  async function bulkSetStatus(status: FormSubmissionStatus) {
+    const chosen = submissions.filter((s) => selection.selectedVisibleIds.includes(s.id));
+    if (chosen.length === 0) return;
+
+    setBulkBusy(true);
+    setError('');
+    const supabase = createClient();
+    const results = await Promise.all(chosen.map((sub) => supabase
+      .from('form_submissions')
+      .update({ status })
+      .eq('id', sub.id)));
+
+    const succeeded = chosen.filter((_, i) => !results[i].error);
+    const failed = chosen.length - succeeded.length;
+
+    setSubmissions((prev) => prev.map((s) => (
+      succeeded.some((x) => x.id === s.id) ? { ...s, status } : s
+    )));
+    selection.clear();
+    setBulkBusy(false);
+
+    if (failed > 0) toast.warning(`${succeeded.length} updated, ${failed} could not be updated.`);
+    else toast.success(`${succeeded.length} ${succeeded.length === 1 ? 'enquiry' : 'enquiries'} marked as ${status}.`);
+  }
+
+  async function bulkDelete() {
+    const chosen = submissions.filter((s) => selection.selectedVisibleIds.includes(s.id));
+    if (chosen.length === 0) return;
+
+    const ok = await confirm({
+      title: `Delete ${chosen.length} ${chosen.length === 1 ? 'enquiry' : 'enquiries'}?`,
+      body: 'This permanently removes them. It cannot be undone.',
+      consequences: [
+        `You will lose ${chosen.length === 1 ? "this person's message and their contact details" : "these people's messages and their contact details"}.`,
+        'If you only want them out of your way, mark them as archived instead.',
+      ],
+      confirmLabel: `Delete ${chosen.length === 1 ? 'enquiry' : 'enquiries'}`,
+    });
+    if (!ok) return;
+
+    setBulkBusy(true);
+    setError('');
+    const supabase = createClient();
+    const results = await Promise.all(chosen.map((sub) => supabase.from('form_submissions').delete().eq('id', sub.id)));
+    const deleted = chosen.filter((_, i) => !results[i].error);
+    const failed = chosen.length - deleted.length;
+
+    setSubmissions((prev) => prev.filter((s) => !deleted.some((d) => d.id === s.id)));
+    selection.clear();
+    setBulkBusy(false);
+
+    if (failed > 0) toast.warning(`${deleted.length} deleted, ${failed} could not be deleted.`);
+    else toast.success(`${deleted.length} ${deleted.length === 1 ? 'enquiry' : 'enquiries'} deleted.`);
+  }
 
   const counts: Record<StatusFilter, number> = {
     all: submissions.length,
@@ -150,10 +228,9 @@ export default function FormSubmissionsPage({ params }: { params: Promise<{ id: 
       <>
         <Topbar title="Submissions" />
         <div className="page-body" style={{ display: 'flex', justifyContent: 'center', paddingTop: 80 }}>
-          <Loader2 size={24} color="var(--ne-blue)" style={{ animation: 'spin .6s linear infinite' }} />
+          <Loader2 size={24} color="var(--ne-blue)" className="spin" />
         </div>
-        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-      </>
+        </>
     );
   }
 
@@ -211,7 +288,36 @@ export default function FormSubmissionsPage({ params }: { params: Promise<{ id: 
           </button>
         </div>
 
-        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
+        <BulkActionBar
+          count={selection.count}
+          busy={bulkBusy}
+          onClear={selection.clear}
+          onDelete={bulkDelete}
+        >
+          <button className="btn-outline-ne" onClick={() => bulkSetStatus('read')} disabled={bulkBusy}>
+            Mark as read
+          </button>
+          {/* The way back from a mis-click. Bulk actions have no undo, and
+              "mark all as read" is the easiest one to fire by accident on the
+              wrong selection — without this, recovering means reopening each
+              enquiry's dropdown one at a time. */}
+          <button className="btn-outline-ne" onClick={() => bulkSetStatus('new')} disabled={bulkBusy}>
+            Mark as unread
+          </button>
+          <button className="btn-outline-ne" onClick={() => bulkSetStatus('archived')} disabled={bulkBusy}>
+            Archive
+          </button>
+          {/* Spam arrives in bursts — a form that gets hit gets hit fifty
+              times, and marking those one at a time is why the status exists
+              and never gets used. Kept distinct from Archive: archived means
+              "dealt with", spam means "was never a real enquiry", and only the
+              second is safe to ignore wholesale later. */}
+          <button className="btn-outline-ne" onClick={() => bulkSetStatus('spam')} disabled={bulkBusy}>
+            Mark as spam
+          </button>
+        </BulkActionBar>
+
+        <div className="panel">
           {filtered.length === 0 ? (
             <div style={{ padding: 48, textAlign: 'center', color: 'var(--fg3)', fontSize: 13 }}>
               No submissions{filter !== 'all' ? ` with status "${filter}"` : ''} yet.
@@ -231,6 +337,13 @@ export default function FormSubmissionsPage({ params }: { params: Promise<{ id: 
                 return (
                   <div key={sub.id} style={{ borderTop: i === 0 ? 'none' : '1px solid var(--border)' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 20px' }}>
+                      <input
+                        type="checkbox"
+                        checked={selection.isSelected(sub.id)}
+                        onChange={() => selection.toggle(sub.id)}
+                        aria-label="Select this enquiry"
+                        style={{ width: 16, height: 16, cursor: 'pointer', flexShrink: 0 }}
+                      />
                       <button
                         onClick={() => setExpandedId(expanded ? null : sub.id)}
                         style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg3)', padding: 2 }}
@@ -303,7 +416,6 @@ export default function FormSubmissionsPage({ params }: { params: Promise<{ id: 
           )}
         </div>
       </div>
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </>
   );
 }

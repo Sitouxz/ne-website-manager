@@ -14,11 +14,15 @@ import type { MediaUsageResponse } from '@/app/api/media/usage/route';
 import { useMediaUpload } from '@/lib/hooks/useMediaUpload';
 import { useMediaList } from '@/lib/hooks/useMediaList';
 import { MediaGrid } from '@/components/MediaGrid';
+import { BulkActionBar } from '@/components/builder/BulkActionBar';
+import { useBulkSelection } from '@/lib/hooks/useBulkSelection';
+import { useDebouncedValue } from '@/lib/hooks/useDebouncedValue';
 import type { MediaItem } from '@/app/api/media/route';
 
 // Load a generous page at a time — media libraries can grow large (API caps
 // at 100/request), but a "Load more" button covers the rest without adding
 // full pagination UI, which is out of scope for this task.
+const SEARCH_DEBOUNCE_MS = 300;
 const LIMIT = 60;
 
 export default function MediaLibraryPage() {
@@ -31,19 +35,29 @@ export default function MediaLibraryPage() {
   // silently ignores it for anyone else (see route.ts `resolveClientId`).
   const { selectedClientId } = useSelectedClient();
 
+  const [search, setSearch] = useState('');
+  // Debounced so typing does not fire a request per keystroke. The search runs
+  // in the database now (`?q=` on /api/media), so it covers the whole library
+  // rather than only the page already loaded — which is what made "No matching
+  // files" a lie for anything past the first page.
+  const debouncedSearch = useDebouncedValue(search, SEARCH_DEBOUNCE_MS);
+
   const {
     items, setItems,
     totalCount, setTotalCount,
     loading, error: loadError,
     fetchPage, loadMore, canLoadMore,
-  } = useMediaList({ clientId: selectedClientId, limit: LIMIT, initialLoading: true });
-  const [search,      setSearch]      = useState('');
+  } = useMediaList({ clientId: selectedClientId, limit: LIMIT, initialLoading: true, search: debouncedSearch });
   const [dragOver,    setDragOver]    = useState(false);
   const [deletingId,  setDeletingId]  = useState<string | null>(null);
   // Set while the "where is this used?" lookup runs, before the confirm
   // dialog opens — the grid shows the same spinner as a delete, so the click
   // never feels like it did nothing.
   const [checkingUsageId, setCheckingUsageId] = useState<string | null>(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  // `items` IS the filtered set now — the API applies `?q=`, so there is no
+  // second, narrower client-side filter to keep in step with it.
+  const selection = useBulkSelection(items.map((i) => i.id));
   const fileInputRef = useRef<HTMLInputElement>(null);
   const confirm = useConfirm();
 
@@ -66,6 +80,94 @@ export default function MediaLibraryPage() {
     e.preventDefault();
     setDragOver(false);
     if (e.dataTransfer.files?.length) handleFiles(e.dataTransfer.files);
+  }
+
+  /**
+   * Bulk delete, with the same usage lookup the single delete does — run for
+   * every selected file before asking, and summarised as a count rather than
+   * a wall of forty page names. Deleting an in-use image is the one media
+   * action that silently breaks a live page, so the check is not optional
+   * just because several files are selected at once.
+   *
+   * Files whose lookup fails are counted as "might be in use": a failed check
+   * must not be reported as "unused".
+   */
+  async function bulkDelete() {
+    const chosen = items.filter((item) => selection.selectedVisibleIds.includes(item.id));
+    if (chosen.length === 0) return;
+
+    setBulkBusy(true);
+    const inUse: string[] = [];
+    let liveSomewhere = false;
+    let unchecked = 0;
+
+    await Promise.all(chosen.map(async (item) => {
+      try {
+        const params = new URLSearchParams({ id: item.id });
+        if (selectedClientId) params.set('client_id', selectedClientId);
+        const res = await fetch(`/api/media/usage?${params}`);
+        if (!res.ok) throw new Error(String(res.status));
+        const body = (await res.json()) as MediaUsageResponse;
+        if (body.usages.length > 0) inUse.push(item.filename ?? 'a file');
+        if (body.usages.some((u) => u.isLive)) liveSomewhere = true;
+      } catch {
+        unchecked += 1;
+      }
+    }));
+
+    const consequences: string[] = [];
+    if (inUse.length > 0) {
+      consequences.push(
+        `${inUse.length} of them ${inUse.length === 1 ? 'is' : 'are'} used on your website: ${inUse.slice(0, 5).join(', ')}${inUse.length > 5 ? `, and ${inUse.length - 5} more` : ''}. Those places will show a broken image.`,
+      );
+    } else if (unchecked === 0) {
+      consequences.push('None of them are used anywhere in your content.');
+    }
+    if (unchecked > 0) {
+      consequences.push(`We couldn't check ${unchecked} of them, so they may still be on your website.`);
+    }
+
+    const ok = await confirm({
+      title: `Delete ${chosen.length} ${chosen.length === 1 ? 'file' : 'files'}?`,
+      body: 'This permanently removes them. It cannot be undone.',
+      consequences,
+      confirmLabel: `Delete ${chosen.length === 1 ? 'file' : 'files'}`,
+    });
+    if (!ok) { setBulkBusy(false); return; }
+
+    const results = await Promise.all(chosen.map(async (item) => {
+      try {
+        const res = await fetch(`/api/media?id=${item.id}`, { method: 'DELETE' });
+        return res.ok ? item : null;
+      } catch {
+        return null;
+      }
+    }));
+    const deleted = results.filter((item): item is MediaItem => item !== null);
+    const failed = chosen.length - deleted.length;
+
+    setItems((prev) => prev.filter((i) => !deleted.some((d) => d.id === i.id)));
+    setTotalCount((c) => Math.max(0, c - deleted.length));
+
+    // One notification for the batch, not one per file: unlike content, media
+    // has no per-path identity to revalidate — the pages that referenced these
+    // files need rebuilding, and a single signal does that once.
+    if (selectedClientId && liveSomewhere && deleted.length > 0) {
+      firePublishNotify({
+        clientId: selectedClientId,
+        event: 'content.updated',
+        entityType: 'media',
+        entityId: deleted[0].id,
+        slug: null,
+        path: null,
+      });
+    }
+
+    selection.clear();
+    setBulkBusy(false);
+
+    if (failed > 0) toast.warning(`${deleted.length} deleted, ${failed} could not be deleted.`);
+    else toast.success(`${deleted.length} ${deleted.length === 1 ? 'file' : 'files'} deleted.`);
   }
 
   async function handleDelete(item: MediaItem) {
@@ -151,10 +253,6 @@ export default function MediaLibraryPage() {
     toast.success('Description saved.');
   }
 
-  const filtered = items.filter((i) =>
-    (i.filename ?? '').toLowerCase().includes(search.toLowerCase())
-  );
-
   return (
     <>
       <Topbar title="Media Library" subtitle={`${totalCount} file${totalCount === 1 ? '' : 's'}`} />
@@ -174,7 +272,7 @@ export default function MediaLibraryPage() {
           }}
         >
           {uploading ? (
-            <Loader2 size={22} color="var(--ne-blue)" style={{ margin: '0 auto 8px', animation: 'spin .6s linear infinite' }} />
+            <Loader2 size={22} color="var(--ne-blue)" className="spin" style={{ margin: '0 auto 8px' }} />
           ) : (
             <UploadCloud size={22} color="var(--fg3)" style={{ margin: '0 auto 8px' }} />
           )}
@@ -216,20 +314,47 @@ export default function MediaLibraryPage() {
         {/* Grid */}
         {loading ? (
           <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}>
-            <Loader2 size={22} color="var(--ne-blue)" style={{ animation: 'spin .6s linear infinite' }} />
+            <Loader2 size={22} color="var(--ne-blue)" className="spin" />
           </div>
         ) : (
-          <MediaGrid
-            items={filtered}
-            onDelete={handleDelete}
-            onSaveAlt={handleSaveAlt}
-            deletingId={deletingId ?? checkingUsageId}
-            emptyTitle={items.length > 0 ? 'No matching files' : undefined}
-            emptyBody={items.length > 0 ? 'Nothing here matches what you searched for. Try a different word.' : undefined}
-          />
+          <>
+            {/* Select-all lives above the grid rather than as a card, since a
+                card-shaped control in a grid of files reads as another file.
+                It covers the filtered set only, so a search then select-all
+                can never reach something off screen. */}
+            {items.length > 0 && (
+              <label className="media-select-all">
+                <input
+                  type="checkbox"
+                  checked={selection.allVisibleSelected}
+                  onChange={selection.toggleAllVisible}
+                />
+                {selection.allVisibleSelected
+                  ? 'Clear selection'
+                  : `Select all ${items.length} ${items.length === 1 ? 'file' : 'files'}${search ? ' found' : ''}`}
+              </label>
+            )}
+
+            <BulkActionBar
+              count={selection.count}
+              busy={bulkBusy}
+              onClear={selection.clear}
+              onDelete={bulkDelete}
+            />
+            <MediaGrid
+              items={items}
+              isSelected={(item) => selection.isSelected(item.id)}
+              onToggleSelected={(item) => selection.toggle(item.id)}
+              onDelete={handleDelete}
+              onSaveAlt={handleSaveAlt}
+              deletingId={deletingId ?? checkingUsageId}
+              emptyTitle={search ? 'No matching files' : undefined}
+              emptyBody={search ? 'Nothing in your library matches what you searched for. Try a different word.' : undefined}
+            />
+          </>
         )}
 
-        {!loading && !search && canLoadMore && (
+        {!loading && canLoadMore && (
           <div style={{ display: 'flex', justifyContent: 'center', marginTop: 20 }}>
             <button className="btn-outline-ne" onClick={loadMore}>
               Load more
@@ -237,7 +362,6 @@ export default function MediaLibraryPage() {
           </div>
         )}
       </div>
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </>
   );
 }

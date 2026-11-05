@@ -411,6 +411,67 @@ describe('generateV2Sdk — per-collection typed helpers', () => {
     expect(empty).toContain('export function getCollection<');
     expect(empty).toContain('export function getEntry<');
   });
+
+  it('maps taglist to string[], the same as multiselect', () => {
+    const sdk = generateV2Sdk(TEST_SLUG, TEST_ORIGIN, [{
+      slug: 'listings',
+      name: 'Listings',
+      name_singular: 'Listing',
+      fields: [{ key: 'amenities', label: 'Amenities', type: 'taglist' }],
+    }]);
+    expect(sdk).toContain('amenities?: string[];');
+  });
+
+  it('inlines a repeater row shape rather than emitting unknown', () => {
+    const sdk = generateV2Sdk(TEST_SLUG, TEST_ORIGIN, [{
+      slug: 'listings',
+      name: 'Listings',
+      name_singular: 'Listing',
+      fields: [{
+        key: 'highlights',
+        label: 'Highlights',
+        type: 'repeater',
+        fields: [
+          { key: 'heading', label: 'Heading', type: 'text', required: true },
+          { key: 'body', label: 'Body', type: 'textarea' },
+        ],
+      }],
+    }]);
+    expect(sdk).toContain('highlights?: Array<{ heading: string; body?: string; }>;');
+  });
+
+  it('inlines a nested repeater to the depth the validator allows', () => {
+    const sdk = generateV2Sdk(TEST_SLUG, TEST_ORIGIN, [{
+      slug: 'pages',
+      name: 'Pages',
+      name_singular: 'Page',
+      fields: [{
+        key: 'sections',
+        label: 'Sections',
+        type: 'repeater',
+        fields: [
+          { key: 'heading', label: 'Heading', type: 'text' },
+          {
+            key: 'cards',
+            label: 'Cards',
+            type: 'repeater',
+            fields: [{ key: 'title', label: 'Title', type: 'text', required: true }],
+          },
+        ],
+      }],
+    }]);
+    expect(sdk).toContain('sections?: Array<{ heading?: string; cards?: Array<{ title: string; }>; }>;');
+  });
+
+  it('falls back to a permissive row type for a repeater with no sub-schema', () => {
+    const sdk = generateV2Sdk(TEST_SLUG, TEST_ORIGIN, [{
+      slug: 'listings',
+      name: 'Listings',
+      name_singular: 'Listing',
+      fields: [{ key: 'rows', label: 'Rows', type: 'repeater' }],
+    }]);
+    expect(sdk).toContain('rows?: Array<Record<string, unknown>>;');
+  });
 });
 
 describe('toPascalCase — collection-name-to-function-name convention', () => {

@@ -3,11 +3,13 @@ import {
   AlertTriangle,
   ArrowRight,
   CalendarClock,
+  CloudOff,
   ExternalLink,
   FileEdit,
   FileText,
   Globe2,
   Home,
+  PlugZap,
   Search,
   Upload,
 } from 'lucide-react';
@@ -16,11 +18,17 @@ import ReviewQueue from '@/components/dashboard/ReviewQueue';
 import { getActiveWorkspace } from '@/lib/workspace';
 import { getClientCapabilities } from '@/lib/client-capabilities';
 import { createAdminClient } from '@/lib/supabase/admin';
-import { DAY_MS, daysAgoKey, daysSince } from '@/lib/dates';
-import { countMissingSeo } from '@/lib/seo/audit';
+import { DAY_MS, daysAgoIso, daysAgoKey, daysSince } from '@/lib/dates';
+import { countMissingSeo, isMissingSeo } from '@/lib/seo/audit';
+import { auditableEntries, entrySeoRow } from '@/lib/seo/entries';
+import type { FieldDef } from '@/lib/collections/types';
+import { isPublishingConnected, type PublishConfigLike } from '@/lib/publish-config';
 
 const DRAFT_AGE_DAYS = 14;
 const SPARKLINE_DAYS = 30;
+const PUBLISH_FAILURE_WINDOW_DAYS = 7;
+/** Enough to say "9+"; the exact count past that changes nothing about what to do. */
+const FAILED_DELIVERY_LIMIT = 10;
 
 function timeAgo(iso: string | null) {
   if (!iso) return 'Never';
@@ -68,6 +76,15 @@ export default async function DashboardPage() {
   let seoPagesQuery = supabase.from('pages').select('id, title, seo_title, seo_description').eq('status', 'published');
   if (clientId) seoPagesQuery = seoPagesQuery.eq('client_id', clientId);
 
+  // Collection entries count toward the same SEO number the audit page shows,
+  // but only for collections that opted in — see `src/lib/seo/entries.ts`. The
+  // two surfaces disagreeing about "how many items are missing SEO" is worse
+  // than either number alone.
+  let seoCollectionsQuery = supabase.from('collections').select('id, fields').eq('storage', 'generic');
+  if (clientId) seoCollectionsQuery = seoCollectionsQuery.eq('client_id', clientId);
+  let seoEntriesQuery = supabase.from('collection_items').select('id, collection_id, data').eq('status', 'published');
+  if (clientId) seoEntriesQuery = seoEntriesQuery.eq('client_id', clientId);
+
   let activityQuery = supabase
     .from('activity_log')
     .select('id, actor_id, summary, created_at')
@@ -79,6 +96,35 @@ export default async function DashboardPage() {
   let dailyQuery = supabase.from('analytics_daily').select('day, views').gte('day', sparklineSinceDay);
   if (clientId) dailyQuery = dailyQuery.eq('client_id', clientId);
 
+  // Failed publish notifications. Every delivery attempt has always been
+  // recorded faithfully in `webhook_deliveries` and read by nobody, so a
+  // client site could sit on stale content indefinitely and the first person
+  // to notice would be the client. Bounded to a week because a failure older
+  // than that has either been superseded by a later successful publish or is
+  // no longer actionable from here.
+  let failedDeliveriesQuery = supabase
+    .from('webhook_deliveries')
+    .select('id, created_at')
+    .eq('ok', false)
+    .gte('created_at', daysAgoIso(PUBLISH_FAILURE_WINDOW_DAYS))
+    .order('created_at', { ascending: false })
+    .limit(FAILED_DELIVERY_LIMIT);
+  if (clientId) failedDeliveriesQuery = failedDeliveriesQuery.eq('client_id', clientId);
+
+  // Is publishing wired up at all? A client with neither a revalidate URL nor
+  // a deploy hook can publish all day and nothing ever reaches their website
+  // — a worse failure than a failed delivery, because there is no delivery to
+  // fail and therefore nothing in `webhook_deliveries` to notice.
+  //
+  // Deliberately selects only the two URL columns, never `revalidate_secret`.
+  // RLS (migration 018) restricts this table to ne_admin/client_admin, which
+  // is exactly the `canManage` set the alert is gated on — so an editor never
+  // sees "not configured" merely because RLS hid the row from them.
+  let publishConfigQuery = supabase
+    .from('client_publish_config')
+    .select('deploy_hook, revalidate_url');
+  if (clientId) publishConfigQuery = publishConfigQuery.eq('client_id', clientId);
+
   const [
     { data: allPosts = [] },
     { data: allPages = [] },
@@ -87,7 +133,15 @@ export default async function DashboardPage() {
     { data: seoPages = [] },
     { data: activityRows = [] },
     { data: dailyRows = [] },
-  ] = await Promise.all([postsQuery, pagesQuery, propertiesQuery, seoPostsQuery, seoPagesQuery, activityQuery, dailyQuery]);
+    { data: failedDeliveries = [] },
+    { data: seoCollections = [] },
+    { data: seoEntries = [] },
+    { data: publishConfigRows = [] },
+  ] = await Promise.all([
+    postsQuery, pagesQuery, propertiesQuery, seoPostsQuery, seoPagesQuery,
+    activityQuery, dailyQuery, failedDeliveriesQuery, seoCollectionsQuery, seoEntriesQuery,
+    publishConfigQuery,
+  ]);
 
   const actorIds = Array.from(new Set((activityRows ?? []).map((row) => row.actor_id).filter((id): id is string => Boolean(id))));
   let actorNames: Record<string, string> = {};
@@ -97,10 +151,17 @@ export default async function DashboardPage() {
     actorNames = Object.fromEntries((actors ?? []).map((actor: { id: string; full_name: string | null }) => [actor.id, actor.full_name ?? 'Unknown']));
   }
 
+  const missingSeoEntries = capabilities.collections
+    ? auditableEntries(
+        (seoCollections ?? []) as { id: string; fields: FieldDef[] }[],
+        (seoEntries ?? []) as { id: string; collection_id: string; data: Record<string, unknown> | null }[],
+      ).filter(({ entry }) => isMissingSeo(entrySeoRow(entry)))
+    : [];
+
   const missingSeoCount = countMissingSeo(
     capabilities.posts ? (seoPosts ?? []) : [],
     capabilities.pages ? (seoPages ?? []) : [],
-  );
+  ) + missingSeoEntries.length;
   // eslint-disable-next-line react-hooks/purity
   const nowMs = Date.now();
   const agingDrafts = (allPosts ?? [])
@@ -111,6 +172,19 @@ export default async function DashboardPage() {
   const scheduledQueue = (allPosts ?? [])
     .filter((post) => post.status === 'scheduled')
     .sort((a, b) => new Date(a.scheduled_at ?? 0).getTime() - new Date(b.scheduled_at ?? 0).getTime());
+
+  const failedPublishCount = (failedDeliveries ?? []).length;
+  // The query is capped, so a full page means "at least this many" — say so
+  // rather than reporting the cap as if it were the real total.
+  const failedPublishCapped = failedPublishCount >= FAILED_DELIVERY_LIMIT;
+  const lastFailedPublishAt = (failedDeliveries ?? [])[0]?.created_at ?? null;
+
+  // No row at all, or a row with both URLs blank, means nothing is connected.
+  const publishingConnected = isPublishingConnected((publishConfigRows ?? [])[0] as PublishConfigLike | undefined);
+  // Only worth raising once there is something to publish — a brand new
+  // client with no content has nothing to lose yet, and an alert on an empty
+  // workspace is the first thing they would learn to ignore.
+  const hasAnyContent = (allPosts ?? []).length > 0 || (allPages ?? []).length > 0 || (allProperties ?? []).length > 0;
 
   const recentWork = [
     ...(capabilities.posts ? (allPosts ?? []) : []).map((post) => ({
@@ -178,6 +252,34 @@ export default async function DashboardPage() {
               <h3 id="attention-title">Needs attention</h3>
             </div>
             <div className="attention-list">
+              {/* Unlike the rows below, this one is hidden at zero. Those are
+                  standing queues worth confirming are empty; this is an alarm,
+                  and a permanent "0 failed updates" line would train people to
+                  read past the one row that means something is actually
+                  broken. Admin/client-admin only — an editor can't reach the
+                  publish settings that would fix it. */}
+              {canManage && !publishingConnected && hasAnyContent ? <Link href="/settings?tab=deploy" className="attention-row">
+                <span className="attention-icon danger"><PlugZap size={19} /></span>
+                <span>
+                  <strong>Publishing isn&apos;t connected yet</strong>
+                  <small>Changes published here won&apos;t reach {clientName}&apos;s website until this is set up.</small>
+                </span>
+                <span className="attention-action">Set up publishing <ArrowRight size={16} /></span>
+              </Link> : null}
+              {canManage && failedPublishCount > 0 ? <Link href="/settings?tab=deploy" className="attention-row">
+                <span className="attention-icon danger"><CloudOff size={19} /></span>
+                <span>
+                  <strong>
+                    {failedPublishCount}{failedPublishCapped ? '+' : ''} website update{failedPublishCount === 1 && !failedPublishCapped ? '' : 's'} did not go through
+                  </strong>
+                  <small>
+                    {lastFailedPublishAt
+                      ? `Your website may still be showing older content. Most recent failure ${timeAgo(lastFailedPublishAt)}.`
+                      : 'Your website may still be showing older content.'}
+                  </small>
+                </span>
+                <span className="attention-action">Check publishing <ArrowRight size={16} /></span>
+              </Link> : null}
               {capabilities.posts ? <Link href="/cms/posts" className="attention-row">
                 <span className="attention-icon warning"><AlertTriangle size={19} /></span>
                 <span><strong>{agingDrafts.length} aging draft{agingDrafts.length === 1 ? '' : 's'}</strong><small>{agingDrafts.length ? 'Drafts have not been updated for more than 14 days.' : 'Every draft has been touched recently.'}</small></span>
