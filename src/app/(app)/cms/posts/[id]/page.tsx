@@ -1,6 +1,8 @@
 'use client';
 
 import Topbar from '@/components/Topbar';
+import { RevisionCompare } from '@/components/revisions/RevisionCompare';
+import { POST_DIFF_FIELDS, diffSnapshot, type FieldSpec } from '@/lib/revisions/diff';
 import Link from 'next/link';
 import Image from 'next/image';
 import { useEffect, useState, use, useRef, useCallback } from 'react';
@@ -20,6 +22,8 @@ import { firePublishNotify, computeLivePath } from '@/lib/publish-client';
 import { checkArticleBeforePublish, type PublishWarning } from '@/lib/publish-checks';
 import { PublishWarnings } from '@/components/editor/PublishWarnings';
 import MediaPicker from '@/components/MediaPicker';
+import { SeoSharingFields } from '@/components/seo/SeoSharingFields';
+import { buildPublicUrl, canonicalUrlError } from '@/lib/seo/preview';
 import type { MediaItem } from '@/app/api/media/route';
 import RichTextEditor from '@/components/editor/RichTextEditor';
 import type { PostStatus } from '@/lib/supabase/types';
@@ -51,6 +55,9 @@ interface FormState {
   tags: string[];
   seoTitle: string;
   seoDesc: string;
+  ogImageUrl: string;
+  canonicalUrl: string;
+  noindex: boolean;
   /** `datetime-local` input value (local time, no timezone suffix); empty when not scheduled. */
   scheduledAt: string;
 }
@@ -60,6 +67,7 @@ const EMPTY_FORM: FormState = {
   category: 'Worship', status: 'draft',
   featuredImg: '', featuredImgAlt: '', tags: [],
   seoTitle: '', seoDesc: '',
+  ogImageUrl: '', canonicalUrl: '', noindex: false,
   scheduledAt: '',
 };
 
@@ -151,6 +159,9 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
       tags:        (post.tags as string[]) ?? [],
       seoTitle:    (post.seo_title as string) ?? '',
       seoDesc:     (post.seo_description as string) ?? '',
+      ogImageUrl:  (post.og_image_url as string) ?? '',
+      canonicalUrl: (post.canonical_url as string) ?? '',
+      noindex:     (post.noindex as boolean) ?? false,
       scheduledAt: post.scheduled_at ? toDatetimeLocalValue(post.scheduled_at as string) : '',
     });
     // `post` here is always the row as it currently exists in the DB (a
@@ -236,6 +247,11 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
     cover_alt:       f.featuredImgAlt || null,
     seo_title:       f.seoTitle || null,
     seo_description: f.seoDesc  || null,
+    og_image_url:    f.ogImageUrl || null,
+    // An invalid canonical is shown inline and never stored: a malformed
+    // canonical tag is worse for search than none.
+    canonical_url:   canonicalUrlError(f.canonicalUrl) ? null : (f.canonicalUrl.trim() || null),
+    noindex:         f.noindex,
   }), []);
 
   /**
@@ -308,6 +324,7 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
   }, [
     form.title, form.slug, form.excerpt, form.content, form.contentJson,
     form.category, form.tags, form.featuredImg, form.seoTitle, form.seoDesc,
+    form.ogImageUrl, form.canonicalUrl, form.noindex,
   ]);
 
   function resetPublishWarnings() {
@@ -724,6 +741,15 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
                   </div>
                 </div>
               </div>
+              <SeoSharingFields
+                title={form.seoTitle || form.title}
+                description={form.seoDesc || form.excerpt}
+                url={buildPublicUrl(websiteUrl, `${blogPath}/${form.slug || slugify(form.title)}`)}
+                value={{ ogImageUrl: form.ogImageUrl, canonicalUrl: form.canonicalUrl, noindex: form.noindex }}
+                fallbackImageUrl={form.featuredImg}
+                fallbackLabel="the featured image"
+                onChange={(patch) => setForm((f) => ({ ...f, ...patch }))}
+              />
             </div>
           </div>
 
@@ -907,6 +933,8 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
           onClose={() => setHistoryOpen(false)}
           postId={id}
           onRestore={(row) => applyPostToForm(row)}
+          current={{ ...buildContentPayload(form), status: form.status }}
+          fields={POST_DIFF_FIELDS}
         />
       )}
 
@@ -923,13 +951,22 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
  * used anywhere else in this codebase.
  */
 function RevisionPanel({
-  open, onClose, postId, onRestore,
+  open, onClose, postId, onRestore, current, fields,
 }: {
   open: boolean;
   onClose: () => void;
   postId: string;
   onRestore: (row: Record<string, unknown>) => void;
+  /** The editor's current state, in the same row shape as a revision snapshot. */
+  current: Record<string, unknown>;
+  fields: FieldSpec[];
 }) {
+  const [comparing, setComparing] = useState<RevisionListItem | null>(null);
+  // Reopening the drawer should land on the list, not a stale comparison.
+  function closePanel() {
+    setComparing(null);
+    onClose();
+  }
   const [revisions, setRevisions] = useState<RevisionListItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -982,7 +1019,7 @@ function RevisionPanel({
       const body = await res.json();
       if (!res.ok) throw new Error(body?.error ?? 'restore failed');
       onRestore(body);
-      onClose();
+      closePanel();
       toast.success('Earlier version restored.');
     } catch (err) {
       setError(errorMessage(err, { entity: 'post' }));
@@ -994,10 +1031,10 @@ function RevisionPanel({
   if (!open) return null;
 
   return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.4)', zIndex: 200 }} onClick={onClose}>
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.4)', zIndex: 200 }} onClick={closePanel}>
       <div
         style={{
-          position: 'fixed', top: 0, bottom: 0, right: 0, width: 380, maxWidth: '92vw',
+          position: 'fixed', top: 0, bottom: 0, right: 0, width: comparing ? 560 : 380, maxWidth: '92vw',
           background: 'var(--surface)', borderLeft: '1px solid var(--border)',
           boxShadow: '-16px 0 48px rgba(0,0,0,.15)', display: 'flex', flexDirection: 'column',
         }}
@@ -1005,7 +1042,7 @@ function RevisionPanel({
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '18px 20px', borderBottom: '1px solid var(--border)' }}>
           <div style={{ fontWeight: 800, fontSize: 15 }}>Revision History</div>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg3)' }}>
+          <button onClick={closePanel} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg3)' }}>
             <X size={18} />
           </button>
         </div>
@@ -1026,6 +1063,16 @@ function RevisionPanel({
               No revisions yet.
             </div>
           )}
+          {comparing ? (
+            <RevisionCompare
+              savedAt={comparing.created_at}
+              authorName={comparing.author_name}
+              changes={diffSnapshot(comparing.snapshot, current, fields)}
+              restoring={restoringId === comparing.id}
+              onBack={() => setComparing(null)}
+              onRestore={() => handleRestore(comparing.id, comparing.created_at)}
+            />
+          ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             {revisions.map((rev) => (
               <div key={rev.id} style={{ border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '10px 12px' }}>
@@ -1035,18 +1082,29 @@ function RevisionPanel({
                 <div style={{ fontSize: 11.5, color: 'var(--fg3)', marginBottom: 8 }}>
                   {rev.author_name ?? 'Unknown'}
                 </div>
-                <button
-                  className="btn-outline-ne"
-                  style={{ fontSize: 12, padding: '5px 10px' }}
-                  onClick={() => handleRestore(rev.id, rev.created_at)}
-                  disabled={restoringId === rev.id}
-                >
-                  {restoringId === rev.id ? <Loader2 size={12} className="spin" /> : null}
-                  Restore
-                </button>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button
+                    type="button"
+                    className="btn-outline-ne"
+                    style={{ fontSize: 12, padding: '5px 10px' }}
+                    onClick={() => setComparing(rev)}
+                  >
+                    Compare
+                  </button>
+                  <button
+                    className="btn-outline-ne"
+                    style={{ fontSize: 12, padding: '5px 10px' }}
+                    onClick={() => handleRestore(rev.id, rev.created_at)}
+                    disabled={restoringId === rev.id}
+                  >
+                    {restoringId === rev.id ? <Loader2 size={12} className="spin" /> : null}
+                    Restore
+                  </button>
+                </div>
               </div>
             ))}
           </div>
+          )}
         </div>
       </div>
     </div>

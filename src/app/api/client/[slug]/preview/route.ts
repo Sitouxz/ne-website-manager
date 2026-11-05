@@ -88,7 +88,7 @@ async function resolveEntity(
   if (entityType === 'post') {
     const { data: post } = await admin
       .from('posts')
-      .select('id, title, slug, excerpt, content, cover_url, cover_alt, category, tags, status, seo_title, seo_description, published_at, created_at, updated_at')
+      .select('id, title, slug, excerpt, content, cover_url, cover_alt, category, tags, status, seo_title, seo_description, og_image_url, canonical_url, noindex, published_at, created_at, updated_at')
       .eq('id', entityId)
       .eq('client_id', clientId)
       .single();
@@ -99,7 +99,7 @@ async function resolveEntity(
   if (entityType === 'page') {
     const { data: page } = await admin
       .from('pages')
-      .select('id, title, path, content, status, visibility, updated_at')
+      .select('id, title, path, content, status, visibility, seo_title, seo_description, og_image_url, canonical_url, noindex, updated_at')
       .eq('id', entityId)
       .eq('client_id', clientId)
       .single();

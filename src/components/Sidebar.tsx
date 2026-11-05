@@ -23,6 +23,7 @@ import {
   Share2,
   ShieldCheck,
   Sliders,
+  Trash2,
   Users,
 } from 'lucide-react';
 import type { Client, ClientCapabilities, Collection, Role } from '@/lib/supabase/types';
@@ -55,6 +56,7 @@ const NAVIGATION: NavGroup[] = [
       { label: 'Website navigation', href: '/cms/navigation', icon: Navigation, capability: 'navigation', access: 'manager' },
       { label: 'Media', href: '/cms/media', icon: Image, capability: 'media' },
       { label: 'Forms', href: '/forms', icon: Mail, capability: 'forms' },
+      { label: 'Trash', href: '/cms/trash', icon: Trash2 },
     ],
   },
   {

@@ -17,6 +17,7 @@ import { BulkActionBar, SelectCell } from '@/components/builder/BulkActionBar';
 import { useBulkSelection } from '@/lib/hooks/useBulkSelection';
 import type { Post } from '@/lib/supabase/types';
 import { copyTitle, nextCopySlug } from '@/lib/duplicate';
+import { TRASH_RETENTION_DAYS, moveToTrash, restoreFromTrash } from '@/lib/trash';
 import { statusChangeEvent } from '@/lib/publish-events';
 
 const STATUSES = ['All', 'published', 'scheduled', 'in_review', 'draft', 'archived'];
@@ -71,8 +72,8 @@ export default function PostsPage() {
     const isLive = post.status === 'published';
 
     const ok = await confirm({
-      title: `Delete "${title}"?`,
-      body: 'This permanently removes the post from your CMS. It cannot be undone.',
+      title: `Move "${title}" to the trash?`,
+      body: `You can restore it from the trash for ${TRASH_RETENTION_DAYS} days.`,
       // Naming the visitor-facing effect is the whole point: "cannot be
       // undone" tells someone the mechanism, not what their readers will see.
       consequences: isLive
@@ -81,18 +82,18 @@ export default function PostsPage() {
             'Anyone who has the link, or finds it in Google, will see a "page not found" error.',
           ]
         : ['This post is not published, so nothing on your website will change.'],
-      confirmLabel: 'Delete post',
+      confirmLabel: 'Move to trash',
     });
     if (!ok) return;
 
     setDeleting(post.id);
     const supabase = createClient();
-    const { error } = await supabase.from('posts').delete().eq('id', post.id);
+    const { trashId, error } = await moveToTrash(supabase, 'post', post.id);
     setDeleting(null);
     setOpenMenu(null);
 
     if (error) {
-      toast.error(errorMessage(error, { entity: 'post', action: 'delete' }));
+      toast.error(error);
       return;
     }
     // Deleting live content is a change to the client's website, but used to
@@ -115,7 +116,31 @@ export default function PostsPage() {
     }
 
     setPosts((prev) => prev.filter((p) => p.id !== post.id));
-    toast.success(`"${title}" was deleted.`);
+    toast.success(`"${title}" moved to the trash.`, trashId ? {
+      action: { label: 'Undo', onClick: () => { void undoTrash(trashId, post); } },
+    } : undefined);
+  }
+
+  async function undoTrash(trashId: string, post: Post) {
+    const { row, error } = await restoreFromTrash(createClient(), trashId, 'post');
+    if (error || !row) {
+      toast.error(error ?? 'Could not restore the post.');
+      return;
+    }
+    setPosts((prev) => [row as unknown as Post, ...prev]);
+    // Restoring live content puts it back on the website, so the site needs
+    // the same nudge a publish gives it.
+    if (post.status === 'published' && post.client_id) {
+      firePublishNotify({
+        clientId: post.client_id,
+        event: 'content.published',
+        entityType: 'post',
+        entityId: post.id,
+        slug: post.slug,
+        path: computeLivePath('post', { slug: post.slug }),
+      });
+    }
+    toast.success(`"${post.title || '(Untitled)'}" restored.`);
   }
 
   /**
@@ -151,6 +176,10 @@ export default function PostsPage() {
         cover_alt: post.cover_alt,
         seo_title: post.seo_title,
         seo_description: post.seo_description,
+        og_image_url: post.og_image_url,
+        // Canonical is deliberately not copied: a copy pointing its canonical
+        // at the original would quietly keep the new content out of search.
+        noindex: post.noindex,
         status: 'draft',
       })
       .select()
@@ -259,22 +288,23 @@ export default function PostsPage() {
     const liveCount = chosen.filter((p) => p.status === 'published').length;
 
     const ok = await confirm({
-      title: `Delete ${chosen.length} ${chosen.length === 1 ? 'post' : 'posts'}?`,
-      body: 'This permanently removes them from your CMS. It cannot be undone.',
+      title: `Move ${chosen.length} ${chosen.length === 1 ? 'post' : 'posts'} to the trash?`,
+      body: `You can restore them from the trash for ${TRASH_RETENTION_DAYS} days.`,
       consequences: liveCount > 0
         ? [
             `${liveCount} of them ${liveCount === 1 ? 'is' : 'are'} published, so ${liveCount === 1 ? 'it' : 'they'} will disappear from your website.`,
             'Anyone who has a link, or finds one in Google, will see a "page not found" error.',
           ]
         : ['None of them are published, so nothing on your website will change.'],
-      confirmLabel: `Delete ${chosen.length === 1 ? 'post' : 'posts'}`,
+      confirmLabel: 'Move to trash',
     });
     if (!ok) return;
 
     setBulkBusy(true);
     const supabase = createClient();
-    const results = await Promise.all(chosen.map((p) => supabase.from('posts').delete().eq('id', p.id)));
+    const results = await Promise.all(chosen.map((p) => moveToTrash(supabase, 'post', p.id)));
     const deleted = chosen.filter((_, i) => !results[i].error);
+    const firstError = results.find((r) => r.error)?.error;
     const failed = chosen.length - deleted.length;
 
     // One notification per deleted post, and only for ones that were live —
@@ -295,8 +325,8 @@ export default function PostsPage() {
     selection.clear();
     setBulkBusy(false);
 
-    if (failed > 0) toast.warning(`${deleted.length} deleted, ${failed} could not be deleted.`);
-    else toast.success(`${deleted.length} ${deleted.length === 1 ? 'post' : 'posts'} deleted.`);
+    if (failed > 0) toast.warning(`${deleted.length} moved to the trash, ${failed} could not be. ${firstError ?? ''}`.trim());
+    else toast.success(`${deleted.length} ${deleted.length === 1 ? 'post' : 'posts'} moved to the trash.`);
   }
 
   const filtered = posts.filter((p) =>
@@ -362,6 +392,7 @@ export default function PostsPage() {
             busy={bulkBusy}
             onClear={selection.clear}
             onDelete={bulkDelete}
+            deleteLabel="Move to trash"
           >
             {canPublish && (
               <>
@@ -485,7 +516,7 @@ export default function PostsPage() {
                           disabled={deleting === p.id}
                         >
                           {deleting === p.id ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />}
-                          Delete
+                          Move to trash
                         </button>
                       </div>
                     )}

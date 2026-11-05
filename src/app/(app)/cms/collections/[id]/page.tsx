@@ -28,6 +28,7 @@ import {
 } from '@/lib/collections/display';
 import SortableList from '@/components/builder/SortableList';
 import { nextCopySlug } from '@/lib/duplicate';
+import { TRASH_RETENTION_DAYS, moveToTrash, restoreFromTrash } from '@/lib/trash';
 import { statusChangeEvent } from '@/lib/publish-events';
 import { BulkActionBar, SelectCell } from '@/components/builder/BulkActionBar';
 import { useBulkSelection } from '@/lib/hooks/useBulkSelection';
@@ -153,22 +154,44 @@ export default function CollectionEntriesPage({ params }: { params: Promise<{ id
     const isLive = item?.status === 'published';
 
     const ok = await confirm({
-      title: `Delete "${name}"?`,
-      body: 'This permanently removes the entry. It cannot be undone.',
+      title: `Move "${name}" to the trash?`,
+      body: `You can restore it from the trash for ${TRASH_RETENTION_DAYS} days.`,
       consequences: isLive
         ? ['This entry is published, so it will disappear from your website.']
         : ['This entry is not published, so nothing on your website will change.'],
-      confirmLabel: 'Delete entry',
+      confirmLabel: 'Move to trash',
     });
     if (!ok) return;
 
     setDeleting(itemId);
     const supabase = createClient();
-    const { error: err } = await supabase.from('collection_items').delete().eq('id', itemId);
+    const { trashId, error: err } = await moveToTrash(supabase, 'collection_entry', itemId);
     setDeleting(null);
-    if (err) { setError(errorMessage(err, { entity: 'entry', action: 'delete' })); return; }
+    if (err) { setError(err); return; }
     setItems((prev) => prev.filter((i) => i.id !== itemId));
-    toast.success(`"${name}" was deleted.`);
+    toast.success(`"${name}" moved to the trash.`, trashId && item ? {
+      action: { label: 'Undo', onClick: () => { void undoTrash(trashId, item); } },
+    } : undefined);
+  }
+
+  async function undoTrash(trashId: string, item: CollectionItem) {
+    const { row, error: restoreError } = await restoreFromTrash(createClient(), trashId, 'collection_entry');
+    if (restoreError || !row) {
+      toast.error(restoreError ?? 'Could not restore the entry.');
+      return;
+    }
+    setItems((prev) => [...prev, row as unknown as CollectionItem].sort((a, b) => a.sort_order - b.sort_order));
+    if (item.status === 'published' && collection) {
+      firePublishNotify({
+        clientId: (clientId ?? collection.client_id)!,
+        event: 'content.published',
+        entityType: 'collection_entry',
+        entityId: item.id,
+        slug: item.slug,
+        path: computeLivePath('collection_entry', { collectionSlug: collection.slug, slug: item.slug }),
+      });
+    }
+    toast.success(`"${item.slug}" restored.`);
   }
 
   async function handleDuplicate(item: CollectionItem) {
@@ -288,20 +311,21 @@ export default function CollectionEntriesPage({ params }: { params: Promise<{ id
     const liveCount = chosen.filter((item) => item.status === 'published').length;
 
     const ok = await confirm({
-      title: `Delete ${chosen.length} ${chosen.length === 1 ? 'entry' : 'entries'}?`,
-      body: 'This permanently removes them. It cannot be undone.',
+      title: `Move ${chosen.length} ${chosen.length === 1 ? 'entry' : 'entries'} to the trash?`,
+      body: `You can restore them from the trash for ${TRASH_RETENTION_DAYS} days.`,
       consequences: liveCount > 0
         ? [`${liveCount} of them ${liveCount === 1 ? 'is' : 'are'} published, so ${liveCount === 1 ? 'it' : 'they'} will disappear from your website.`]
         : ['None of them are published, so nothing on your website will change.'],
-      confirmLabel: `Delete ${chosen.length === 1 ? 'entry' : 'entries'}`,
+      confirmLabel: 'Move to trash',
     });
     if (!ok) return;
 
     setBulkBusy(true);
     setError('');
     const supabase = createClient();
-    const results = await Promise.all(chosen.map((item) => supabase.from('collection_items').delete().eq('id', item.id)));
+    const results = await Promise.all(chosen.map((item) => moveToTrash(supabase, 'collection_entry', item.id)));
     const deleted = chosen.filter((_, i) => !results[i].error);
+    const firstError = results.find((r) => r.error)?.error;
     const failed = chosen.length - deleted.length;
 
     for (const item of deleted) {
@@ -320,8 +344,8 @@ export default function CollectionEntriesPage({ params }: { params: Promise<{ id
     selection.clear();
     setBulkBusy(false);
 
-    if (failed > 0) toast.warning(`${deleted.length} deleted, ${failed} could not be deleted.`);
-    else toast.success(`${deleted.length} ${deleted.length === 1 ? 'entry' : 'entries'} deleted.`);
+    if (failed > 0) toast.warning(`${deleted.length} moved to the trash, ${failed} could not be. ${firstError ?? ''}`.trim());
+    else toast.success(`${deleted.length} ${deleted.length === 1 ? 'entry' : 'entries'} moved to the trash.`);
   }
 
   async function reorderItems(next: CollectionItem[]) {
@@ -437,7 +461,7 @@ export default function CollectionEntriesPage({ params }: { params: Promise<{ id
           <button onClick={() => handleDuplicate(item)} disabled={duplicating === item.id} aria-label={`Duplicate ${title}`} title="Duplicate as draft">
             {duplicating === item.id ? <Loader2 size={15} className="spin" /> : <Copy size={15} />}
           </button>
-          <button onClick={() => handleDelete(item.id)} disabled={deleting === item.id} aria-label={`Delete ${title}`}>
+          <button onClick={() => handleDelete(item.id)} disabled={deleting === item.id} aria-label={`Move ${title} to the trash`} title="Move to trash">
             {deleting === item.id ? <Loader2 size={15} className="spin" /> : <Trash2 size={15} />}
           </button>
         </span>
@@ -540,7 +564,7 @@ export default function CollectionEntriesPage({ params }: { params: Promise<{ id
           </div>
         )}
 
-        <BulkActionBar count={selection.count} busy={bulkBusy} onClear={selection.clear} onDelete={bulkDelete}>
+        <BulkActionBar count={selection.count} busy={bulkBusy} onClear={selection.clear} onDelete={bulkDelete} deleteLabel="Move to trash">
           {canPublish && (
             <>
               <button className="btn-outline-ne" onClick={() => bulkSetStatus('published')} disabled={bulkBusy}>

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { DAY_MS, startOfUtcDay } from '@/lib/dates';
+import { purgeExpiredTrash, type TrashPurgeClient } from '@/lib/trash';
 
 /**
  * Analytics-rollup cron: aggregates raw `page_view` rows from
@@ -50,6 +51,14 @@ export async function GET(req: Request) {
   }
 
   const supabase = createAdminClient();
+
+  // Trash retention rides on this daily cron rather than its own: the
+  // project is on a Hobby plan that allows two crons, and both are taken
+  // (see api/cron/site-health). Run first and never fail the rollup over
+  // it — an unpurged row is harmless for another day; a skipped rollup is
+  // a visible gap in the dashboard.
+  const trashPurge = await purgeExpiredTrash(supabase as unknown as TrashPurgeClient);
+  if (trashPurge.error) console.error('rollup-analytics: trash purge failed', trashPurge.error);
 
   // Start of "yesterday" (UTC) through now — a 2-UTC-calendar-day window.
   const windowStart = new Date(startOfUtcDay().getTime() - DAY_MS);
@@ -105,5 +114,5 @@ export async function GET(req: Request) {
     }
   }
 
-  return NextResponse.json({ aggregated: rows.length });
+  return NextResponse.json({ aggregated: rows.length, trashPurged: trashPurge.purged });
 }

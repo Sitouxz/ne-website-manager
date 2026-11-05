@@ -110,8 +110,8 @@ export default function SeoManagerPage() {
       { data: entryRows },
     ] = await Promise.all([
       supabase.from('redirects').select('*').eq('client_id', selectedClientId).order('from_path', { ascending: true }),
-      supabase.from('posts').select('id, title, seo_title, seo_description').eq('client_id', selectedClientId).eq('status', 'published'),
-      supabase.from('pages').select('id, title, seo_title, seo_description').eq('client_id', selectedClientId).eq('status', 'published'),
+      supabase.from('posts').select('id, title, seo_title, seo_description, noindex').eq('client_id', selectedClientId).eq('status', 'published'),
+      supabase.from('pages').select('id, title, seo_title, seo_description, noindex').eq('client_id', selectedClientId).eq('status', 'published'),
       supabase.from('collections').select('id, name_singular, fields, options').eq('client_id', selectedClientId).eq('storage', 'generic'),
       supabase.from('collection_items').select('id, collection_id, slug, data').eq('client_id', selectedClientId).eq('status', 'published'),
     ]);
@@ -122,7 +122,7 @@ export default function SeoManagerPage() {
 
     setRedirects((redirectRows ?? []) as Redirect[]);
 
-    type SeoRow = { id: string; title: string; seo_title: string | null; seo_description: string | null };
+    type SeoRow = { id: string; title: string; seo_title: string | null; seo_description: string | null; noindex?: boolean | null };
 
     // Task 8.2: `isMissingSeo` is shared with the dashboard's Content Health
     // card (`src/lib/seo/audit.ts`) rather than re-derived here — same rule,

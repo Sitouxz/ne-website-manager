@@ -71,9 +71,9 @@ export default async function DashboardPage() {
     .order('updated_at', { ascending: false });
   if (clientId) propertiesQuery = propertiesQuery.eq('client_id', clientId);
 
-  let seoPostsQuery = supabase.from('posts').select('id, title, seo_title, seo_description').eq('status', 'published');
+  let seoPostsQuery = supabase.from('posts').select('id, title, seo_title, seo_description, noindex').eq('status', 'published');
   if (clientId) seoPostsQuery = seoPostsQuery.eq('client_id', clientId);
-  let seoPagesQuery = supabase.from('pages').select('id, title, seo_title, seo_description').eq('status', 'published');
+  let seoPagesQuery = supabase.from('pages').select('id, title, seo_title, seo_description, noindex').eq('status', 'published');
   if (clientId) seoPagesQuery = seoPagesQuery.eq('client_id', clientId);
 
   // Collection entries count toward the same SEO number the audit page shows,

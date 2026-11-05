@@ -50,6 +50,7 @@ const PAGINATION = { defaultLimit: 50, maxLimit: 100 };
 const POST_SNAPSHOT_FIELDS = [
   'title', 'slug', 'excerpt', 'content', 'content_json', 'category', 'tags',
   'status', 'cover_url', 'seo_title', 'seo_description', 'scheduled_at', 'published_at',
+  'og_image_url', 'canonical_url', 'noindex',
 ] as const;
 
 // The exact set of fields a revision `snapshot` carries for a `page` entity —
@@ -61,6 +62,7 @@ const POST_SNAPSHOT_FIELDS = [
 const PAGE_SNAPSHOT_FIELDS = [
   'title', 'path', 'content', 'content_json', 'status', 'visibility',
   'seo_title', 'seo_description',
+  'og_image_url', 'canonical_url', 'noindex',
 ] as const;
 
 // The exact set of fields a revision `snapshot` carries for a

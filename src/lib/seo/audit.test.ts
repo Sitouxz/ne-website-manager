@@ -49,3 +49,10 @@ describe('countMissingSeo', () => {
     expect(countMissingSeo([], [])).toBe(0);
   });
 });
+
+describe('isMissingSeo — noindex', () => {
+  it('never flags a row hidden from search engines', () => {
+    expect(isMissingSeo({ id: 'a', seo_title: null, seo_description: null, noindex: true })).toBe(false);
+    expect(isMissingSeo({ id: 'b', seo_title: null, seo_description: null, noindex: false })).toBe(true);
+  });
+});
