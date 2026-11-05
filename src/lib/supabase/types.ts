@@ -28,6 +28,9 @@ export interface Client {
   plan: string;
   is_active: boolean;
   capabilities?: Partial<ClientCapabilities> | null;
+  blog_path?: string | null;
+  /** IANA zone analytics days are bucketed in (migration 027). */
+  timezone?: string;
   created_at: string;
   updated_at: string;
 }

@@ -15,11 +15,18 @@ export type AnalyticsReport = {
   /** e.g. "24 Sep 2026 – 30 Sep 2026" */
   rangeLabel: string;
   rangeDays: number;
+  /** e.g. "Asia/Singapore (GMT+8)" — the zone days are bucketed in. */
+  timezoneLabel: string;
+  /** e.g. "vs previous period (17 Sep – 23 Sep 2026)", or null. */
+  comparisonLabel: string | null;
   generatedAt: Date;
   includesBots: boolean;
-  kpis: { label: string; value: string; sub: string }[];
+  /** `delta` is the relative change vs the comparison period (0.1 = +10%). */
+  kpis: { label: string; value: string; sub: string; delta?: number | null }[];
   trend: { label: string; count: number }[];
   pages: ReportRow[];
+  entries: ReportRow[];
+  exits: ReportRow[];
   referrers: ReportRow[];
   countries: ReportRow[];
   devices: ReportRow[];
@@ -84,7 +91,7 @@ export async function buildAnalyticsPdf(report: AnalyticsReport): Promise<JsPDF>
   doc.setFontSize(9.5);
   setColor(MUTED);
   doc.text(report.rangeLabel, PAGE_W - M, 20, { align: 'right' });
-  doc.text(`${report.rangeDays} ${report.rangeDays === 1 ? 'day' : 'days'} · UTC`, PAGE_W - M, 25, { align: 'right' });
+  doc.text(`${report.rangeDays} ${report.rangeDays === 1 ? 'day' : 'days'} · ${report.timezoneLabel}`, PAGE_W - M, 25, { align: 'right' });
   doc.text(
     `Generated ${report.generatedAt.toLocaleString('en-SG', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}`,
     PAGE_W - M, 30, { align: 'right' },
@@ -111,10 +118,23 @@ export async function buildAnalyticsPdf(report: AnalyticsReport): Promise<JsPDF>
     doc.setFontSize(7.5);
     setColor(MUTED);
     doc.text(kpi.sub, x + 4, 61.5, { maxWidth: cardW - 8 });
+    if (kpi.delta !== undefined && kpi.delta !== null) {
+      const up = kpi.delta >= 0;
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8);
+      doc.setTextColor(up ? 22 : 220, up ? 163 : 38, up ? 74 : 38);
+      doc.text(`${up ? '+' : ''}${(kpi.delta * 100).toFixed(0)}%`, x + cardW - 4, 47, { align: 'right' });
+    }
   });
+  if (report.comparisonLabel) {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    setColor(MUTED);
+    doc.text(`Changes shown ${report.comparisonLabel}`, M, 70);
+  }
 
   // ── Trend chart ──────────────────────────────────────────────────────────
-  let y = 76;
+  let y = 78;
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(11);
   setColor(INK);
@@ -164,7 +184,7 @@ export async function buildAnalyticsPdf(report: AnalyticsReport): Promise<JsPDF>
   // ── Ranked tables ────────────────────────────────────────────────────────
   const total = (rows: ReportRow[]) => rows.reduce((sum, r) => sum + r.count, 0);
 
-  const rankedTable = (title: string, col: string, rows: ReportRow[], limit: number, map: (name: string) => string = (s) => s) => {
+  const rankedTable = (title: string, col: string, rows: ReportRow[], limit: number, map: (name: string) => string = (s) => s, unit = 'Views') => {
     y = ensureSpace(y, 30);
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(11);
@@ -175,7 +195,7 @@ export async function buildAnalyticsPdf(report: AnalyticsReport): Promise<JsPDF>
     autoTable(doc, {
       startY: y + 2,
       margin: { left: M, right: M, bottom: 18 },
-      head: [[col, 'Views', '% of total']],
+      head: [[col, unit, '% of total']],
       body: shown.length
         ? shown.map((r) => [map(r.name), fmt(r.count), `${((r.count / sum) * 100).toFixed(1)}%`])
         : [[{ content: 'No data for this period', colSpan: 3, styles: { halign: 'center', textColor: MUTED } }]],
@@ -192,7 +212,9 @@ export async function buildAnalyticsPdf(report: AnalyticsReport): Promise<JsPDF>
   };
 
   rankedTable('Top pages', 'Page path', report.pages, 15);
-  rankedTable('Traffic sources (referrers)', 'Source', report.referrers, 10);
+  rankedTable('Entry pages', 'Page path', report.entries, 10, undefined, 'Sessions');
+  rankedTable('Exit pages', 'Page path', report.exits, 10, undefined, 'Sessions');
+  rankedTable('Traffic sources (referrers)', 'Source', report.referrers, 10, undefined, 'Sessions');
   rankedTable('Countries', 'Country', report.countries, 10, countryName);
   rankedTable('Devices', 'Device', report.devices, 5);
   rankedTable('Browsers', 'Browser', report.browsers, 8);
