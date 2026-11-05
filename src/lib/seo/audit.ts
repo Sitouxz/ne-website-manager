@@ -21,10 +21,13 @@ export interface SeoAuditRow {
   id: string;
   seo_title: string | null;
   seo_description: string | null;
+  /** Hidden from search engines (migration 028) — never counted as missing SEO. */
+  noindex?: boolean | null;
 }
 
 /** True when a published post/page row is missing its SEO title and/or description. */
 export function isMissingSeo(row: SeoAuditRow): boolean {
+  if (row.noindex === true) return false;
   return !row.seo_title?.trim() || !row.seo_description?.trim();
 }
 

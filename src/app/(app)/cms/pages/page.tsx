@@ -91,6 +91,10 @@ export default function PagesPage() {
         content_json: page.content_json,
         seo_title: page.seo_title,
         seo_description: page.seo_description,
+        og_image_url: page.og_image_url,
+        // Canonical is deliberately not copied: a copy pointing its canonical
+        // at the original would quietly keep the new content out of search.
+        noindex: page.noindex,
         visibility: page.visibility,
         status: 'draft',
       })

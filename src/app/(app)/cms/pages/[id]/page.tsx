@@ -18,6 +18,8 @@ import { firePublishNotify, computeLivePath } from '@/lib/publish-client';
 import { checkArticleBeforePublish, type PublishWarning } from '@/lib/publish-checks';
 import { PublishWarnings } from '@/components/editor/PublishWarnings';
 import RichTextEditor from '@/components/editor/RichTextEditor';
+import { SeoSharingFields } from '@/components/seo/SeoSharingFields';
+import { buildPublicUrl, canonicalUrlError } from '@/lib/seo/preview';
 import type { PageStatus } from '@/lib/supabase/types';
 
 // Shares the same *meaning* as the post editor's `ACTIVITY_LABELS`
@@ -41,12 +43,16 @@ interface FormState {
   visibility: 'public' | 'private';
   seoTitle: string;
   seoDesc: string;
+  ogImageUrl: string;
+  canonicalUrl: string;
+  noindex: boolean;
 }
 
 const EMPTY_FORM: FormState = {
   title: '', path: '', content: '', contentJson: null,
   status: 'draft', visibility: 'public',
   seoTitle: '', seoDesc: '',
+  ogImageUrl: '', canonicalUrl: '', noindex: false,
 };
 
 const REVISION_SNAPSHOT_INTERVAL_MS = 60_000;
@@ -116,6 +122,9 @@ export default function PageEditor({ params }: { params: Promise<{ id: string }>
       visibility:  (page.visibility as 'public' | 'private') ?? 'public',
       seoTitle:    (page.seo_title as string) ?? '',
       seoDesc:     (page.seo_description as string) ?? '',
+      ogImageUrl:  (page.og_image_url as string) ?? '',
+      canonicalUrl: (page.canonical_url as string) ?? '',
+      noindex:     (page.noindex as boolean) ?? false,
     });
     // `page` here is always the row as it currently exists in the DB (a
     // fresh fetch on load, or the server's post-restore row) — so this is
@@ -187,6 +196,11 @@ export default function PageEditor({ params }: { params: Promise<{ id: string }>
     content_json:    f.contentJson,
     seo_title:       f.seoTitle || null,
     seo_description: f.seoDesc  || null,
+    og_image_url:    f.ogImageUrl || null,
+    // An invalid canonical is shown inline and never stored: a malformed
+    // canonical tag is worse for search than none.
+    canonical_url:   canonicalUrlError(f.canonicalUrl) ? null : (f.canonicalUrl.trim() || null),
+    noindex:         f.noindex,
   }), []);
 
   /**
@@ -249,6 +263,7 @@ export default function PageEditor({ params }: { params: Promise<{ id: string }>
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     form.title, form.path, form.content, form.contentJson, form.seoTitle, form.seoDesc,
+    form.ogImageUrl, form.canonicalUrl, form.noindex,
   ]);
 
   function resetPublishWarnings() {
@@ -547,6 +562,13 @@ export default function PageEditor({ params }: { params: Promise<{ id: string }>
                   </div>
                 </div>
               </div>
+              <SeoSharingFields
+                title={form.seoTitle || form.title}
+                description={form.seoDesc}
+                url={buildPublicUrl(websiteUrl, form.path || `/${slugify(form.title)}`)}
+                value={{ ogImageUrl: form.ogImageUrl, canonicalUrl: form.canonicalUrl, noindex: form.noindex }}
+                onChange={(patch) => setForm((f) => ({ ...f, ...patch }))}
+              />
             </div>
           </div>
 

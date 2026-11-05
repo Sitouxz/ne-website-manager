@@ -20,6 +20,8 @@ import { firePublishNotify, computeLivePath } from '@/lib/publish-client';
 import { checkArticleBeforePublish, type PublishWarning } from '@/lib/publish-checks';
 import { PublishWarnings } from '@/components/editor/PublishWarnings';
 import MediaPicker from '@/components/MediaPicker';
+import { SeoSharingFields } from '@/components/seo/SeoSharingFields';
+import { buildPublicUrl, canonicalUrlError } from '@/lib/seo/preview';
 import type { MediaItem } from '@/app/api/media/route';
 import RichTextEditor from '@/components/editor/RichTextEditor';
 import type { PostStatus } from '@/lib/supabase/types';
@@ -51,6 +53,9 @@ interface FormState {
   tags: string[];
   seoTitle: string;
   seoDesc: string;
+  ogImageUrl: string;
+  canonicalUrl: string;
+  noindex: boolean;
   /** `datetime-local` input value (local time, no timezone suffix); empty when not scheduled. */
   scheduledAt: string;
 }
@@ -60,6 +65,7 @@ const EMPTY_FORM: FormState = {
   category: 'Worship', status: 'draft',
   featuredImg: '', featuredImgAlt: '', tags: [],
   seoTitle: '', seoDesc: '',
+  ogImageUrl: '', canonicalUrl: '', noindex: false,
   scheduledAt: '',
 };
 
@@ -151,6 +157,9 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
       tags:        (post.tags as string[]) ?? [],
       seoTitle:    (post.seo_title as string) ?? '',
       seoDesc:     (post.seo_description as string) ?? '',
+      ogImageUrl:  (post.og_image_url as string) ?? '',
+      canonicalUrl: (post.canonical_url as string) ?? '',
+      noindex:     (post.noindex as boolean) ?? false,
       scheduledAt: post.scheduled_at ? toDatetimeLocalValue(post.scheduled_at as string) : '',
     });
     // `post` here is always the row as it currently exists in the DB (a
@@ -236,6 +245,11 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
     cover_alt:       f.featuredImgAlt || null,
     seo_title:       f.seoTitle || null,
     seo_description: f.seoDesc  || null,
+    og_image_url:    f.ogImageUrl || null,
+    // An invalid canonical is shown inline and never stored: a malformed
+    // canonical tag is worse for search than none.
+    canonical_url:   canonicalUrlError(f.canonicalUrl) ? null : (f.canonicalUrl.trim() || null),
+    noindex:         f.noindex,
   }), []);
 
   /**
@@ -308,6 +322,7 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
   }, [
     form.title, form.slug, form.excerpt, form.content, form.contentJson,
     form.category, form.tags, form.featuredImg, form.seoTitle, form.seoDesc,
+    form.ogImageUrl, form.canonicalUrl, form.noindex,
   ]);
 
   function resetPublishWarnings() {
@@ -724,6 +739,15 @@ export default function PostEditor({ params }: { params: Promise<{ id: string }>
                   </div>
                 </div>
               </div>
+              <SeoSharingFields
+                title={form.seoTitle || form.title}
+                description={form.seoDesc || form.excerpt}
+                url={buildPublicUrl(websiteUrl, `${blogPath}/${form.slug || slugify(form.title)}`)}
+                value={{ ogImageUrl: form.ogImageUrl, canonicalUrl: form.canonicalUrl, noindex: form.noindex }}
+                fallbackImageUrl={form.featuredImg}
+                fallbackLabel="the featured image"
+                onChange={(patch) => setForm((f) => ({ ...f, ...patch }))}
+              />
             </div>
           </div>
 

@@ -218,6 +218,25 @@ describe('GET /api/client/[slug]/seo — sitemap', () => {
     expect(paths).not.toContain('/sermons/archived-sermon');
   });
 
+  it('excludes published pages and posts marked noindex', async () => {
+    const base = fixtures();
+    setAdmin({
+      ...base,
+      pages: [...base.pages, { ...PUBLISHED_PUBLIC_PAGE, id: 'p-hidden', path: '/thank-you', noindex: true }],
+      posts: [...base.posts, { ...PUBLISHED_POST, id: 'post-hidden', slug: 'hidden-post', noindex: true }],
+    });
+
+    const res = await GET(getReq(), { params });
+    const body = await res.json();
+    const paths = body.sitemap.map((entry: { path: string }) => entry.path);
+
+    expect(paths).not.toContain('/thank-you');
+    expect(paths).not.toContain('/blog/hidden-post');
+    // Rows without the column (written before migration 028) stay indexable.
+    expect(paths).toContain('/about');
+    expect(paths).toContain('/blog/hello-world');
+  });
+
   it('excludes a published page marked visibility=private, even though status=published', async () => {
     setAdmin(fixtures());
 

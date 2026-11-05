@@ -499,3 +499,62 @@ describe('toPascalCase — collection-name-to-function-name convention', () => {
     expect(v2).toContain('export function getFaqEntry(itemSlug: string)');
   });
 });
+
+describe('generateV2Sdk — toMetadata', () => {
+  // Runs the generated helper for real rather than string-matching it, so
+  // the fallbacks client sites rely on are actually exercised.
+  async function loadToMetadata() {
+    const ts = await import('typescript');
+    const source = generateV2Sdk(TEST_SLUG, TEST_ORIGIN, []);
+    const { outputText } = ts.transpileModule(source, {
+      compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
+    });
+    const moduleExports: Record<string, unknown> = {};
+    new Function('exports', outputText)(moduleExports);
+    return moduleExports.toMetadata as (
+      item: Record<string, unknown>,
+      options: { siteUrl: string; path: string; siteName?: string },
+    ) => Record<string, unknown>;
+  }
+
+  it('falls back to title, excerpt, cover and the page URL', async () => {
+    const toMetadata = await loadToMetadata();
+    const meta = toMetadata(
+      { title: 'Open house', excerpt: 'Come along', cover_url: 'https://cdn/cover.jpg' },
+      { siteUrl: 'https://example.com', path: '/blog/open-house' },
+    );
+    expect(meta).toMatchObject({
+      title: 'Open house',
+      description: 'Come along',
+      alternates: { canonical: 'https://example.com/blog/open-house' },
+      openGraph: { images: [{ url: 'https://cdn/cover.jpg' }] },
+      twitter: { card: 'summary_large_image' },
+    });
+    expect(meta.robots).toBeUndefined();
+  });
+
+  it('prefers explicit SEO fields and sets robots for noindex', async () => {
+    const toMetadata = await loadToMetadata();
+    const meta = toMetadata(
+      {
+        title: 'Open house', seo_title: 'Open House 2026', seo_description: 'Tours and talks',
+        cover_url: 'https://cdn/cover.jpg', og_image_url: 'https://cdn/og.jpg',
+        canonical_url: 'https://partner.org/open-house', noindex: true,
+      },
+      { siteUrl: 'https://example.com', path: '/blog/open-house', siteName: 'Example' },
+    );
+    expect(meta).toMatchObject({
+      title: 'Open House 2026',
+      description: 'Tours and talks',
+      alternates: { canonical: 'https://partner.org/open-house' },
+      robots: { index: false, follow: true },
+      openGraph: { url: 'https://partner.org/open-house', siteName: 'Example', images: [{ url: 'https://cdn/og.jpg' }] },
+    });
+  });
+
+  it('uses a summary card when there is no image', async () => {
+    const toMetadata = await loadToMetadata();
+    const meta = toMetadata({ title: 'About' }, { siteUrl: 'https://example.com', path: '/about' });
+    expect(meta).toMatchObject({ twitter: { card: 'summary' }, openGraph: { images: undefined } });
+  });
+});

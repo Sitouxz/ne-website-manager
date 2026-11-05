@@ -29,7 +29,7 @@ export async function GET(
 
   let query = supabase
     .from('posts')
-    .select('id, title, slug, excerpt, content, cover_url, cover_alt, category, tags, status, seo_title, seo_description, published_at, created_at, updated_at')
+    .select('id, title, slug, excerpt, content, cover_url, cover_alt, category, tags, status, seo_title, seo_description, og_image_url, canonical_url, noindex, published_at, created_at, updated_at')
     .eq('client_id', client.id)
     .eq('status', 'published')
     .order('published_at', { ascending: false })

@@ -94,6 +94,12 @@ export interface Post {
   status: PostStatus;
   seo_title: string | null;
   seo_description: string | null;
+  /** Share image (migration 028). Null falls back to `cover_url`. */
+  og_image_url: string | null;
+  /** Absolute canonical URL (migration 028). Null means the post's own URL. */
+  canonical_url: string | null;
+  /** Hide from search engines and the public sitemap (migration 028). */
+  noindex: boolean;
   content_json: Record<string, unknown> | null;
   scheduled_at: string | null;
   author_id: string | null;
@@ -113,6 +119,12 @@ export interface Page {
   content_json: Record<string, unknown> | null;
   seo_title: string | null;
   seo_description: string | null;
+  /** Share image (migration 028). Null means no share image. */
+  og_image_url: string | null;
+  /** Absolute canonical URL (migration 028). Null means the page's own URL. */
+  canonical_url: string | null;
+  /** Hide from search engines and the public sitemap (migration 028). */
+  noindex: boolean;
   updated_at: string;
 }
 

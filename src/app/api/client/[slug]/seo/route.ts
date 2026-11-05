@@ -86,8 +86,8 @@ export async function GET(
     // `pages_public_read`'s own RLS condition — a page an editor has flagged
     // `private` shouldn't surface in a *public* sitemap just because it also
     // happens to be published.
-    admin.from('pages').select('path, updated_at').eq('client_id', client.id).eq('status', 'published').eq('visibility', 'public'),
-    admin.from('posts').select('slug, updated_at').eq('client_id', client.id).eq('status', 'published'),
+    admin.from('pages').select('path, updated_at, noindex').eq('client_id', client.id).eq('status', 'published').eq('visibility', 'public'),
+    admin.from('posts').select('slug, updated_at, noindex').eq('client_id', client.id).eq('status', 'published'),
     admin.from('collections').select('id, slug').eq('client_id', client.id).eq('storage', 'generic'),
   ]);
 
@@ -110,11 +110,16 @@ export async function GET(
   const blogPath = (client.blog_path as string | null) ?? '/blog';
   const sitemap: SitemapEntry[] = [];
 
-  for (const page of (pageRows ?? []) as { path: string; updated_at: string | null }[]) {
+  // `noindex` (migration 028) is filtered here rather than in the query:
+  // rows written before 028 was applied have no such column to compare, and
+  // "absent" must mean indexable, never excluded.
+  for (const page of (pageRows ?? []) as { path: string; updated_at: string | null; noindex?: boolean | null }[]) {
+    if (page.noindex === true) continue;
     sitemap.push({ path: page.path, updated_at: page.updated_at });
   }
 
-  for (const post of (postRows ?? []) as { slug: string; updated_at: string | null }[]) {
+  for (const post of (postRows ?? []) as { slug: string; updated_at: string | null; noindex?: boolean | null }[]) {
+    if (post.noindex === true) continue;
     sitemap.push({ path: `${blogPath}/${post.slug}`, updated_at: post.updated_at });
   }
 

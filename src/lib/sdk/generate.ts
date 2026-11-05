@@ -521,6 +521,59 @@ export async function getRedirects(): Promise<CmsRedirect[]> {
   return seo.redirects ?? [];
 }
 
+/** Search and sharing fields a post or page carries (social image, canonical, noindex). */
+export interface CmsSeoInput {
+  title: string;
+  seo_title?: string | null;
+  seo_description?: string | null;
+  excerpt?: string | null;
+  cover_url?: string | null;
+  og_image_url?: string | null;
+  canonical_url?: string | null;
+  noindex?: boolean | null;
+}
+
+/** Shape-compatible with Next.js Metadata, so it can be returned from generateMetadata as-is. */
+export interface CmsMetadata {
+  title: string;
+  description?: string;
+  alternates: { canonical: string };
+  robots?: { index: false; follow: true };
+  openGraph: { title: string; description?: string; url: string; siteName?: string; images?: { url: string }[] };
+  twitter: { card: 'summary_large_image' | 'summary'; title: string; description?: string; images?: string[] };
+}
+
+/**
+ * Builds page metadata from a post or page, applying the same fallbacks the
+ * CMS editor previews: SEO title, else the title; SEO description, else the
+ * excerpt; social image, else the cover; canonical, else the page's own URL.
+ *
+ *   export async function generateMetadata({ params }) {
+ *     const { slug } = await params;
+ *     const post = await getPostBySlug(slug);
+ *     return post ? toMetadata(post, { siteUrl: 'https://example.com', path: '/blog/' + slug }) : {};
+ *   }
+ */
+export function toMetadata(
+  item: CmsSeoInput,
+  options: { siteUrl: string; path: string; siteName?: string },
+): CmsMetadata {
+  const title = item.seo_title?.trim() || item.title;
+  const description = item.seo_description?.trim() || item.excerpt?.trim() || undefined;
+  const ownUrl = new URL(options.path, options.siteUrl).toString();
+  const canonical = item.canonical_url?.trim() || ownUrl;
+  const image = item.og_image_url?.trim() || item.cover_url?.trim() || undefined;
+  const metadata: CmsMetadata = {
+    title,
+    description,
+    alternates: { canonical },
+    openGraph: { title, description, url: canonical, siteName: options.siteName, images: image ? [{ url: image }] : undefined },
+    twitter: { card: image ? 'summary_large_image' : 'summary', title, description, images: image ? [image] : undefined },
+  };
+  if (item.noindex) metadata.robots = { index: false, follow: true };
+  return metadata;
+}
+
 ${PROXY_SNIPPET.trimEnd()}
 export const PROXY_MIDDLEWARE_SNIPPET = ${JSON.stringify(PROXY_SNIPPET)};
 `;

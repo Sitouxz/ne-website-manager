@@ -151,6 +151,10 @@ export default function PostsPage() {
         cover_alt: post.cover_alt,
         seo_title: post.seo_title,
         seo_description: post.seo_description,
+        og_image_url: post.og_image_url,
+        // Canonical is deliberately not copied: a copy pointing its canonical
+        // at the original would quietly keep the new content out of search.
+        noindex: post.noindex,
         status: 'draft',
       })
       .select()
