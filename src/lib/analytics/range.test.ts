@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveRange } from './range';
+import { comparisonRange, resolveRange } from './range';
 
 const NOW = Date.UTC(2026, 8, 30, 10, 0, 0); // 30 Sep 2026
 
@@ -50,5 +50,46 @@ describe('resolveRange', () => {
   it('custom falls back to 30 days for invalid input', () => {
     expect(resolveRange('custom', NOW, '2026-02-31', '2026-03-01').days).toBe(30);
     expect(resolveRange('custom', NOW, undefined, undefined).days).toBe(30);
+  });
+});
+
+describe('resolveRange in a client timezone', () => {
+  const SGT = 'Asia/Singapore';
+
+  it('today is the calendar day in the zone, not in UTC', () => {
+    // 20:00 UTC on 29 Sep is 04:00 on 30 Sep in Singapore.
+    const r = resolveRange('today', Date.UTC(2026, 8, 29, 20), undefined, undefined, SGT);
+    expect(r.startKey).toBe('2026-09-30');
+    expect(r.start.toISOString()).toBe('2026-09-29T16:00:00.000Z');
+    expect(r.endExclusive.toISOString()).toBe('2026-09-30T16:00:00.000Z');
+  });
+
+  it('7d bounds are local midnights', () => {
+    const r = resolveRange('7d', NOW, undefined, undefined, SGT);
+    expect([r.startKey, r.endKey]).toEqual(['2026-09-24', '2026-09-30']);
+    expect(r.start.toISOString()).toBe('2026-09-23T16:00:00.000Z');
+    expect(r.tz).toBe(SGT);
+  });
+
+  it('handles a DST change inside the range (23-hour day)', () => {
+    const r = resolveRange('custom', NOW, '2026-03-08', '2026-03-08', 'America/New_York');
+    expect(r.endExclusive.getTime() - r.start.getTime()).toBe(23 * 3600_000);
+  });
+});
+
+describe('comparisonRange', () => {
+  it('previous period is the same length immediately before', () => {
+    const r = resolveRange('7d', NOW);
+    const c = comparisonRange(r, 'previous')!;
+    expect([c.startKey, c.endKey, c.days]).toEqual(['2026-09-17', '2026-09-23', 7]);
+  });
+
+  it('same period last year keeps calendar dates and clamps 29 Feb', () => {
+    const c = comparisonRange(resolveRange('custom', NOW, '2028-02-01', '2028-02-29'), 'year')!;
+    expect([c.startKey, c.endKey]).toEqual(['2027-02-01', '2027-02-28']);
+  });
+
+  it('none returns null', () => {
+    expect(comparisonRange(resolveRange('7d', NOW), 'none')).toBeNull();
   });
 });

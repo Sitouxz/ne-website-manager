@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createRateLimiter, getClientIp } from '@/lib/api/rate-limit';
-import { isBotUserAgent } from '@/lib/analytics/bots';
+import { countryFromHeaders, normalizeEvent } from '@/lib/analytics/ingest';
 
 /**
  * Rate limit: 120 events per rolling 60s per (IP, client) pair.
@@ -22,24 +22,6 @@ const RATE_LIMIT = 120;
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const limiter = createRateLimiter(RATE_LIMIT, RATE_LIMIT_WINDOW_MS);
 
-/**
- * Cap on the serialized `metadata` blob. The column is unbounded JSONB, so
- * without this a caller can store arbitrarily large payloads through a public,
- * unauthenticated endpoint.
- */
-const MAX_METADATA_BYTES = 2_000;
-
-function boundedMetadata(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-  try {
-    if (JSON.stringify(value).length > MAX_METADATA_BYTES) return {};
-  } catch {
-    // Circular or otherwise unserializable — not something to persist.
-    return {};
-  }
-  return value as Record<string, unknown>;
-}
-
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
@@ -51,31 +33,6 @@ function json(data: unknown, init?: ResponseInit) {
     ...init,
     headers: { ...CORS_HEADERS, ...(init?.headers ?? {}) },
   });
-}
-
-function parseDevice(userAgent: string) {
-  if (/ipad|tablet/i.test(userAgent)) return 'tablet';
-  if (/mobile|iphone|android/i.test(userAgent)) return 'mobile';
-  if (!userAgent) return 'unknown';
-  return 'desktop';
-}
-
-function parseBrowser(userAgent: string) {
-  if (/edg\//i.test(userAgent)) return 'Edge';
-  if (/opr\//i.test(userAgent)) return 'Opera';
-  if (/chrome|crios/i.test(userAgent)) return 'Chrome';
-  if (/firefox|fxios/i.test(userAgent)) return 'Firefox';
-  if (/safari/i.test(userAgent)) return 'Safari';
-  return userAgent ? 'Other' : 'unknown';
-}
-
-function cleanPath(value: unknown) {
-  if (typeof value !== 'string' || !value.trim()) return '/';
-  try {
-    return new URL(value).pathname || '/';
-  } catch {
-    return value.startsWith('/') ? value.slice(0, 300) : `/${value.slice(0, 299)}`;
-  }
 }
 
 export async function POST(
@@ -100,24 +57,20 @@ export async function POST(
     return new Response(null, { status: 204, headers: CORS_HEADERS });
   }
 
-  const body = await req.json().catch(() => ({}));
-  const headers = req.headers;
-  const userAgent = headers.get('user-agent') ?? '';
-
-  const { error } = await admin.from('analytics_events').insert({
-    client_id: client.id,
-    event_name: typeof body.event_name === 'string' ? body.event_name.slice(0, 80) : 'page_view',
-    path: cleanPath(body.path),
-    title: typeof body.title === 'string' ? body.title.slice(0, 200) : null,
-    referrer: typeof body.referrer === 'string' ? body.referrer.slice(0, 500) : null,
-    visitor_id: typeof body.visitor_id === 'string' ? body.visitor_id.slice(0, 120) : null,
-    session_id: typeof body.session_id === 'string' ? body.session_id.slice(0, 120) : null,
-    device: parseDevice(userAgent),
-    browser: parseBrowser(userAgent),
-    country: headers.get('x-vercel-ip-country') ?? headers.get('cf-ipcountry') ?? null,
-    metadata: boundedMetadata(body.metadata),
-    is_bot: isBotUserAgent(userAgent),
+  // Parsed from text so `text/plain` beacons (which skip the CORS
+  // preflight) are accepted as well as `application/json`. Validation and
+  // server-side derivation live in lib/analytics/ingest.ts, shared with the
+  // batch route that tracker v3 uses.
+  const body = await req.text().then((t) => JSON.parse(t)).catch(() => ({}));
+  const row = normalizeEvent(body, {
+    clientId: client.id,
+    userAgent: req.headers.get('user-agent') ?? '',
+    country: countryFromHeaders(req.headers),
+    nowMs: Date.now(),
   });
+  if (!row) return json({ error: 'Invalid event' }, { status: 400 });
+
+  const { error } = await admin.from('analytics_events').insert(row);
 
   if (error) return json({ error: error.message }, { status: 500 });
   return json({ ok: true });
