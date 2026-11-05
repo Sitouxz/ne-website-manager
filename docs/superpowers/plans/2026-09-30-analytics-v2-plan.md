@@ -136,6 +136,46 @@ across a session; RPC overview < 500 ms on synthetic 500k events.
 
 ---
 
+### Phase 1 status (2026-11-05)
+
+Done (branch `claude/inspiring-gates-q2c3lh`):
+- [x] 1–4 Tracker v3 (`src/lib/sdk/analytics-tracker.ts`): install guard, URL-change
+      de-dupe, SPA referrer, `page_leave` engagement, v3 fields, batching, opt-out /
+      DNT / consent, localhost skipped. Deviation: `replaceState` is still hooked,
+      but only counts when the *pathname* changes (keeps `router.replace('/x')`,
+      ignores Next.js same-URL and query-only rewrites). Behaviour-tested by
+      executing the generated file in jsdom; strict-TS compile test for all v3 files.
+- [x] 5 SDK v3 = `lib/cms.ts` (re-exports) + `lib/cms-server.ts` + `lib/ne-analytics.ts`;
+      `/sdk?v=3[&file=ne-analytics]`, push-integration `sdk_version: 'v3'`
+      (Settings default). v1 output still byte-identical.
+- [x] 6 Migration 027 applied live (columns, `referrer_host` backfill,
+      `clients.timezone`, indexes, initplan RLS policy).
+- [x] 7 Shared validation (`ingest.ts`) + `POST …/analytics/batch` (≤20 events,
+      60 batches/min). `channel` column exists, filled in Phase 2.
+- [x] 8 RPCs `analytics_overview/breakdown/timeseries/hourly`; page switched to
+      them; SQL tests in `supabase/tests/` (19 assertions incl. RLS isolation).
+- [x] 9 `src/lib/analytics/metrics.ts` (GA4 engaged-session/bounce definitions,
+      reference implementation mirrored by the SQL tests).
+- [x] 10–14 Comparison (previous period / last year) with deltas and dashed line;
+      engagement, engaged time, pages/session, new-visitor tiles; entry/exit
+      pages; weekday × hour heatmap; client timezone (Settings → General);
+      tooltips, drill-in, metric + granularity switchers; tracker-version banner;
+      PDF updated (deltas, timezone, entry/exit).
+
+Acceptance results:
+- Overview equals manual SQL on Zhenghe for 7d, 30d and September 2026
+  (page views/visitors/sessions 182/113/134, 1357/567/731, 1763/1085/1234).
+- Duplicate page views / repeated referrer: fixed and covered by tracker tests;
+  needs confirming on a live Next.js site after Zhenghe merges the v3 PR.
+- Performance at 500k synthetic events in one 90-day window (local Postgres 16
+  in the dev container): overview ~1.1–1.2 s, breakdowns 0.6–0.8 s, timeseries
+  ~0.35 s, heatmap ~0.45 s. **Overview misses the < 500 ms target at that
+  scale.** Real volume today is ~2.5k events, so this is not user-visible yet;
+  the next step if a client approaches 100k+ events/quarter is the
+  `analytics_daily_dims` rollup from 0.3.
+
+---
+
 ## Phase 2 — Marketing attribution
 
 1. Tracker: capture `utm_*` and click IDs (`gclid`, `fbclid`, `msclkid`, `ttclid`,
