@@ -63,3 +63,13 @@ describe('channelFromHostSql', () => {
     expect(sql.indexOf("'AI Assistants'")).toBeLessThan(sql.indexOf("'Organic Search'"));
   });
 });
+
+describe('migration 028 stays in sync with channels.ts', () => {
+  it('embeds exactly the CASE generated from HOST_RULES', async () => {
+    const { readFileSync } = await import('node:fs');
+    const sql = readFileSync('supabase/migrations/028_analytics_attribution.sql', 'utf8');
+    // If this fails after editing HOST_RULES: regenerate the function body with
+    // channelFromHostSql('p_host', 'p_site_host') in a new migration.
+    expect(sql).toContain(channelFromHostSql('p_host', 'p_site_host'));
+  });
+});

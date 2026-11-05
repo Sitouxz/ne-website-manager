@@ -13,5 +13,6 @@ run -f supabase/tests/bootstrap.sql
 run -f supabase/migrations/025_restore_analytics_events.sql
 run -f supabase/migrations/026_analytics_is_bot.sql
 run -f supabase/migrations/027_analytics_v2.sql
+run -f supabase/migrations/028_analytics_attribution.sql
 run -v seed_events="${SEED_EVENTS:-0}" -f supabase/tests/analytics_v2.test.sql
 echo "analytics SQL tests passed"

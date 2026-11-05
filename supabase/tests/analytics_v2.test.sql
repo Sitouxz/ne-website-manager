@@ -145,6 +145,72 @@ EXCEPTION WHEN invalid_parameter_value THEN RAISE NOTICE 'ok  invalid timezone r
 END $$;
 SELECT pg_temp.eq('default timezone', (SELECT timezone FROM public.clients WHERE slug = 'acme'), 'Asia/Singapore');
 
+-- ── Migration 028: attribution ─────────────────────────────────────────────
+-- channel_from_host must agree with channels.ts (see channels.test.ts).
+SELECT pg_temp.eq('channel_from_host matches channels.ts',
+  (SELECT string_agg(h || '=' || public.analytics_channel_from_host(h, 'acme.com'), ',' ORDER BY ord)
+   FROM unnest(ARRAY['google.com.sg', 'news.google.co.uk', 'gemini.google.com', 'chatgpt.com', 'perplexity.ai',
+                     'mail.google.com', 'l.facebook.com', 't.co', 'duckduckgo.com', 'notgoogle.com',
+                     'googleusercontent.com', 'acme.com', 'shop.acme.com', 'some-directory.sg'])
+        WITH ORDINALITY AS t(h, ord)),
+  'google.com.sg=Organic Search,news.google.co.uk=Organic Search,gemini.google.com=AI Assistants,chatgpt.com=AI Assistants,'
+  || 'perplexity.ai=AI Assistants,mail.google.com=Email,l.facebook.com=Organic Social,t.co=Organic Social,'
+  || 'duckduckgo.com=Organic Search,notgoogle.com=Referral,googleusercontent.com=Referral,acme.com=Direct,'
+  || 'shop.acme.com=Direct,some-directory.sg=Referral');
+SELECT pg_temp.eq('channel_from_host: no referrer is Direct', public.analytics_channel_from_host(NULL, 'acme.com'), 'Direct');
+SELECT pg_temp.eq('site host from website_url', public.analytics_site_host('https://www.Acme.com/path'), 'acme.com');
+SELECT pg_temp.eq('site host without scheme', public.analytics_site_host('acme.com'), 'acme.com');
+
+SET ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000aaaa', false);
+
+-- Fixture rows have no stored channel, so this also exercises the fallback.
+SELECT pg_temp.eq('sessions by channel (sessions/measured/engaged/converting)',
+  (SELECT string_agg(name || '=' || sessions || '/' || measured_sessions || '/' || engaged_sessions || '/' || converting_sessions, ',' ORDER BY sessions DESC, name)
+   FROM public.analytics_session_breakdown('00000000-0000-0000-0000-0000000000a1', '2026-09-10', '2026-09-11', 'channel')),
+  'Direct=3/3/2/1,Organic Search=1/1/1/0,Organic Social=1/0/0/0');
+
+SELECT pg_temp.eq('source / medium (self-referral is direct)',
+  (SELECT string_agg(name || '=' || sessions, ',' ORDER BY sessions DESC, name)
+   FROM public.analytics_session_breakdown('00000000-0000-0000-0000-0000000000a1', '2026-09-10', '2026-09-11', 'source_medium')),
+  '(direct) / (none)=3,facebook.com / social=1,google.com / organic=1');
+
+SELECT pg_temp.eq('landing pages',
+  (SELECT string_agg(name || '=' || sessions || '/' || page_views, ',' ORDER BY sessions DESC, name)
+   FROM public.analytics_session_breakdown('00000000-0000-0000-0000-0000000000a1', '2026-09-10', '2026-09-11', 'landing_page')),
+  '/=3/4,/a=1/2,/contact=1/1');
+
+SELECT pg_temp.eq('search engines only',
+  (SELECT string_agg(name || '=' || sessions, ',')
+   FROM public.analytics_session_breakdown('00000000-0000-0000-0000-0000000000a1', '2026-09-10', '2026-09-11', 'search_engine')),
+  'google.com=1');
+
+SELECT pg_temp.eq('no campaigns without UTM data',
+  (SELECT count(*)::int FROM public.analytics_session_breakdown('00000000-0000-0000-0000-0000000000a1', '2026-09-10', '2026-09-11', 'campaign')), 0);
+
+SELECT pg_temp.eq('session timeseries by channel (SGT days)',
+  (SELECT string_agg(to_char(bucket, 'MM-DD') || ' ' || name || '=' || sessions, ',' ORDER BY bucket, name)
+   FROM public.analytics_session_timeseries('00000000-0000-0000-0000-0000000000a1', '2026-09-10', '2026-09-11', 'day', 'Asia/Singapore')),
+  '09-10 Direct=3,09-10 Organic Search=1,09-10 Organic Social=1');
+
+SELECT pg_temp.eq('RLS applies to session breakdown',
+  (SELECT count(*)::int FROM public.analytics_session_breakdown('00000000-0000-0000-0000-0000000000b1', '2026-09-10', '2026-09-11', 'channel')), 0);
+RESET ROLE;
+
+-- UTM-tagged session (stored channel wins over the referrer fallback).
+INSERT INTO public.analytics_events (client_id, event_name, path, landing_path, session_id, visitor_id, referrer_host, utm_source, utm_medium, utm_campaign, channel, created_at)
+VALUES ('00000000-0000-0000-0000-0000000000a1', 'page_view', '/promo', '/promo', 's7', 'v7', 'google.com', 'google', 'cpc', 'spring', 'Paid Search', '2026-09-12 01:00:00Z');
+SET ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000aaaa', false);
+SELECT pg_temp.eq('campaigns and paid channel from stored attribution',
+  (SELECT string_agg(name || '=' || sessions, ',')
+   FROM public.analytics_session_breakdown('00000000-0000-0000-0000-0000000000a1', '2026-09-12', '2026-09-13', 'campaign'))
+  || ' ' ||
+  (SELECT string_agg(name || '=' || sessions, ',')
+   FROM public.analytics_session_breakdown('00000000-0000-0000-0000-0000000000a1', '2026-09-12', '2026-09-13', 'source_medium')),
+  'spring=1 google / cpc=1');
+RESET ROLE;
+
 -- ── Optional scale check ───────────────────────────────────────────────────
 SELECT (:seed_events)::int > 0 AS do_seed \gset
 \if :do_seed
@@ -178,3 +244,4 @@ SELECT count(*) AS heatmap_cells FROM public.analytics_hourly('00000000-0000-000
 \timing off
 RESET ROLE;
 \endif
+
