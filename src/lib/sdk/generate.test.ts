@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { generateV1Sdk, generateV2Sdk, generateV2ServerSdk, toPascalCase, type SdkCollectionInput } from './generate';
+import { generateAnalyticsTracker, generateV1Sdk, generateV2Sdk, generateV2ServerSdk, generateV3Sdk, toPascalCase, type SdkCollectionInput } from './generate';
 import type { FieldDef } from '@/lib/collections/types';
 
 const TEST_SLUG = 'acme';
@@ -436,5 +436,37 @@ describe('toPascalCase — collection-name-to-function-name convention', () => {
       { slug: 'faq', name: 'FAQs', name_singular: 'FAQ', fields: [] },
     ]);
     expect(v2).toContain('export function getFaqEntry(itemSlug: string)');
+  });
+});
+
+describe('generateV3Sdk — lib/cms.ts with analytics moved to lib/ne-analytics.ts', () => {
+  const v3 = generateV3Sdk(TEST_SLUG, TEST_ORIGIN, []);
+
+  it('re-exports the analytics API from ./ne-analytics instead of defining it', () => {
+    expect(v3).toMatch(/export \{[\s\S]*installAnalytics,[\s\S]*trackEvent,[\s\S]*trackPageView,[\s\S]*\} from '\.\/ne-analytics';/);
+    expect(v3).toContain("export type { AnalyticsMetadata, InstallAnalyticsOptions } from './ne-analytics';");
+    expect(v3).not.toContain('function installAnalytics');
+    expect(v3).not.toContain('history.replaceState');
+    expect(v3).not.toContain('function getVisitorId');
+  });
+
+  it('keeps the posts/pages API and every v2 addition', () => {
+    for (const name of ['getPosts', 'getPostBySlug', 'getPages', 'getCollection', 'getGlobals', 'submitForm', 'getRedirects']) {
+      expect(v3).toMatch(new RegExp(`export (async )?function ${name}\\b`));
+    }
+    expect(v3).toContain("const CLIENT_SLUG = 'acme';");
+  });
+
+  it('does not change v1 or v2 output', () => {
+    expect(generateV1Sdk(TEST_SLUG, TEST_ORIGIN)).toBe(EXPECTED_V1_OUTPUT);
+    expect(generateV2Sdk(TEST_SLUG, TEST_ORIGIN, []).startsWith(EXPECTED_V1_OUTPUT)).toBe(true);
+  });
+
+  it("the tracker file posts to this client's batch endpoint and reports version 3", () => {
+    const tracker = generateAnalyticsTracker(TEST_SLUG, TEST_ORIGIN);
+    expect(tracker).toContain('const CMS_BASE = "https://cms.example.com";');
+    expect(tracker).toContain('const CLIENT_SLUG = "acme";');
+    expect(tracker).toContain("'/analytics/batch'");
+    expect(tracker).toContain('export const ANALYTICS_TRACKER_VERSION = 3;');
   });
 });

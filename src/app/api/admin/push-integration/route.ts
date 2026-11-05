@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
-import { generateV1Sdk, generateV2Sdk, generateV2ServerSdk, type SdkCollectionInput } from '@/lib/sdk/generate';
+import { generateAnalyticsTracker, generateV1Sdk, generateV2Sdk, generateV2ServerSdk, generateV3Sdk, type SdkCollectionInput } from '@/lib/sdk/generate';
 
 /**
  * Task 7.2: this route's own inline `generateCmsLib` (near-duplicated with
@@ -30,6 +30,9 @@ import { generateV1Sdk, generateV2Sdk, generateV2ServerSdk, type SdkCollectionIn
  *   `createPreviewHandler`/`createRevalidateHandler`) — see `generate.ts`'s
  *   "Two files for v2" section for why these must be two separate files.
  *   Both are written as separate file writes in the same PR/branch.
+ * - `v3`: v2's two files, except `lib/cms.ts` re-exports analytics from a
+ *   third file, `lib/ne-analytics.ts` (analytics tracker v3: accurate page
+ *   views, engagement, new vs returning — see `sdk/analytics-tracker.ts`).
  */
 async function githubRequest(
   token: string,
@@ -93,7 +96,7 @@ export async function POST(req: Request) {
 
   const { github_token, repo, slug, client_name, sdk_version } = await req.json();
   const cmsBase = new URL(req.url).origin;
-  const version: 'v1' | 'v2' = sdk_version === 'v2' ? 'v2' : 'v1';
+  const version: 'v1' | 'v2' | 'v3' = sdk_version === 'v3' ? 'v3' : sdk_version === 'v2' ? 'v2' : 'v1';
 
   if (!github_token || !repo || !slug) {
     return NextResponse.json({ error: 'github_token, repo, slug required' }, { status: 400 });
@@ -140,7 +143,7 @@ export async function POST(req: Request) {
     // fully generated, just with no per-collection helpers until this
     // client's own collections exist.
     let prBody: string;
-    if (version === 'v2') {
+    if (version === 'v2' || version === 'v3') {
       let collectionRows: SdkCollectionInput[] = [];
       if (clientRow) {
         const { data } = await supabase
@@ -151,15 +154,25 @@ export async function POST(req: Request) {
         collectionRows = (data ?? []) as SdkCollectionInput[];
       }
 
-      const cmsFile = generateV2Sdk(slug, cmsBase, collectionRows);
+      const cmsFile = version === 'v3'
+        ? generateV3Sdk(slug, cmsBase, collectionRows)
+        : generateV2Sdk(slug, cmsBase, collectionRows);
       const cmsServerFile = generateV2ServerSdk(slug, cmsBase);
+
+      if (version === 'v3') {
+        await upsertFile(github_token, repo, branchName, 'lib/ne-analytics.ts', generateAnalyticsTracker(slug, cmsBase),
+          `feat: add NE Website Manager analytics tracker v3 for ${client_name ?? slug}`);
+      }
 
       await upsertFile(github_token, repo, branchName, 'lib/cms.ts', cmsFile,
         `feat: add NE Website Manager CMS integration for ${client_name ?? slug}`);
       await upsertFile(github_token, repo, branchName, 'lib/cms-server.ts', cmsServerFile,
         `feat: add NE Website Manager CMS server helpers for ${client_name ?? slug}`);
 
-      prBody = `## NE Website Manager Integration\n\nThis PR adds two files that connect this website to the NE Website Manager CMS:\n\n- **\`lib/cms.ts\`** (SDK v2, middleware-safe) — posts/pages, collections, site globals/navigation, form submissions, and redirects. Has no Node.js/App-Router-only imports, so it's safe to \`import\` from this site's own \`middleware.ts\` (e.g. for \`getRedirects()\` — see \`PROXY_MIDDLEWARE_SNIPPET\` below).\n- **\`lib/cms-server.ts\`** (server/Node-only) — \`createPreviewHandler\`/\`createRevalidateHandler\` for draft previews and on-publish revalidation. Uses Node.js (\`crypto\`) and App-Router server-only APIs (\`next/headers\`, \`next/navigation\`) that are **not** supported in the Edge Runtime, which Next.js Middleware uses by default — do NOT import this file from \`middleware.ts\`. Safe to import from Route Handlers.\n\n### Usage\n\n\`\`\`ts\nimport { getPosts, getPostBySlug, getPages, getCollection, getGlobals, submitForm } from '@/lib/cms';\n\n// Fetch all published posts\nconst posts = await getPosts();\n\n// Fetch single post\nconst post = await getPostBySlug('my-post-slug');\n\n// Fetch a collection typed by its own generated interface (e.g. getSermons())\nconst items = await getCollection('sermons');\n\n// Site globals (footer, announcement, navigation, theme, contact, social)\nconst globals = await getGlobals();\n\`\`\`\n\n### Preview & revalidation\n\nAdd these two route handlers to enable draft previews and on-publish revalidation from the CMS — both import from \`lib/cms-server.ts\`, NOT \`lib/cms.ts\`:\n\n\`\`\`ts\n// app/api/preview/route.ts\nimport { createPreviewHandler } from '@/lib/cms-server';\nexport const GET = createPreviewHandler(process.env.CMS_PREVIEW_SECRET!);\n\n// app/api/revalidate/route.ts\nimport { createRevalidateHandler } from '@/lib/cms-server';\nexport const POST = createRevalidateHandler(process.env.CMS_REVALIDATE_SECRET!);\n\`\`\`\n\nBoth secrets should be set to this client's \`revalidate_secret\`, configured in the CMS's Settings -> Publishing tab.\n\n\`lib/cms.ts\` also exports \`PROXY_MIDDLEWARE_SNIPPET\` — a documented starting point for applying CMS-managed redirects (\`getRedirects()\`) in this site's own \`middleware.ts\`.\n\n### API Endpoints\n- Posts: \`${cmsBase}/api/client/${slug}/posts\`\n- Pages: \`${cmsBase}/api/client/${slug}/pages\`\n- Collections: \`${cmsBase}/api/client/${slug}/collections/:collection\`\n- Globals: \`${cmsBase}/api/client/${slug}/globals\`\n- Forms: \`${cmsBase}/api/client/${slug}/forms/:formSlug\`\n- SEO/redirects: \`${cmsBase}/api/client/${slug}/seo\`\n\n---\n*Generated by [NE Website Manager](${cmsBase})*`;
+      const analyticsSection = version === 'v3'
+        ? `\n\n### Analytics (tracker v3)\n\n**\`lib/ne-analytics.ts\`** is the first-party analytics tracker: accurate SPA page views, engaged time and scroll depth, entry pages and new vs returning visitors. No cookies; visitors can opt out with \`disableAnalytics()\`. Call it once from a client component in the root layout:\n\n\`\`\`tsx\n// app/analytics.tsx\n'use client';\nimport { useEffect } from 'react';\nimport { installAnalytics } from '@/lib/cms';\n\nexport function Analytics() {\n  useEffect(() => { installAnalytics(); }, []);\n  return null;\n}\n\`\`\`\n\nThen render \`<Analytics />\` inside \`<body>\` in \`app/layout.tsx\`. \`lib/cms.ts\` re-exports \`installAnalytics\`/\`trackEvent\`/\`trackPageView\` from it, so existing imports keep working.`
+        : '';
+      prBody = `## NE Website Manager Integration\n\nThis PR adds ${version === 'v3' ? 'three' : 'two'} files that connect this website to the NE Website Manager CMS:\n\n- **\`lib/cms.ts\`** (SDK ${version}, middleware-safe) — posts/pages, collections, site globals/navigation, form submissions, and redirects. Has no Node.js/App-Router-only imports, so it's safe to \`import\` from this site's own \`middleware.ts\` (e.g. for \`getRedirects()\` — see \`PROXY_MIDDLEWARE_SNIPPET\` below).\n- **\`lib/cms-server.ts\`** (server/Node-only) — \`createPreviewHandler\`/\`createRevalidateHandler\` for draft previews and on-publish revalidation. Uses Node.js (\`crypto\`) and App-Router server-only APIs (\`next/headers\`, \`next/navigation\`) that are **not** supported in the Edge Runtime, which Next.js Middleware uses by default — do NOT import this file from \`middleware.ts\`. Safe to import from Route Handlers.\n\n### Usage\n\n\`\`\`ts\nimport { getPosts, getPostBySlug, getPages, getCollection, getGlobals, submitForm } from '@/lib/cms';\n\n// Fetch all published posts\nconst posts = await getPosts();\n\n// Fetch single post\nconst post = await getPostBySlug('my-post-slug');\n\n// Fetch a collection typed by its own generated interface (e.g. getSermons())\nconst items = await getCollection('sermons');\n\n// Site globals (footer, announcement, navigation, theme, contact, social)\nconst globals = await getGlobals();\n\`\`\`\n\n### Preview & revalidation\n\nAdd these two route handlers to enable draft previews and on-publish revalidation from the CMS — both import from \`lib/cms-server.ts\`, NOT \`lib/cms.ts\`:\n\n\`\`\`ts\n// app/api/preview/route.ts\nimport { createPreviewHandler } from '@/lib/cms-server';\nexport const GET = createPreviewHandler(process.env.CMS_PREVIEW_SECRET!);\n\n// app/api/revalidate/route.ts\nimport { createRevalidateHandler } from '@/lib/cms-server';\nexport const POST = createRevalidateHandler(process.env.CMS_REVALIDATE_SECRET!);\n\`\`\`\n\nBoth secrets should be set to this client's \`revalidate_secret\`, configured in the CMS's Settings -> Publishing tab.\n\n\`lib/cms.ts\` also exports \`PROXY_MIDDLEWARE_SNIPPET\` — a documented starting point for applying CMS-managed redirects (\`getRedirects()\`) in this site's own \`middleware.ts\`.\n\n### API Endpoints\n- Posts: \`${cmsBase}/api/client/${slug}/posts\`\n- Pages: \`${cmsBase}/api/client/${slug}/pages\`\n- Collections: \`${cmsBase}/api/client/${slug}/collections/:collection\`\n- Globals: \`${cmsBase}/api/client/${slug}/globals\`\n- Forms: \`${cmsBase}/api/client/${slug}/forms/:formSlug\`\n- SEO/redirects: \`${cmsBase}/api/client/${slug}/seo\`${analyticsSection}\n\n---\n*Generated by [NE Website Manager](${cmsBase})*`;
     } else {
       const cmsFile = generateV1Sdk(slug, cmsBase);
 

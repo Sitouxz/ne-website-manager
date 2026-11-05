@@ -1,6 +1,6 @@
 import { createClient } from '@/lib/supabase/server';
 import { NextResponse } from 'next/server';
-import { generateV1Sdk, generateV2Sdk, generateV2ServerSdk, type SdkCollectionInput } from '@/lib/sdk/generate';
+import { generateAnalyticsTracker, generateV1Sdk, generateV2Sdk, generateV2ServerSdk, generateV3Sdk, type SdkCollectionInput } from '@/lib/sdk/generate';
 
 /**
  * `GET /api/client/[slug]/sdk` — serves the generated `lib/cms.ts` (and, for
@@ -31,6 +31,11 @@ import { generateV1Sdk, generateV2Sdk, generateV2ServerSdk, type SdkCollectionIn
  *     (middleware-safe).
  *   - `GET .../sdk?v=2&file=cms-server` -> `lib/cms-server.ts`
  *     (server/Node-only; preview + revalidate handlers).
+ *
+ * v3 (`?v=3`) is v2 with the analytics tracker moved into its own file:
+ *   - `GET .../sdk?v=3` -> `lib/cms.ts` (re-exports analytics from ./ne-analytics)
+ *   - `GET .../sdk?v=3&file=cms-server` -> `lib/cms-server.ts` (same as v2)
+ *   - `GET .../sdk?v=3&file=ne-analytics` -> `lib/ne-analytics.ts` (tracker v3)
  * Two fetches over one delimited blob: this SDK is distributed by a human
  * copy-pasting generated text into their own repo (not an automated package
  * install), and the two outputs are two DIFFERENT files at two DIFFERENT
@@ -64,7 +69,9 @@ export async function GET(
   const file = url.searchParams.get('file');
 
   let body: string;
-  if (version === '2') {
+  if (version === '3' && file === 'ne-analytics') {
+    body = generateAnalyticsTracker(slug, origin);
+  } else if (version === '2' || version === '3') {
     if (file === 'cms-server') {
       body = generateV2ServerSdk(slug, origin);
     } else {
@@ -78,7 +85,8 @@ export async function GET(
         .eq('client_id', client.id)
         .eq('storage', 'generic');
 
-      body = generateV2Sdk(slug, origin, (collectionRows ?? []) as SdkCollectionInput[]);
+      const rows = (collectionRows ?? []) as SdkCollectionInput[];
+      body = version === '3' ? generateV3Sdk(slug, origin, rows) : generateV2Sdk(slug, origin, rows);
     }
   } else {
     body = generateV1Sdk(slug, origin);
