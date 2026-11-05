@@ -64,7 +64,7 @@ export function SeoSharingFields({
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, marginTop: 16 }}>
       <figure style={{ margin: 0 }}>
         <figcaption style={labelStyle}>Preview in Google</figcaption>
-        <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '12px 14px', background: 'var(--surface)' }}>
+        <div style={{ maxWidth: 600, border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '12px 14px', background: 'var(--surface)' }}>
           <div style={{ fontSize: 12, color: 'var(--fg2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{displayUrl(url)}</div>
           <div style={{ fontSize: 17, lineHeight: 1.3, color: '#1a0dab', margin: '3px 0 4px' }}>{headline}</div>
           <div style={{ fontSize: 13, lineHeight: 1.5, color: 'var(--fg2)' }}>
@@ -80,12 +80,14 @@ export function SeoSharingFields({
 
       <figure style={{ margin: 0 }}>
         <figcaption style={labelStyle}>Preview when shared</figcaption>
-        <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', overflow: 'hidden', background: 'var(--surface)' }}>
+        {/* Capped at roughly the width a share card actually renders in a
+            chat or feed, so the preview reads at a true scale. */}
+        <div style={{ maxWidth: 440, border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', overflow: 'hidden', background: 'var(--surface)' }}>
           {shareImage ? (
             <Image unoptimized src={shareImage} alt="" width={600} height={315} style={{ width: '100%', height: 'auto', aspectRatio: '1.91 / 1', objectFit: 'cover', display: 'block' }} />
           ) : (
-            <div style={{ aspectRatio: '1.91 / 1', display: 'grid', placeItems: 'center', background: 'var(--surface-3)', color: 'var(--fg3)', fontSize: 12 }}>
-              No image. Links share as text only.
+            <div style={{ padding: '14px 12px', display: 'flex', alignItems: 'center', gap: 8, background: 'var(--surface-3)', color: 'var(--fg3)', fontSize: 12 }}>
+              <ImageIcon size={14} aria-hidden="true" /> No image, so links share as text only.
             </div>
           )}
           <div style={{ padding: '10px 12px', borderTop: '1px solid var(--border)', background: 'var(--surface-2)' }}>

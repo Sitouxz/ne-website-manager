@@ -10,6 +10,7 @@ import { useSelectedClient } from '@/components/AppShell';
 import { useConfirm } from '@/components/ConfirmDialog';
 import { EmptyState } from '@/components/EmptyState';
 import { firePublishNotify, computeLivePath } from '@/lib/publish-client';
+import { errorMessage } from '@/lib/errors';
 import {
   TRASH_RETENTION_DAYS,
   daysUntilPurge,
@@ -72,7 +73,7 @@ export default function TrashPage() {
     let query = supabase.from('trash').select('*').order('deleted_at', { ascending: false });
     if (selectedClientId) query = query.eq('client_id', selectedClientId);
     const { data, error } = await query;
-    if (error) setLoadError(trashErrorMessage(error, null, 'restore'));
+    if (error) setLoadError(errorMessage(error, { entity: 'item', action: 'load' }));
     setItems((data ?? []) as TrashRow[]);
 
     const { data: { user } } = await supabase.auth.getUser();
@@ -175,6 +176,10 @@ export default function TrashPage() {
                       <Loader2 size={16} className="spin" aria-hidden="true" /> Loading trash...
                     </div>
                   </td>
+                </tr>
+              ) : loadError ? (
+                <tr>
+                  <td colSpan={5} className="table-placeholder">The trash could not be loaded.</td>
                 </tr>
               ) : items.length === 0 ? (
                 <tr>

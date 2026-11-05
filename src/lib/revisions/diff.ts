@@ -134,7 +134,8 @@ function asList(value: unknown): string[] {
 }
 
 /**
- * Changed fields only, in `fields` order. `revision` is the saved snapshot,
+ * Changed fields only, in `fields` order. Fields absent from `revision` are
+ * skipped. `revision` is the saved snapshot,
  * `current` the editor's state in the same row shape; segments read as
  * "what changed since that version".
  */
@@ -146,6 +147,10 @@ export function diffSnapshot(
   const changes: FieldChange[] = [];
 
   for (const field of fields) {
+    // A field the revision never recorded is unknown, not empty: autosave
+    // snapshots omit status, and versions saved before a column existed omit
+    // that column. Showing "Empty → published" there would be false.
+    if (!(field.key in revision)) continue;
     const oldRaw = revision[field.key];
     const newRaw = current[field.key];
 
@@ -226,7 +231,9 @@ export function entryDiffFields(defs: { key: string; label: string; type: string
 
 /** Lifts `data.*` keys to the top level so an entry row can be diffed with `entryDiffFields`. */
 export function flattenEntry(row: Record<string, unknown>): Record<string, unknown> {
-  const flat: Record<string, unknown> = { slug: row.slug, status: row.status };
+  const flat: Record<string, unknown> = {};
+  if ('slug' in row) flat.slug = row.slug;
+  if ('status' in row) flat.status = row.status;
   const data = row.data && typeof row.data === 'object' ? (row.data as Record<string, unknown>) : {};
   for (const [key, value] of Object.entries(data)) flat[`data.${key}`] = value;
   return flat;

@@ -86,6 +86,14 @@ describe('diffSnapshot', () => {
     expect(diffSnapshot(revision, current, POST_DIFF_FIELDS)).toEqual([]);
   });
 
+  it('skips fields the revision never recorded, such as status in an autosave snapshot', () => {
+    const autosaveSnapshot: Record<string, unknown> = { ...revision };
+    delete autosaveSnapshot.status;
+    delete autosaveSnapshot.noindex;
+    const current = { ...revision, status: 'published', noindex: true, title: 'Open house 2026' };
+    expect(diffSnapshot(autosaveSnapshot, current, POST_DIFF_FIELDS).map((c) => c.key)).toEqual(['title']);
+  });
+
   it('reports scalar changes as before/after without segments', () => {
     const current = { ...revision, noindex: true, status: 'in_review' };
     const changes = diffSnapshot(revision, current, POST_DIFF_FIELDS);

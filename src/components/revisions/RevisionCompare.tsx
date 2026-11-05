@@ -58,10 +58,12 @@ export function RevisionCompare({ savedAt, authorName, changes, restoring, onBac
         </ul>
       )}
 
-      <button type="button" className="btn-ne" onClick={onRestore} disabled={restoring || changes.length === 0} style={{ alignSelf: 'flex-start' }}>
-        {restoring ? <Loader2 size={13} className="spin" aria-hidden="true" /> : null}
-        Restore this version
-      </button>
+      {changes.length > 0 ? (
+        <button type="button" className="btn-ne" onClick={onRestore} disabled={restoring} style={{ alignSelf: 'flex-start' }}>
+          {restoring ? <Loader2 size={13} className="spin" aria-hidden="true" /> : null}
+          Restore this version
+        </button>
+      ) : null}
     </section>
   );
 }

@@ -20,11 +20,11 @@ describe('RevisionCompare', () => {
     expect(screen.getByText('Removed:')).toBeTruthy();
   });
 
-  it('shows the empty state and disables restore when nothing differs', () => {
+  it('shows the empty state and offers no restore when nothing differs', () => {
     render(<RevisionCompare savedAt="2026-11-01T09:00:00Z" changes={[]} restoring={false} onBack={() => {}} onRestore={() => {}} />);
 
     expect(screen.getByText(/No differences/)).toBeTruthy();
-    expect((screen.getByRole('button', { name: 'Restore this version' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole('button', { name: 'Restore this version' })).toBeNull();
   });
 
   it('calls back for restore and for returning to the list', () => {
