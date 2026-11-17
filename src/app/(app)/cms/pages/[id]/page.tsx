@@ -15,8 +15,9 @@ import { statusDescription, statusLabel, liveUrl } from '@/lib/content-status';
 import { useSelectedClient } from '@/components/AppShell';
 import { logActivity } from '@/lib/activity';
 import { firePublishNotify, computeLivePath } from '@/lib/publish-client';
+import { EditorPreviewButton } from '@/components/editor/EditorPreviewButton';
 import RichTextEditor from '@/components/editor/RichTextEditor';
-import type { PageStatus } from '@/lib/supabase/types';
+import type { Client, PageStatus } from '@/lib/supabase/types';
 
 // Shares the same *meaning* as the post editor's `ACTIVITY_LABELS`
 // (`src/app/(app)/cms/posts/[id]/page.tsx`) for the actions the two editors
@@ -85,9 +86,10 @@ export default function PageEditor({ params }: { params: Promise<{ id: string }>
   // row RLS (migration 015) reserves for client_admin/ne_admin — see
   // `isElevatedLocked` below, which gates on this value.
   const [initialStatus, setInitialStatus] = useState<PageStatus | null>(null);
-  const [autosaveState, setAutosaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [autosaveState, setAutosaveState] = useState<'idle' | 'pending' | 'saving' | 'saved' | 'error'>('idle');
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [websiteUrl, setWebsiteUrl] = useState<string | null>(null);
+  const [site, setSite] = useState<(Pick<Client, 'website_url' | 'capabilities'> & { pageId: string }) | null>(null);
+  const websiteUrl = site?.pageId === id ? site.website_url : null;
   const { selectedClientId } = useSelectedClient();
 
   // Guards against autosave firing in response to *this component* setting
@@ -95,11 +97,11 @@ export default function PageEditor({ params }: { params: Promise<{ id: string }>
   // than a genuine user edit. See the `useEffect` below — same pattern as
   // the post editor.
   const skipNextAutosaveRef = useRef(true);
-  const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastRevisionSnapshotAtRef = useRef(0);
 
   function applyPageToForm(page: Record<string, unknown>) {
     skipNextAutosaveRef.current = true;
+    setAutosaveState('idle');
     const status = (page.status as PageStatus) ?? 'draft';
     setForm({
       title:       (page.title as string) ?? '',
@@ -152,14 +154,12 @@ export default function PageEditor({ params }: { params: Promise<{ id: string }>
           if (admin) setClientId(page.client_id);
           applyPageToForm(page);
 
-          // Needed for the "View live page" link — see the matching comment
-          // in the post editor.
           const { data: client } = await supabase
             .from('clients')
-            .select('website_url')
+            .select('website_url, capabilities')
             .eq('id', page.client_id)
             .single();
-          setWebsiteUrl(client?.website_url ?? null);
+          setSite(client ? { ...client, pageId: page.id } : null);
         }
         setLoading(false);
       }
@@ -217,32 +217,35 @@ export default function PageEditor({ params }: { params: Promise<{ id: string }>
     if (isNew || loading || !clientId) return;
     if (skipNextAutosaveRef.current) { skipNextAutosaveRef.current = false; return; }
 
-    // Hide any stale "All changes saved" (or "Autosave failed") from a
-    // previous cycle the instant a new edit comes in.
-    setAutosaveState('idle');
+    // A preview can only show the saved row. Keep it disabled while the latest edit is queued.
+    setAutosaveState('pending');
+    let superseded = false;
 
-    if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
-    autosaveTimerRef.current = setTimeout(async () => {
+    const timer = setTimeout(async () => {
       setAutosaveState('saving');
       const supabase = createClient();
       const { data: { user } } = await supabase.auth.getUser();
+      if (superseded) return;
       if (!user) { setAutosaveState('error'); return; }
 
       const payload = buildContentPayload(form);
       const { error: err } = await supabase.from('pages').update(payload).eq('id', id);
-      if (err) { setAutosaveState('error'); return; }
+      if (!superseded) setAutosaveState(err ? 'error' : 'saved');
+      if (err) return;
 
-      setAutosaveState('saved');
       await maybeSnapshotRevision(supabase, user.id, id, clientId, payload, false);
     }, 2000);
 
-    return () => { if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current); };
+    return () => {
+      superseded = true;
+      clearTimeout(timer);
+    };
     // Deliberately depends on each content field individually (not `form` as
     // a whole, and excluding status/visibility) so a status- or
     // visibility-only change never schedules an autosave cycle.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    form.title, form.path, form.content, form.contentJson, form.seoTitle, form.seoDesc,
+    loading, form.title, form.path, form.content, form.contentJson, form.seoTitle, form.seoDesc,
   ]);
 
   async function handleSave(statusOverride?: PageStatus) {
@@ -424,6 +427,15 @@ export default function PageEditor({ params }: { params: Promise<{ id: string }>
               <button className="btn-outline-ne" onClick={() => setHistoryOpen(true)} title="See earlier versions">
                 <History size={14} /> History
               </button>
+            )}
+            {!isNew && clientId && site?.pageId === id && (
+              <EditorPreviewButton
+                site={site}
+                clientId={clientId}
+                entityType="page"
+                entityId={id}
+                disabled={saving || autosaveState === 'pending' || autosaveState === 'saving'}
+              />
             )}
             <button
               className="btn-outline-ne"
