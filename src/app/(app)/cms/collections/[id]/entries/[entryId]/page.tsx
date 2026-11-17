@@ -11,8 +11,9 @@ import { createClient } from '@/lib/supabase/client';
 import { logActivity } from '@/lib/activity';
 import { firePublishNotify, computeLivePath } from '@/lib/publish-client';
 import FieldInput from '@/components/collections/FieldInput';
+import { EditorPreviewButton } from '@/components/editor/EditorPreviewButton';
 import { validateEntry } from '@/lib/collections/validate';
-import type { Collection, CollectionItem, CollectionItemStatus } from '@/lib/supabase/types';
+import type { Client, Collection, CollectionItem, CollectionItemStatus } from '@/lib/supabase/types';
 
 const ACTIVITY_LABELS: Record<string, string> = {
   created: 'Created',
@@ -81,8 +82,9 @@ export default function CollectionEntryEditor({
   const [saved,         setSaved]         = useState(false);
   const [error,         setError]         = useState('');
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
-  const [autosaveState, setAutosaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [autosaveState, setAutosaveState] = useState<'idle' | 'pending' | 'saving' | 'saved' | 'error'>('idle');
   const [historyOpen,   setHistoryOpen]   = useState(false);
+  const [previewSite, setPreviewSite] = useState<(Pick<Client, 'website_url' | 'capabilities'> & { entryId: string }) | null>(null);
   // Whether this user's role is allowed to publish an entry at all
   // (`client_admin`/`ne_admin`, per migration 015_publish_rls.sql's
   // `WITH CHECK` on `collection_items`). UX nicety only — the real
@@ -110,11 +112,11 @@ export default function CollectionEntryEditor({
   const [initialStatus, setInitialStatus] = useState<CollectionItemStatus | null>(null);
 
   const skipNextAutosaveRef = useRef(true);
-  const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastRevisionSnapshotAtRef = useRef(0);
 
   function applyItemToForm(item: CollectionItem) {
     skipNextAutosaveRef.current = true;
+    setAutosaveState('idle');
     const status = item.status ?? 'draft';
     setForm({
       slug: item.slug ?? '',
@@ -154,6 +156,15 @@ export default function CollectionEntryEditor({
       setClientId(item.client_id);
       applyItemToForm(item as CollectionItem);
       setLoading(false);
+
+      if (coll.storage === 'generic' && coll.client_id === item.client_id) {
+        const { data: client } = await supabase
+          .from('clients')
+          .select('website_url, capabilities')
+          .eq('id', item.client_id)
+          .single();
+        setPreviewSite(client ? { ...client, entryId: item.id } : null);
+      }
     }
     load();
   }, [collectionId, entryId]);
@@ -190,24 +201,28 @@ export default function CollectionEntryEditor({
     if (loading || !clientId) return;
     if (skipNextAutosaveRef.current) { skipNextAutosaveRef.current = false; return; }
 
-    setAutosaveState('idle');
+    setAutosaveState('pending');
+    let superseded = false;
 
-    if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
-    autosaveTimerRef.current = setTimeout(async () => {
+    const timer = setTimeout(async () => {
       setAutosaveState('saving');
       const supabase = createClient();
       const { data: { user } } = await supabase.auth.getUser();
+      if (superseded) return;
       if (!user) { setAutosaveState('error'); return; }
 
       const payload = buildContentPayload(form);
       const { error: err } = await supabase.from('collection_items').update(payload).eq('id', entryId);
-      if (err) { setAutosaveState('error'); return; }
+      if (!superseded) setAutosaveState(err ? 'error' : 'saved');
+      if (err) return;
 
-      setAutosaveState('saved');
       await maybeSnapshotRevision(supabase, user.id, payload, false);
     }, 2000);
 
-    return () => { if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current); };
+    return () => {
+      superseded = true;
+      clearTimeout(timer);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.slug, form.data]);
 
@@ -384,6 +399,15 @@ export default function CollectionEntryEditor({
             <button className="btn-outline-ne" onClick={() => setHistoryOpen(true)} title="Revision history">
               <History size={14} /> History
             </button>
+            {clientId && previewSite?.entryId === entryId && (
+              <EditorPreviewButton
+                site={previewSite}
+                clientId={clientId}
+                entityType="collection_entry"
+                entityId={entryId}
+                disabled={saving || autosaveState === 'pending' || autosaveState === 'saving'}
+              />
+            )}
             <button
               className="btn-outline-ne"
               onClick={() => handleSave('draft')}

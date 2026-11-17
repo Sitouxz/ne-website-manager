@@ -33,6 +33,7 @@ export interface Client {
 }
 
 export interface ClientCapabilities {
+  editor_preview?: boolean;
   posts: boolean;
   pages: boolean;
   properties: boolean;
